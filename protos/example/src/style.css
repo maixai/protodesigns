@@ -1,0 +1,80 @@
+/* 全局设计 token:克制编辑器美学,随本原型自包含。
+   颜色取自墨绿强调色 + stone 中性色板;业务组件 MUST 引用 --bg-* / --text-* / --font-size-* 等角色变量。 */
+:root {
+  /* 强调色(墨绿) */
+  --color-primary-500: #3f6b5d;
+  --color-primary-600: #325749;
+  --color-primary-700: #294638;
+
+  /* 中性色(stone) */
+  --color-neutral-50: #fafaf9;
+  --color-neutral-100: #f5f5f4;
+  --color-neutral-200: #e7e5e4;
+  --color-neutral-300: #d6d3d1;
+  --color-neutral-400: #a8a29e;
+  --color-neutral-500: #78716c;
+  --color-neutral-600: #57534e;
+  --color-neutral-700: #44403c;
+  --color-neutral-800: #292524;
+  --color-neutral-900: #1c1917;
+
+  /* 语义色(去饱和) */
+  --color-error: #b85c5c;
+
+  /* 语义化角色变量 */
+  --bg-base: var(--color-neutral-50);
+  --bg-elevated: #ffffff;
+  --bg-overlay: var(--color-neutral-100);
+  --border-base: var(--color-neutral-200);
+  --border-strong: var(--color-neutral-300);
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-tertiary: var(--color-neutral-400);
+  --text-disabled: var(--color-neutral-300);
+  --text-error: var(--color-error);
+  --text-on-primary: #ffffff;
+  --primary: var(--color-primary-500);
+  --primary-hover: #4f8070;
+  --primary-pressed: var(--color-primary-700);
+
+  /* 字体栈(开源字体,顺序回退) */
+  --font-sans: 'Inter', 'Inter Variable', 'Source Han Sans SC', 'Noto Sans SC',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* 字号 */
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 22px;
+
+  /* 圆角与间距 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}

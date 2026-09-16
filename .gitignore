@@ -1,0 +1,4 @@
+# 聚合预览站:构建产物、依赖目录与构建期生成的 registry
+preview/dist/
+preview/node_modules/
+preview/src/generated/

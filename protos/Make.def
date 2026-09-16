@@ -1,0 +1,18 @@
+# 共享 make 目标:供各产品原型子目录的 Makefile include 后复用。
+# make 在子目录内执行时 cwd 即子目录,故 run / build 直接调用 pnpm 脚本(脚本与子目录 package.json 对应)。
+
+# 可覆盖变量:并行开发多个原型时可传 make run PORT=5174 或设置环境变量覆盖默认值;
+# HOST 默认 0.0.0.0(监听所有网卡,允许远程访问),仅本机访问可覆盖为 localhost
+PNPM ?= pnpm
+PORT ?= 5173
+HOST ?= 0.0.0.0
+
+.PHONY: run build
+
+# 启动 dev server(--host / --port 会被 pnpm 原样转发给 vite dev 脚本)
+run:
+	$(PNPM) dev --host $(HOST) --port $(PORT)
+
+# 构建产物
+build:
+	$(PNPM) build

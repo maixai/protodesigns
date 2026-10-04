@@ -10,7 +10,20 @@ PNPM    ?= pnpm
 # 默认跑 Chrome:浏览器里看布局与视觉最快;真机 / 模拟器用 make run DEVICE=<设备 id>
 DEVICE  ?= chrome
 
-.PHONY: run build contracts contracts-schema contracts-dart contracts-clean calibrate calibrate-update
+.PHONY: deps run build contracts contracts-schema contracts-dart contracts-clean calibrate calibrate-update
+
+# ---- 依赖安装 ----
+# 契约工具链(TypeSpec / quicktype)在 Node 侧,走 pnpm 安装;
+# 运行时依赖由 Flutter 的 pub 管理,故还要跑一次 pub get。
+# 未检测到 Flutter SDK 时跳过 pub get 并提示,不阻断契约工具链的安装
+#(与聚合脚本对 mobile 原型的跳过策略一致)。
+deps:
+	$(PNPM) install
+	@if command -v $(FLUTTER) >/dev/null 2>&1; then \
+	  $(FLUTTER) pub get; \
+	else \
+	  echo "  (未检测到 Flutter SDK,跳过 flutter pub get;安装后重跑 make deps)"; \
+	fi
 
 # 启动:先跑契约生成,保证 Dart 类型与契约一致。
 run: contracts

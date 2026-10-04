@@ -7,7 +7,12 @@ PNPM ?= pnpm
 PORT ?= 5173
 HOST ?= 0.0.0.0
 
-.PHONY: run build contracts contracts-schema contracts-ts contracts-dart contracts-clean calibrate calibrate-update
+.PHONY: deps run build contracts contracts-schema contracts-ts contracts-dart contracts-clean calibrate calibrate-update
+
+# ---- 依赖安装 ----
+# 新克隆的目录先跑一次 make deps:node_modules 是契约工具链与构建的共同前置。
+deps:
+	$(PNPM) install
 
 # 启动 dev server(--host / --port 会被 pnpm 原样转发给 vite dev 脚本);
 # 先跑契约生成,保证类型与契约一致(生成物不入库,新克隆的目录依赖此步)。

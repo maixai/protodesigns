@@ -43,6 +43,12 @@ make run
 make run PORT=5174
 ```
 
+新克隆的目录先安装依赖再启动(web / 桌面原型即 `pnpm install`;mobile 原型另跑一次 `flutter pub get`):
+
+```bash
+make deps
+```
+
 ## 契约
 
 每个原型在 `contracts/main.tsp` 定义数据模型(单一事实源),类型由 `make contracts` 生成:
@@ -66,10 +72,13 @@ contracts/main.tsp ──┬─→ contracts/generated/openapi/openapi.yaml
 
 | 目标 | 含义 |
 | --- | --- |
+| `make deps` | 安装 preview 与全部原型的依赖(新克隆后先跑一次) |
 | `make run` | 聚合 + 构建 + 静态服务(前台阻塞) |
 | `make build` | 仅聚合 + 统一构建 |
 | `make list` | 打印各原型的 slug / name / owner / updated_at |
 | `make help` | 显示各目标的说明 |
+
+根 `make build` 在遇到未安装依赖时会**自动安装后继续**,不要求先手工 `make deps`。
 
 服务默认监听 `0.0.0.0:5173`,可用 `HOST` / `PORT` 覆盖。
 

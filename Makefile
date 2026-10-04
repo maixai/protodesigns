@@ -3,8 +3,19 @@
 
 HOST ?= 0.0.0.0
 PORT ?= 5173
+PNPM ?= pnpm
 
-.PHONY: run build serve list help
+.PHONY: deps run build serve list help
+
+# 安装 preview 与全部原型的依赖(新克隆的仓库先跑一次)。
+# 各原型装什么由 Make.def / Make.def.flutter 定义,这里只负责遍历调用,不重复实现。
+deps: ## 安装 preview 与全部原型的依赖(新克隆后先跑一次)
+	cd preview && $(PNPM) install
+	@for d in protos/*/; do \
+	  [ -f "$$d/Makefile" ] || continue; \
+	  echo "==> $$d"; \
+	  $(MAKE) -C "$$d" deps || exit 1; \
+	done
 
 # 一键启动:聚合 -> 统一构建 -> 静态 serve(HOST/PORT 透传给 serve)
 run: build ## 一键启动:聚合 -> 构建 -> 静态 serve(HOST/PORT 可覆盖)

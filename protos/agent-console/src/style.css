@@ -1,0 +1,304 @@
+/* ============================================================================
+ * 设计 token:设计语言 Tungsten 青瓷(随本原型自包含)
+ *
+ * 完整规范见 .claude/rules/design-language.md;本文件是它在 Vue 侧的落地。
+ * 三层结构,方向只能向下:ramp → 语义角色 → 组件引用。
+ * 业务组件 MUST 引用角色层(--dl-bg-* / --dl-text-* / --dl-accent-*),
+ * 不得直接引用 ramp 阶(--dl-neutral-500 等)。
+ *
+ * 深浅两套:浅色为默认,深色由 :root[data-theme='dark'] 整体反转中性 ramp 实现,
+ * 角色层因此不需要感知主题。主题切换由 src/shell 提供(mock,跟随系统 + 应用层可覆盖)。
+ * ========================================================================== */
+
+:root {
+  /* 字体栈:humanist 优先,按序回退。技术信息(token 名、编号、代码)走等宽。 */
+  --dl-font-sans: 'IBM Plex Sans', 'Inter', 'Source Han Sans SC', 'Noto Sans SC',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --dl-font-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* ---------------------------------------------------------------------------
+ * 语义角色层:组件唯一允许引用的一层。
+ * ------------------------------------------------------------------------- */
+:root {
+  --dl-bg-base: var(--dl-neutral-50);
+  --dl-bg-elevated: var(--dl-neutral-0);
+  --dl-bg-sunken: var(--dl-neutral-100);
+  --dl-bg-hover: var(--dl-neutral-100);
+
+  --dl-border-base: var(--dl-neutral-200);
+  --dl-border-strong: var(--dl-neutral-300);
+
+  --dl-text-primary: var(--dl-neutral-900);
+  --dl-text-secondary: var(--dl-neutral-600);
+  --dl-text-tertiary: var(--dl-neutral-500);
+  --dl-text-disabled: var(--dl-neutral-400);
+  --dl-text-on-accent: #ffffff;
+  --dl-text-link: var(--dl-accent-600);
+
+  --dl-accent: var(--dl-accent-600);
+  --dl-accent-hover: var(--dl-accent-500);
+  --dl-accent-active: var(--dl-accent-700);
+  --dl-accent-subtle: var(--dl-accent-50);
+  --dl-focus-ring: var(--dl-accent-600);
+  --dl-focus-width: 2px;
+  --dl-focus-offset: 2px;
+
+  --dl-highlight: var(--dl-highlight-600);
+  --dl-highlight-subtle: var(--dl-highlight-50);
+
+  --dl-success: var(--dl-success-600);
+  --dl-success-subtle: var(--dl-success-50);
+  --dl-warning: var(--dl-warning-600);
+  --dl-warning-subtle: var(--dl-warning-50);
+  --dl-error: var(--dl-error-600);
+  --dl-error-subtle: var(--dl-error-50);
+  --dl-info: var(--dl-info-600);
+  --dl-info-subtle: var(--dl-info-50);
+
+  /* 中西文混排:浏览器在汉字与西文/数字之间自动插入间距(约 1/4 汉字宽上限)。
+     不支持的浏览器会静默忽略。 */
+  text-autospace: normal;
+
+  /* 避头尾:禁止标点出现在行首。 */
+  line-break: strict;
+
+  /* 断行:西文单词不从中间截断,超长串(URL / 标识符)允许强制换行。 */
+  overflow-wrap: break-word;
+
+  /* 数字等宽:数值变化时列宽不跳动。 */
+  font-variant-numeric: var(--dl-numeric-variant);
+
+  font-family: var(--dl-font-sans);
+  font-size: var(--dl-font-size-md);
+  line-height: var(--dl-line-body);
+  color: var(--dl-text-primary);
+  background-color: var(--dl-bg-base);
+}
+
+/* ---------------------------------------------------------------------------
+ * ramp 层 + 结构值:浅色默认。
+ * ------------------------------------------------------------------------- */
+:root {
+  /* 中性色:暖调 chromatic neutral(色相约 35°、饱和约 8%),不用纯灰。
+     500 / 600 按"在 50 号底色上达到 4.5:1"反推 —— 它们是三级 / 二级文字色。 */
+  --dl-neutral-0: #ffffff;
+  --dl-neutral-50: #faf8f5;
+  --dl-neutral-100: #f4f1ec;
+  --dl-neutral-200: #e8e4dc;
+  --dl-neutral-300: #d8d2c8;
+  --dl-neutral-400: #b3aaa0;
+  --dl-neutral-500: #756c63;
+  --dl-neutral-600: #5c554d;
+  --dl-neutral-700: #46403a;
+  --dl-neutral-800: #302b25;
+  --dl-neutral-900: #221d18;
+  --dl-neutral-950: #14110d;
+
+  /* 强调色:青瓷 */
+  --dl-accent-50: #eff6f4;
+  --dl-accent-100: #dcede9;
+  --dl-accent-200: #b9dcd4;
+  --dl-accent-300: #8fc4b9;
+  --dl-accent-400: #63a79a;
+  --dl-accent-500: #3f8a7c;
+  --dl-accent-600: #2e6f63;
+  --dl-accent-700: #245a50;
+  --dl-accent-800: #1c453e;
+  --dl-accent-900: #14312c;
+
+  /* 点缀色:暖珀,只用于标签与提示,不承担主行动 */
+  --dl-highlight-50: #fbf4e8;
+  --dl-highlight-600: #8a6420;
+
+  /* 状态色:与暖中性同调,避免鲜亮的告警色破坏克制感 */
+  --dl-success-50: #f0f5f1;
+  --dl-success-600: #3f6b4f;
+  --dl-warning-50: #fbf4e8;
+  --dl-warning-600: #8a6420;
+  --dl-error-50: #fbf0ee;
+  --dl-error-600: #9c4038;
+  --dl-info-50: #eff3f6;
+  --dl-info-600: #3d5a70;
+
+  /* 字号阶:Major Third(1.25),基准 15px —— 中文在 14px 下偏小。 */
+  --dl-font-size-xs: 12px;
+  --dl-font-size-sm: 13px;
+  --dl-font-size-md: 15px;
+  --dl-font-size-lg: 19px;
+  --dl-font-size-xl: 23px;
+  --dl-font-size-2xl: 29px;
+  --dl-font-size-3xl: 37px;
+
+  /* 行高:分档。正文 1.7 —— 中文笔画密度高,1.4–1.5 会明显发挤。 */
+  --dl-line-tight: 1.25;
+  --dl-line-snug: 1.45;
+  --dl-line-body: 1.7;
+  --dl-line-loose: 1.85;
+
+  /* 段间距:WCAG 1.4.12 要求可被用户调至正文的 2 倍而不破版 */
+  --dl-para-gap: 1.5em;
+
+  /* 字距:中文不需要正字距 */
+  --dl-tracking-normal: 0;
+  --dl-tracking-label: 0.01em;
+  --dl-tracking-caps: 0.06em;
+
+  /* 字重封顶 600 */
+  --dl-weight-regular: 400;
+  --dl-weight-medium: 500;
+  --dl-weight-strong: 600;
+
+  /* 行宽:中文按 em 计,不能用 ch */
+  --dl-measure: 35em;
+
+  /* 数据场景数字等宽 */
+  --dl-numeric-variant: tabular-nums;
+
+  /* 间距(4px 基准) */
+  --dl-space-1: 4px;
+  --dl-space-2: 8px;
+  --dl-space-3: 12px;
+  --dl-space-4: 16px;
+  --dl-space-6: 24px;
+  --dl-space-8: 32px;
+  --dl-space-12: 48px;
+
+  /* 圆角与边框 */
+  --dl-radius-sm: 6px;
+  --dl-radius-md: 8px;
+  --dl-radius-lg: 12px;
+  --dl-radius-pill: 9999px;
+  --dl-border-width: 1px;
+  --dl-control-height: 36px;
+  --dl-target-size: 44px;
+
+  /* 图标:描边不随尺寸缩放,否则小图标会显得比大图标更重 */
+  --dl-icon-sm: 16px;
+  --dl-icon-md: 20px;
+  --dl-icon-lg: 24px;
+  --dl-icon-stroke: 1.5px;
+
+  /* 层级阶梯:浮层层序集中定义,禁止就地写 9999 */
+  --dl-z-base: 0;
+  --dl-z-sticky: 100;
+  --dl-z-overlay: 200;
+  --dl-z-modal: 300;
+  --dl-z-toast: 400;
+
+  /* 阴影:层级以发丝描边为主,阴影只用于真正需要抬起的浮层 */
+  --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
+  --dl-shadow-md: 0 2px 8px rgba(52, 43, 33, 0.07);
+  --dl-shadow-lg: 0 8px 24px rgba(52, 43, 33, 0.1);
+
+  /* 动效:短促、稳定 */
+  --dl-duration-fast: 140ms;
+  --dl-duration-base: 200ms;
+  --dl-duration-slow: 280ms;
+  --dl-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------------------------------------------------------------------------
+ * 深色主题:整体反转中性 ramp 并提亮强调色,角色层无需感知主题。
+ * 刻意避开纯黑:深色底同样保留暖色相偏移。
+ * ------------------------------------------------------------------------- */
+:root[data-theme='dark'] {
+  --dl-neutral-0: #1c1916;
+  --dl-neutral-50: #14110e;
+  --dl-neutral-100: #26221d;
+  --dl-neutral-200: #38332c;
+  --dl-neutral-300: #4a443b;
+  --dl-neutral-400: #6b6358;
+  --dl-neutral-500: #8f867a;
+  --dl-neutral-600: #b5aca0;
+  --dl-neutral-700: #d6cfc4;
+  --dl-neutral-800: #e8e2d8;
+  --dl-neutral-900: #f5f1ea;
+  --dl-neutral-950: #fdfbf7;
+
+  --dl-bg-hover: #26221d;
+
+  --dl-accent-50: #16302b;
+  --dl-accent-500: #6fb3a4;
+  --dl-accent-600: #8cc7b9;
+  --dl-accent-700: #63a79a;
+  --dl-highlight-50: #2c2418;
+  --dl-highlight-600: #e3b876;
+
+  --dl-success-50: #1e2a22;
+  --dl-warning-50: #2c2418;
+  --dl-error-50: #2c1e1c;
+  --dl-info-50: #1c242b;
+
+  --dl-text-on-accent: #10201c;
+
+  /* 深色下阴影不承担层级,进一步减弱 */
+  --dl-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --dl-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --dl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------------------------------------------------------------------------
+ * 文本截断:按"内容是否必须完整可见"选,不是按视觉长短选。
+ * ------------------------------------------------------------------------- */
+.dl-truncate {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dl-clamp-2,
+.dl-clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dl-clamp-2 {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.dl-clamp-3 {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* 技术信息走等宽字体 */
+code {
+  font-family: var(--dl-font-mono);
+  font-size: 0.95em;
+}
+
+/* ---------------------------------------------------------------------------
+ * 动效降级:系统开启"减少动态效果"时,状态切换仍然发生,位移与缩放去掉。
+ * 用极短时长而非 0 —— 部分浏览器对 duration:0 不触发 transitionend。
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}

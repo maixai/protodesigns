@@ -1,14 +1,27 @@
 {
-  "name": "agent-console-contracts",
+  "name": "agent-console",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "本文件只承载契约工具链的依赖(TypeSpec / quicktype),与 Flutter 的 pubspec.yaml 无关;保留它才能让原型目录自包含。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.41"
+  },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.13.3",
     "@typespec/compiler": "^1.16.0",
     "@typespec/http": "^1.16.0",
     "@typespec/json-schema": "^1.16.0",
     "@typespec/openapi3": "^1.16.0",
-    "quicktype": "^26.0.0"
+    "@vitejs/plugin-vue": "^6.0.8",
+    "json-schema-to-typescript": "^16.0.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vue-tsc": "^3.3.11"
   }
 }

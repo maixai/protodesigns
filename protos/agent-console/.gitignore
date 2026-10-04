@@ -1,20 +1,32 @@
-# Flutter 构建产物与工具目录
-build/
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# 契约工具链的依赖(与 pubspec 无关,仅用于 make contracts)
-node_modules/
+node_modules
+dist
+dist-ssr
+*.local
 
 # 契约生成物:由 make contracts 产出,不入库(新克隆的目录执行 make run 会自动生成)
 contracts/generated/
-lib/contracts/generated/
+src/contracts/generated/
 
-# 编辑器目录与文件
+# 校准装置产物:失败现场与报告不入库;截图基线入库,供回归比对
+test-results/
+playwright-report/
+
+# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
-*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

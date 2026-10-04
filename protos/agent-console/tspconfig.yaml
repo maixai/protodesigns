@@ -1,0 +1,11 @@
+# TypeSpec 工程配置:声明用哪些 emitter、各自把产物写到哪里。
+#
+# 本原型的 data 为 local-first,契约侧重**数据模型**,不定义 HTTP 端点,
+# 因此只保留 json-schema emitter(OpenAPI 是 remote-http 形态的主线产物)。
+emit:
+  - "@typespec/json-schema"
+
+options:
+  # 数据类型产物:作为 Dart 类型生成的输入。
+  "@typespec/json-schema":
+    emitter-output-dir: "{project-root}/contracts/generated/schema"

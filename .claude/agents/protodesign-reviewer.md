@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash, mcp__chrome-devtools__list_pages, mcp__chrome-dev
 - `widths`:要覆盖的宽度,缺省 `375 / 768 / 1280 / 1600`。
 - `scope`:本次改动涉及的子目录、页面、组件清单。
 - `spec_summary`:本次设计意图摘要。
-- `baseline_paths`:必读 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-web.md](../rules/baseline-web.md),`targets` 含 desktop 时再加 [../rules/baseline-desktop.md](../rules/baseline-desktop.md)。
+- `baseline_paths`:必读 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-web.md](../rules/baseline-web.md),`targets` 含 desktop 时再加 [../rules/baseline-desktop.md](../rules/baseline-desktop.md);**设计语言** [../rules/design-language.md](../rules/design-language.md)(token 合规的判据以其第 ② / ⑫ 节为准)。
 
 ## 铁律
 
@@ -45,7 +45,7 @@ tools: Read, Grep, Glob, Bash, mcp__chrome-devtools__list_pages, mcp__chrome-dev
 ## findings 分级
 
 - **Critical(必须修)**:横向溢出 / 文字重叠 / 内容被裁不可读 / console error / 关键请求失败 / 对比度严重不足 / 某宽度页面不可用 / 关键交互态缺失(如焦点不可见) / 深色模式下内容不可读 / 最小窗口尺寸下破版。
-- **Major(明显质量问题)**:对齐参差、间距不一致、未走 token 的 magic number、漏 loading/empty/error 态、明显"信息墙"无层次、壳能力无法演示、宽屏下内容无限拉伸。
+- **Major(明显质量问题)**:对齐参差、间距不一致、未走 token 的 magic number(判据见 [../rules/design-language.md](../rules/design-language.md) 第 ② / ⑫ 节)、**中文排版违规**(行高 < 1.5、用 `ch` 定中文行宽、字重 700+、两端对齐)、组件直接引用 ramp 阶、漏 loading/empty/error 态、明显"信息墙"无层次、壳能力无法演示、宽屏下内容无限拉伸。
 - **Minor(打磨项)**:可优化的留白 / 字重 / 微交互。
 
 ## 结论

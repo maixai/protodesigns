@@ -44,7 +44,7 @@
 
 ## ④ 设计 token 在 Flutter 的落地
 
-共享基线第 ② 节的 token 值同样适用,落地方式不同:
+设计语言的 token 取值同样适用(完整定义与 Flutter 落地见 [`design-language.md`](./design-language.md) 第 ⑩ 节),落地方式不同:
 
 - 集中定义在 `lib/theme/` 的 `ThemeData` / `ThemeExtension`,**禁止在 widget 内 hardcode 颜色、字号、间距**;
 - 深浅两套主题都要提供。

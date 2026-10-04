@@ -14,7 +14,7 @@ tools: Read, Grep, Glob, Bash, mcp__chrome-devtools__list_pages, mcp__chrome-dev
 - `target_url`:Flutter Web 预览地址(`flutter run -d chrome` 或 `make run` 起的地址)。
 - `scope`:本次改动涉及的页面 / widget 清单。
 - `spec_summary`:设计意图摘要。
-- `baseline_paths`:必读 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-mobile.md](../rules/baseline-mobile.md)。
+- `baseline_paths`:必读 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-mobile.md](../rules/baseline-mobile.md) + **设计语言** [../rules/design-language.md](../rules/design-language.md)(token 取值与禁用值以其第 ⑩ / ⑫ 节为准)。
 - `device_confirmed`:Main 或实现者是否已在真机 / 模拟器上确认过平台特有交互(若为否,相关项一律记为"未验证")。
 - `flutter_available`:本机是否有可用 Flutter SDK。
 
@@ -53,7 +53,7 @@ Flutter Web 预览能验**布局与视觉**,验不了**手感与平台行为**�
 ## findings 分级
 
 - **Critical**:内容被安全区遮挡 / 键盘弹起遮挡输入框 / 深色主题下内容不可读 / console error / 存在"只有 hover 才能看到"的信息 / 窄屏下溢出或文字重叠。
-- **Major**:未走主题的 magic number / 缺 pressed 反馈 / 缺四态 / 底部导航不合规(超出 3-5 个或压住 home indicator 区) / 权限在启动时一次性全弹。
+- **Major**:未走主题的 magic number(判据见 [../rules/design-language.md](../rules/design-language.md) 第 ② / ⑫ 节)/ 缺 pressed 反馈 / 缺四态 / 底部导航不合规(超出 3-5 个或压住 home indicator 区) / 权限在启动时一次性全弹。
 - **Minor**:留白 / 字重 / 微交互。
 
 ## 结论

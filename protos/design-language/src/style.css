@@ -1,0 +1,476 @@
+/* ============================================================================
+ * 设计语言 Tungsten 青瓷 —— 克制的科技感
+ *
+ * 三层 token 架构:
+ *   ramp 层      —— 原始色阶与结构值,由 [data-dl-dir] 作用域提供
+ *   语义角色层    —— 只写一次(.dl-scope / [data-dl-theme]),全部引用 ramp
+ *   材质层        —— 表面如何呈现(--dl-panel-*),与配色解耦
+ *
+ * 设计依据(定稿时写入 .claude/rules/design-language.md 的"设计依据"章):
+ *
+ *   色彩  暖调 chromatic neutral(色相约 35°、饱和约 8%),不用纯灰 —— 纯灰读起来冷。
+ *         正文取暖近黑而非纯黑(Vercel #171717、Linear #010102 都刻意避开 #000000)。
+ *         单一强调色承担层级,点缀色刻意从属(Linear"系统里唯一的色相")。
+ *
+ *   排版  CJK 与西文不能套用同一组值:中文全角方块字,14px 偏小、1.4 行高太挤。
+ *         行宽按 em 计而非 ch。字重封顶 600(Carbon 生产字阶不含 Bold)。
+ *         技术信息(token 名、编号)交给等宽字体。
+ *
+ *   无障碍 WCAG 1.4.12:行高 ≥1.5×、段间距 ≥2× 必须可被用户调至而不破版。
+ *         正文与背景对比度 ≥4.5:1,由校准装置逐对核算。
+ *
+ * 深色:整体反转中性 ramp 并提亮强调色,角色层不感知主题。
+ * ========================================================================== */
+
+:root {
+  /* 字体栈:humanist 优先,按序回退。 */
+  --dl-font-sans: 'IBM Plex Sans', 'Inter', 'Source Han Sans SC', 'Noto Sans SC',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --dl-font-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* 页面外壳:展示页自身的中性外观。布局类 token 必须定义在 :root ——
+     页面级容器在 .dl-scope 之外,取不到语言 token。 */
+  --dl-page-bg: #f2efea;
+  --dl-page-fg: #221d18;
+  --dl-page-border: #ddd8cf;
+  --dl-page-hover: rgba(34, 29, 24, 0.06);
+  --dl-page-active: rgba(34, 29, 24, 0.11);
+  --dl-page-pad: 24px;
+  --dl-page-gap: 16px;
+  --dl-page-radius: 12px;
+  --dl-page-max: 1536px;
+  --dl-page-focus-width: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 语义角色层:只写一次。组件只允许引用这一层,不直接引用 ramp。
+ * 选择器同时匹配 [data-dl-theme]:该属性用于在浅色页面里局部强制深色。
+ * ------------------------------------------------------------------------- */
+.dl-scope,
+[data-dl-theme] {
+  --dl-bg-base: var(--dl-neutral-50);
+  --dl-bg-elevated: var(--dl-neutral-0);
+  --dl-bg-sunken: var(--dl-neutral-100);
+  --dl-bg-hover: var(--dl-neutral-100);
+
+  --dl-border-base: var(--dl-neutral-200);
+  --dl-border-strong: var(--dl-neutral-300);
+
+  --dl-text-primary: var(--dl-neutral-900);
+  --dl-text-secondary: var(--dl-neutral-600);
+  --dl-text-tertiary: var(--dl-neutral-500);
+  --dl-text-disabled: var(--dl-neutral-400);
+  --dl-text-on-accent: #ffffff;
+  --dl-text-link: var(--dl-accent-600);
+
+  --dl-accent: var(--dl-accent-600);
+  --dl-accent-hover: var(--dl-accent-500);
+  --dl-accent-active: var(--dl-accent-700);
+  --dl-accent-subtle: var(--dl-accent-50);
+  --dl-focus-ring: var(--dl-accent-600);
+
+  --dl-highlight: var(--dl-highlight-600);
+  --dl-highlight-subtle: var(--dl-highlight-50);
+
+  --dl-focus-width: 2px;
+  --dl-focus-offset: 2px;
+
+  --dl-success: var(--dl-success-600);
+  --dl-success-subtle: var(--dl-success-50);
+  --dl-warning: var(--dl-warning-600);
+  --dl-warning-subtle: var(--dl-warning-50);
+  --dl-error: var(--dl-error-600);
+  --dl-error-subtle: var(--dl-error-50);
+  --dl-info: var(--dl-info-600);
+  --dl-info-subtle: var(--dl-info-50);
+
+  /* 中西文混排:由浏览器在汉字与西文/数字之间自动插入间距(上限约 1/4 汉字宽)。
+     不支持该属性的浏览器会直接忽略,不影响其余排版。 */
+  text-autospace: normal;
+
+  /* 断行:西文单词不从中间截断,超长串(URL / 标识符)允许强制换行。
+     中文按字断行是浏览器默认行为,无需额外声明。 */
+  overflow-wrap: break-word;
+
+  /* 避头尾:禁止把标点甩到行首。中文排版的底线规则。 */
+  line-break: strict;
+
+  /* 数字等宽:数值变化时列宽不跳动。正文里的数字同样继承,便于纵向对齐。 */
+  font-variant-numeric: var(--dl-numeric-variant);
+
+  font-family: var(--dl-font-sans);
+  font-size: var(--dl-font-size-md);
+  line-height: var(--dl-line-body);
+  color: var(--dl-text-primary);
+  background: var(--dl-scope-bg);
+}
+
+/* ---------------------------------------------------------------------------
+ * 材质层:表面如何呈现。与配色解耦 —— 换配色不影响材质,换材质不影响配色。
+ * 之所以专门留出 --dl-scope-bg:面板材质若为半透明,需要一层底色可供透出。
+ * ------------------------------------------------------------------------- */
+.dl-scope {
+  --dl-scope-bg: var(--dl-bg-base);
+  --dl-panel-bg: var(--dl-bg-elevated);
+  --dl-panel-blur: none;
+  --dl-panel-border: var(--dl-border-base);
+  --dl-panel-shadow: var(--dl-shadow-md);
+  --dl-panel-inner: none;
+  --dl-panel-radius: var(--dl-radius-md);
+}
+
+/* ---------------------------------------------------------------------------
+ * 青瓷:色阶、结构值与排版。浅色为默认,深色在下方整体反转。
+ * ------------------------------------------------------------------------- */
+[data-dl-dir='celadon'] {
+  --dl-neutral-0: #ffffff;
+  --dl-neutral-50: #faf8f5;
+  --dl-neutral-100: #f4f1ec;
+  --dl-neutral-200: #e8e4dc;
+  --dl-neutral-300: #d8d2c8;
+  --dl-neutral-400: #b3aaa0;
+  /* 500 / 600 按"在 50 号底色上达到 4.5:1"反推 —— 它们是三级 / 二级文字色,不能凭观感取值 */
+  --dl-neutral-500: #756c63;
+  --dl-neutral-600: #5c554d;
+  --dl-neutral-700: #46403a;
+  --dl-neutral-800: #302b25;
+  --dl-neutral-900: #221d18;
+  --dl-neutral-950: #14110d;
+
+  --dl-accent-50: #eff6f4;
+  --dl-accent-100: #dcede9;
+  --dl-accent-200: #b9dcd4;
+  --dl-accent-300: #8fc4b9;
+  --dl-accent-400: #63a79a;
+  --dl-accent-500: #3f8a7c;
+  --dl-accent-600: #2e6f63;
+  --dl-accent-700: #245a50;
+  --dl-accent-800: #1c453e;
+  --dl-accent-900: #14312c;
+
+  --dl-highlight-50: #fbf4e8;
+  --dl-highlight-600: #8a6420;
+
+  --dl-success-50: #f0f5f1;
+  --dl-success-600: #3f6b4f;
+  --dl-warning-50: #fbf4e8;
+  --dl-warning-600: #8a6420;
+  --dl-error-50: #fbf0ee;
+  --dl-error-600: #9c4038;
+  --dl-info-50: #eff3f6;
+  --dl-info-600: #3d5a70;
+
+  /* --- 排版 --- */
+  --dl-font-display: var(--dl-font-sans);
+
+  /* 字号阶:Major Third(1.25),基准 15px。
+     基准取 15 而非 14:14px 对中文偏小(笔画密、识别成本高),15px 是密集界面
+     与中文可读性之间的折中 —— 纯阅读场景可再上探到 16–18px。 */
+  --dl-font-size-xs: 12px;
+  --dl-font-size-sm: 13px;
+  --dl-font-size-md: 15px;
+  --dl-font-size-lg: 19px;
+  --dl-font-size-xl: 23px;
+  --dl-font-size-2xl: 29px;
+  --dl-font-size-3xl: 37px;
+
+  /* 行高:分档而非单一值 —— 标题要紧、正文要松。
+     正文取 1.7:中文笔画密度高,1.4–1.5 会明显发挤(CJK 实践值)。 */
+  --dl-line-tight: 1.25;
+  --dl-line-snug: 1.45;
+  --dl-line-body: 1.7;
+  --dl-line-loose: 1.85;
+
+  /* 段间距:WCAG 1.4.12 要求可被用户调至正文的 2 倍而不破版。
+     取 1.5em 而不是更大:段界要清楚,但不能把段落拆成互不相干的块。 */
+  --dl-para-gap: 1.5em;
+
+  /* 字距:中文不需要正字距(表意文字,WCAG 亦对中文豁免字距要求);
+     仅微型全大写标签用一点。 */
+  --dl-tracking-tight: -0.01em;
+  --dl-tracking-normal: 0;
+  --dl-tracking-label: 0.01em;
+  --dl-tracking-caps: 0.06em;
+
+  /* 字重封顶 600:700 以上会破坏克制感 */
+  --dl-weight-regular: 400;
+  --dl-weight-medium: 500;
+  --dl-weight-strong: 600;
+
+  /* 行宽:中文是全角方块字,ch 是西文单位,不能直接套用 —— 按 em 计。
+     35em ≈ 中文 33–36 字/行,落在舒适区。 */
+  --dl-measure: 35em;
+
+  /* 数据场景的数字用等宽,避免列宽随数值跳动 */
+  --dl-numeric-variant: tabular-nums;
+
+  /* --- 空间与形状 --- */
+  --dl-space-1: 4px;
+  --dl-space-2: 8px;
+  --dl-space-3: 12px;
+  --dl-space-4: 16px;
+  --dl-space-6: 24px;
+  --dl-space-8: 32px;
+  --dl-space-12: 48px;
+
+  --dl-radius-sm: 6px;
+  --dl-radius-md: 8px;
+  --dl-radius-lg: 12px;
+  --dl-radius-pill: 9999px;
+  --dl-border-width: 1px;
+  --dl-control-height: 36px;
+  /* 触达尺寸:指针目标的下限,由 WCAG 2.5.8 的 24px 与移动端的 44px 取严 */
+  --dl-target-size: 44px;
+
+  /* 图标:三档尺寸 + 统一描边。描边随尺寸不变,避免大小图标视觉重量失衡。 */
+  --dl-icon-sm: 16px;
+  --dl-icon-md: 20px;
+  --dl-icon-lg: 24px;
+  --dl-icon-stroke: 1.5px;
+
+  /* 层级阶梯:浮层层序集中定义,禁止就地写 9999 —— 那样无法判断谁压谁 */
+  --dl-z-base: 0;
+  --dl-z-sticky: 100;
+  --dl-z-overlay: 200;
+  --dl-z-modal: 300;
+  --dl-z-toast: 400;
+
+  /* 层级:发丝描边为主,阴影只用于真正需要抬起的浮层 */
+  --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
+  --dl-shadow-md: 0 2px 8px rgba(52, 43, 33, 0.07);
+  --dl-shadow-lg: 0 8px 24px rgba(52, 43, 33, 0.1);
+
+  /* 动效:短促、稳定,不做夸张弹跳 */
+  --dl-duration-fast: 140ms;
+  --dl-duration-base: 200ms;
+  --dl-duration-slow: 280ms;
+  --dl-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ---------------------------------------------------------------------------
+ * 深色主题:反转中性 ramp 并把强调色提亮,角色层因此无需感知主题。
+ * 刻意避开纯黑:深色底同样保留暖色相偏移。
+ * ------------------------------------------------------------------------- */
+:root[data-theme='dark'] {
+  --dl-page-bg: #131110;
+  --dl-page-fg: #ece7df;
+  --dl-page-border: #2b2723;
+  --dl-page-hover: rgba(236, 231, 223, 0.08);
+  --dl-page-active: rgba(236, 231, 223, 0.14);
+}
+
+:root[data-theme='dark'] [data-dl-dir='celadon'],
+[data-dl-theme='dark'][data-dl-dir='celadon'] {
+  --dl-neutral-0: #1c1916;
+  --dl-neutral-50: #14110e;
+  --dl-neutral-100: #26221d;
+  --dl-neutral-200: #38332c;
+  --dl-neutral-300: #4a443b;
+  --dl-neutral-400: #6b6358;
+  --dl-neutral-500: #8f867a;
+  --dl-neutral-600: #b5aca0;
+  --dl-neutral-700: #d6cfc4;
+  --dl-neutral-800: #e8e2d8;
+  --dl-neutral-900: #f5f1ea;
+  --dl-neutral-950: #fdfbf7;
+
+  --dl-bg-hover: #26221d;
+
+  --dl-accent-50: #16302b;
+  --dl-accent-500: #6fb3a4;
+  --dl-accent-600: #8cc7b9;
+  --dl-accent-700: #63a79a;
+  --dl-highlight-50: #2c2418;
+  --dl-highlight-600: #e3b876;
+
+  --dl-success-50: #1e2a22;
+  --dl-warning-50: #2c2418;
+  --dl-error-50: #2c1e1c;
+  --dl-info-50: #1c242b;
+
+  --dl-text-on-accent: #10201c;
+
+  /* 深色下阴影不承担层级,进一步减弱 */
+  --dl-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --dl-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --dl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ===========================================================================
+ * 展示区块的通用外壳:十余个 section 组件复用同一套排版。
+ * ========================================================================= */
+
+.dl-section {
+  padding: var(--dl-space-4) 0;
+  border-top: var(--dl-border-width) solid var(--dl-border-base);
+}
+
+.dl-section__title {
+  margin: 0 0 var(--dl-space-1);
+  font-family: var(--dl-font-display);
+  font-size: var(--dl-font-size-xs);
+  font-weight: var(--dl-weight-strong);
+  letter-spacing: var(--dl-tracking-label);
+  color: var(--dl-text-tertiary);
+}
+
+.dl-section__note {
+  margin: 0 0 var(--dl-space-3);
+  max-width: var(--dl-measure);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-body);
+  color: var(--dl-text-tertiary);
+}
+
+.dl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dl-space-3);
+}
+
+.dl-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dl-space-2);
+}
+
+.dl-grid {
+  display: grid;
+  gap: var(--dl-space-2);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--dl-font-display);
+}
+
+/* 技术信息(token 名、编号、代码)统一交给等宽字体 —— 科技感的主要来源之一。 */
+code {
+  font-family: var(--dl-font-mono);
+  font-size: 0.95em;
+}
+
+/* 数据容器:数字等宽,列宽不随数值跳动。 */
+.dl-numeric {
+  font-variant-numeric: var(--dl-numeric-variant);
+}
+
+/* do / don't 区块的演示盒:正例与反例共用同一套盒式排版。
+   反例类定义在其后,靠源码顺序覆盖这里的属性 —— 两边选择器权重刻意保持一致。 */
+.dl-demo-box {
+  display: block;
+  padding: var(--dl-space-2);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-body);
+  color: var(--dl-text-secondary);
+  background: var(--dl-panel-bg);
+  backdrop-filter: var(--dl-panel-blur);
+  -webkit-backdrop-filter: var(--dl-panel-blur);
+  border: var(--dl-border-width) solid var(--dl-panel-border);
+  border-radius: var(--dl-panel-radius);
+  box-shadow: var(--dl-panel-inner), var(--dl-panel-shadow);
+}
+
+/* ---------------------------------------------------------------------------
+ * 反例样式:故意违反设计语言,仅供 do / don't 区块展示。
+ * 集中在此命名空间下,便于与正例区分 —— 组件与页面里不应出现这些类的用法。
+ * ------------------------------------------------------------------------- */
+.dl-anti-hardcoded {
+  padding: 8px 16px;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  color: #ffffff;
+  background: #7c3aed;
+  border: none;
+  border-radius: 9999px;
+}
+
+.dl-anti-lowcontrast {
+  color: var(--dl-neutral-300);
+}
+
+.dl-anti-gradient {
+  background: linear-gradient(135deg, #ff006e 0%, #8338ec 50%, #3a86ff 100%);
+  color: #ffffff;
+}
+
+.dl-anti-mixed-radius {
+  border-radius: 17px 3px 21px 5px;
+}
+
+.dl-anti-stacked {
+  border: var(--dl-border-width) solid var(--dl-border-strong);
+  box-shadow: var(--dl-shadow-lg);
+  background: linear-gradient(180deg, #ffffff 0%, #e8e8ff 100%);
+}
+
+/* 纯灰中性:打破"灰永远不是灰"的原则,作为反例展示 */
+.dl-anti-puregray {
+  color: #808080;
+  background: #f0f0f0;
+}
+
+/* 纯黑压纯白:对比过硬,长文阅读刺眼 */
+.dl-anti-hardcontrast {
+  color: #000000;
+  background: #ffffff;
+}
+
+/* ---------------------------------------------------------------------------
+ * 文本截断:三档,按"内容是否必须完整可见"选,而不是按视觉长短选。
+ *   .dl-truncate  单行截断 —— 表格单元格、列表标题这类必须保持单行的位置
+ *   .dl-clamp-2/3 多行截断 —— 卡片摘要;行数由内容语义决定,不用奇数值
+ *   不截断        正文与任何"截断会丢失决策所需信息"的位置
+ * ------------------------------------------------------------------------- */
+.dl-truncate {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dl-clamp-2,
+.dl-clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dl-clamp-2 {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.dl-clamp-3 {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* ---------------------------------------------------------------------------
+ * 动效降级:用户在系统里开启"减少动态效果"时,状态切换仍然发生,但位移与缩放去掉。
+ * 用极短时长而不是 0:部分浏览器对 duration:0 的 transition 不触发 transitionend,
+ * 依赖该事件的代码会挂住。
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--dl-page-bg);
+  color: var(--dl-page-fg);
+  font-family: var(--dl-font-sans);
+}
+
+#app {
+  min-height: 100vh;
+}

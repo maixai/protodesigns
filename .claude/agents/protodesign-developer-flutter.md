@@ -14,7 +14,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 - `design_points`:已确认的"设计要点"。
 - `survey_summary`:现状探查摘要;新建原型时为空。
 - `scope`:本次改动的明确范围。
-- `baseline_paths`:必读的基线 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-mobile.md](../rules/baseline-mobile.md) + 契约规则 [../rules/contracts.md](../rules/contracts.md)。
+- `baseline_paths`:必读的基线 —— 共享基线 [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) + [../rules/baseline-mobile.md](../rules/baseline-mobile.md) + **设计语言** [../rules/design-language.md](../rules/design-language.md) + 契约规则 [../rules/contracts.md](../rules/contracts.md)。
 - `web_reference`:同 `product` 的 web 原型路径(主体信息架构的定稿来源)。
 - `example_path`:[../../protos/example-app/](../../protos/example-app/) —— 新原型的复制模板。
 
@@ -25,7 +25,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 - **这份原型是生产代码的草稿**:Flutter 没有"原型 → 迁移"这一步,因此代码质量按生产要求,不留一次性 hack。
 - **不多做漏做**:只做 `scope` 内的改动。
 - **类型来自契约**:数据结构一律来自 `lib/contracts/generated/`,不得手写重复定义。
-- **不 hardcode 视觉值**:颜色 / 字号 / 间距一律走集中定义的 `ThemeData` / `ThemeExtension`。
+- **不 hardcode 视觉值**:颜色 / 字号 / 行高 / 间距一律走集中定义的 `ThemeData` / `ThemeExtension`,**取值见 [../rules/design-language.md](../rules/design-language.md) 第 ⑩ 节**。
 - **禁止 hover 依赖**:触屏没有 hover;任何靠 hover 才能看到的信息或反馈都必须存在非 hover 的等价可见状态。
 
 ## 实现步骤
@@ -35,7 +35,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
    - 新建:复制 `example_path` 到 `protos/<slug>/`,改 `meta.md`(含 **product** / **targets: [mobile]** / **data**)。
    - 修改:先按 `survey_summary` 读现状,保持主题与结构一致。
 3. **契约**:在 `contracts/main.tsp` 定义数据模型(入口类型加 `@summary` + `@jsonSchema`),`make contracts` 生成 Dart 类型与 TS 类型。**注意 Dart 侧的保真度取舍**(枚举命名、标量内联),见 [../rules/contracts.md](../rules/contracts.md)。
-4. **主题**:在 `lib/theme/` 集中定义 `ThemeData` / `ThemeExtension`,深浅两套;token 值取自共享基线第 ② 节。
+4. **主题**:在 `lib/theme/` 集中定义 `ThemeData` / `ThemeExtension`,深浅两套;token 值取自 [../rules/design-language.md](../rules/design-language.md)(Flutter 落地见其第 ⑩ 节)。
 5. **数据层**:Dart 侧强类型 API + 内存 dummy 数据 + 模拟延迟;不接真实后端、不做本地持久化(原型期刷新即重置)。
 6. **页面与 widget**:按设计要点搭页面,补齐四态与 **pressed / focus / disabled** 态(hover 不适用);按 `baseline-mobile.md` 处理安全区、键盘、手势返回、底部导航、权限时机。
 7. **自检**:`make contracts` 无报错;`flutter analyze` 无 error;`make run`(默认 Chrome 预览)确认可启动。平台特有交互(手势 / 键盘 / 安全区)在浏览器里验不了,交回时**显式说明哪些项待真机确认**。

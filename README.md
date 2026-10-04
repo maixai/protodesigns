@@ -15,7 +15,7 @@
 | 含 `desktop` | **与 web 同一份代码**,额外提供壳能力 mock | `baseline-desktop.md` |
 | 含 `mobile` | Flutter(Dart) | `baseline-mobile.md` |
 
-跨端共享的规范见 `.claude/rules/protodesign-baseline.md`;契约规则见 `.claude/rules/contracts.md`。
+跨端共享的规范见 `.claude/rules/protodesign-baseline.md`;**设计语言见 `.claude/rules/design-language.md`**;契约规则见 `.claude/rules/contracts.md`。
 
 ## 前置依赖
 
@@ -103,7 +103,7 @@ contracts/main.tsp ──┬─→ contracts/generated/openapi/openapi.yaml
 ```text
 protodesigns/
 ├── .claude/
-│   ├── rules/                    # 共享基线 + 三份端基线 + 契约规则
+│   ├── rules/                    # 共享基线 + 三份端基线 + 契约规则 + 设计语言
 │   ├── skills/protodesign/       # 原型设计 Skill
 │   └── agents/                   # 实现 / 评审 SubAgent(按载体各一套)
 ├── scripts/                      # 聚合预览站(aggregate / build / serve)
@@ -132,4 +132,4 @@ protos/<slug>/
 ## 更多约定
 
 - 仓库级约定见 `CLAUDE.md`(根目录)。
-- 原型设计规范见 `.claude/rules/`(本仓库自身即规范的单一事实源)。
+- 原型设计规范见 `.claude/rules/`(本仓库自身即规范的单一事实源),其中设计语言见 `design-language.md`。

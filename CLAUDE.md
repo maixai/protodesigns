@@ -48,11 +48,12 @@
 
 | 文件 | 覆盖内容 |
 | --- | --- |
-| `protodesign-baseline.md` | 跨端共享:定位 / token / TS 规范 / 原型结构 / 数据与 API / 交互状态 / a11y |
+| `protodesign-baseline.md` | 跨端共享:定位 / token 速查 / TS 规范 / 原型结构 / 数据与 API / 交互状态 / a11y |
 | `baseline-web.md` | `targets` 含 `web` 时的响应式与验收项 |
 | `baseline-desktop.md` | `targets` 含 `desktop` 时的窗口语义、壳能力与验收项 |
 | `baseline-mobile.md` | `targets` 含 `mobile` 时的平台语义与验收项 |
 | `contracts.md` | 契约书写约定与跨端一致性规则 |
+| `design-language.md` | **设计语言 Tungsten 青瓷**:token 取值、中文排版规则、组件配方与禁用值 |
 
 实现与评审均以此为准,不依赖、不指向任何仓库外文件。
 

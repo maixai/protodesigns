@@ -140,31 +140,31 @@ onUnmounted(() => {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  background: var(--dl-bg-base);
 }
 
 /* 菜单栏:桌面端的固定分组入口,浏览器里以模拟条呈现。 */
 .menubar {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  background: var(--bg-overlay);
-  border-bottom: 1px solid var(--border-base);
+  gap: var(--dl-space-4);
+  padding: var(--dl-space-2) var(--dl-space-4);
+  background: var(--dl-bg-sunken);
+  border-bottom: 1px solid var(--dl-border-base);
   overflow-x: auto;
 }
 
 .menubar__brand {
-  font-size: var(--font-size-sm);
+  font-size: var(--dl-font-size-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--dl-text-primary);
   white-space: nowrap;
 }
 
 .menubar__group {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--dl-space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -173,31 +173,31 @@ onUnmounted(() => {
 }
 
 .menubar__group-label {
-  font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
-  padding: 0 var(--space-1);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-tertiary);
+  padding: 0 var(--dl-space-1);
   white-space: nowrap;
 }
 
 .menubar__item {
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
+  padding: var(--dl-space-1) var(--dl-space-2);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-secondary);
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--dl-radius-sm);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .menubar__item:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  background: var(--dl-bg-elevated);
+  color: var(--dl-text-primary);
 }
 
 .menubar__item:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
+  outline: var(--dl-focus-width) solid var(--dl-focus-ring);
+  outline-offset: var(--dl-focus-offset);
 }
 
 .page {
@@ -205,51 +205,51 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-6);
+  padding: var(--dl-space-6);
 }
 
 .panel {
   width: min(560px, 100%);
-  padding: var(--space-6);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
+  padding: var(--dl-space-6);
+  background: var(--dl-bg-elevated);
+  border: 1px solid var(--dl-border-base);
+  border-radius: var(--dl-radius-md);
 }
 
 .panel__title {
-  margin: 0 0 var(--space-2);
-  font-size: var(--font-size-xl);
+  margin: 0 0 var(--dl-space-2);
+  font-size: var(--dl-font-size-xl);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--dl-text-primary);
 }
 
 .panel__desc {
-  margin: 0 0 var(--space-5);
-  font-size: var(--font-size-md);
-  color: var(--text-secondary);
+  margin: 0 0 var(--dl-space-6);
+  font-size: var(--dl-font-size-md);
+  color: var(--dl-text-secondary);
 }
 
 .button {
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--font-size-md);
-  color: var(--text-on-primary);
-  background: var(--primary);
+  padding: var(--dl-space-2) var(--dl-space-4);
+  font-size: var(--dl-font-size-md);
+  color: var(--dl-text-on-accent);
+  background: var(--dl-accent);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--dl-radius-sm);
   cursor: pointer;
 }
 
 .button:hover:not(:disabled) {
-  background: var(--primary-hover);
+  background: var(--dl-accent-hover);
 }
 
 .button:active:not(:disabled) {
-  background: var(--primary-pressed);
+  background: var(--dl-accent-active);
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--dl-focus-width) solid var(--dl-focus-ring);
+  outline-offset: var(--dl-focus-offset);
 }
 
 .button:disabled {
@@ -258,32 +258,32 @@ onUnmounted(() => {
 }
 
 .error {
-  margin: var(--space-4) 0 0;
-  font-size: var(--font-size-sm);
-  color: var(--text-error);
+  margin: var(--dl-space-4) 0 0;
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-error);
 }
 
 .empty {
-  margin: var(--space-4) 0 0;
-  font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  margin: var(--dl-space-4) 0 0;
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-tertiary);
 }
 
 .user-list {
-  margin: var(--space-5) 0 0;
+  margin: var(--dl-space-6) 0 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--dl-border-base);
+  border-radius: var(--dl-radius-md);
   overflow: hidden;
 }
 
 .user-list__item {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-base);
+  gap: var(--dl-space-3);
+  padding: var(--dl-space-3) var(--dl-space-4);
+  border-bottom: 1px solid var(--dl-border-base);
 }
 
 .user-list__item:last-child {
@@ -291,31 +291,31 @@ onUnmounted(() => {
 }
 
 .user-list__name {
-  font-size: var(--font-size-md);
+  font-size: var(--dl-font-size-md);
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--dl-text-primary);
   white-space: nowrap;
 }
 
 .user-list__role {
-  font-size: var(--font-size-sm);
-  color: var(--text-on-primary);
-  background: var(--primary);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-on-accent);
+  background: var(--dl-accent);
+  border-radius: var(--dl-radius-sm);
+  padding: 0 var(--dl-space-2);
   white-space: nowrap;
 }
 
 .user-list__email {
   margin-left: auto;
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-secondary);
   overflow-wrap: anywhere;
 }
 
 .user-list__status {
-  font-size: var(--font-size-sm);
-  color: var(--text-tertiary);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-tertiary);
   white-space: nowrap;
 }
 
@@ -335,11 +335,11 @@ onUnmounted(() => {
 /* 状态栏:展示壳能力状态,供评审核对主题跟随与窗口尺寸。 */
 .statusbar {
   display: flex;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  background: var(--bg-overlay);
-  border-top: 1px solid var(--border-base);
+  gap: var(--dl-space-4);
+  padding: var(--dl-space-2) var(--dl-space-4);
+  font-size: var(--dl-font-size-sm);
+  color: var(--dl-text-secondary);
+  background: var(--dl-bg-sunken);
+  border-top: 1px solid var(--dl-border-base);
 }
 </style>

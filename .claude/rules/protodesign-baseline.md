@@ -11,6 +11,7 @@
 | [`baseline-desktop.md`](./baseline-desktop.md) | `targets` 含 `desktop` 时的窗口语义、壳能力与验收项 |
 | [`baseline-mobile.md`](./baseline-mobile.md) | `targets` 含 `mobile` 时的平台语义与验收项 |
 | [`contracts.md`](./contracts.md) | 契约书写约定与跨端一致性规则 |
+| [`design-language.md`](./design-language.md) | **设计语言 Tungsten 青瓷**:token 取值、中文排版规则、组件配方与禁用值 |
 
 **按原型的 `meta.md` 声明选用端基线**:`targets` 含哪个端,就叠加哪份端基线;共享基线永远适用。
 
@@ -28,94 +29,45 @@
 
 ## ② 设计 token 基线
 
-设计语言统一走 **design token**;组件内**严禁 hardcode 颜色、字号、圆角、间距、阴影、动效时长**等视觉数值——必须引用下方 token(经 CSS 变量或组件库主题统一映射)。
+设计语言统一走 **design token**;组件内**严禁 hardcode 颜色、字号、行高、间距、圆角、阴影、动效时长**等视觉数值——必须引用 token(经 CSS 变量或组件库主题统一映射)。
 
-### 色彩(color)
+**本仓库已调定的设计语言完整定义在 [`design-language.md`](./design-language.md)**:取值、设计依据、中文排版规则、落地映射、组件配方与禁用值都在那里。
 
-| Token | 值 | 用途 |
-| --- | --- | --- |
-| `--color-primary` | `#2563EB` | 品牌主色(按钮 / 链接 / 选中态) |
-| `--color-primary-hover` | `#3B82F6` | 主色 hover |
-| `--color-primary-active` | `#1D4ED8` | 主色 active |
-| `--color-success` | `#16A34A` | 成功 / 正向 |
-| `--color-warning` | `#D97706` | 警告 |
-| `--color-error` | `#DC2626` | 错误 / 危险 |
-| `--color-info` | `#0891B2` | 信息 |
-| `--color-text-strong` | `#1F2329` | 标题 / 强调文字 |
-| `--color-text-normal` | `#303133` | 正文 |
-| `--color-text-secondary` | `#8A909A` | 次要文字 / 辅助说明 |
-| `--color-text-disabled` | `#C9CDD4` | 禁用文字 |
-| `--color-bg-page` | `#F5F6F7` | 页面背景 |
-| `--color-bg-container` | `#FFFFFF` | 卡片 / 容器背景 |
-| `--color-border` | `#E5E6EB` | 默认边框 / 分割线 |
-| `--color-border-light` | `#F2F3F5` | 浅分割线 |
+本节只保留一张**速查表**。取值与 `design-language.md` 冲突时,**以 `design-language.md` 为准**。
 
-### 字体(typography)
-
-| Token | 值 |
+| 组 | Token 与取值 |
 | --- | --- |
-| `--font-family-base` | `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif` |
-| `--font-size-xs` | `12px` |
-| `--font-size-sm` | `14px` |
-| `--font-size-base` | `16px` |
-| `--font-size-lg` | `18px` |
-| `--font-size-xl` | `20px` |
-| `--font-size-2xl` | `24px` |
-| `--font-size-3xl` | `30px` |
-| `--line-height-body` | `1.5` |
-| `--line-height-heading` | `1.25` |
-| `--font-weight-regular` | `400` |
-| `--font-weight-medium` | `500` |
-| `--font-weight-semibold` | `600` |
+| 中性色 | `--dl-neutral-0…950`,暖调 chromatic neutral(色相 35°、饱和约 8%),**不用纯灰** |
+| 强调色 | `--dl-accent-50…900`,青瓷 `#2E6F63`(深色 `#8CC7B9`) |
+| 正文色 | `--dl-neutral-900`,暖近黑 `#221D18`,**不用纯黑** |
+| 字号阶 | `--dl-font-size-xs…3xl` = `12 / 13 / 15 / 19 / 23 / 29 / 37px`,比例 1.25,基准 **15px** |
+| 行高 | `--dl-line-tight/snug/body/loose` = `1.25 / 1.45 / 1.7 / 1.85` |
+| 行宽 | `--dl-measure` = **35em**(中文按 em 计,**不能用 ch**) |
+| 字距 | 中文保持 `0`;仅微型标签用 `0.01–0.06em` |
+| 字重 | 只允许 `400 / 500 / 600`,**700 及以上禁止** |
+| 段间距 | `--dl-para-gap` = `1.5em` |
+| 间距(4px 基准) | `--dl-space-1…12` = `4 / 8 / 12 / 16 / 24 / 32 / 48px` |
+| 圆角 | `--dl-radius-sm/md/lg` = `6 / 8 / 12px` |
+| 边框 | `--dl-border-width` = `1px`(层级以发丝描边为主) |
+| 阴影 | `--dl-shadow-xs/md/lg`,极轻暖调,只用于真正需要抬起的浮层 |
+| 动效 | `--dl-duration-fast/base/slow` = `140 / 200 / 280ms`,`--dl-ease-standard` |
+| 控件 / 触达 | `--dl-control-height` = `36px`,`--dl-target-size` = `44px` |
+| 层级 | `--dl-z-sticky/overlay/modal/toast` = `100 / 200 / 300 / 400`,禁止就地写 `9999` |
+| 图标 | `--dl-icon-sm/md/lg` = `16 / 20 / 24px`,描边统一 `1.5px` 不随尺寸缩放 |
 
-### 间距(spacing,4px 基准)
+**中文排版是本语言的硬约束**,以下几条与通用西文规范冲突处**以本仓库为准**:
 
-| Token | 值 |
-| --- | --- |
-| `--space-1` | `4px` |
-| `--space-2` | `8px` |
-| `--space-3` | `12px` |
-| `--space-4` | `16px` |
-| `--space-6` | `24px` |
-| `--space-8` | `32px` |
-| `--space-12` | `48px` |
+- 正文行高 **1.7**(而非西文常见的 1.5);基准字号 **15px**(14px 对中文偏小);
+- 行宽按 **em** 计(35em),通用西文建议的 `60–75ch` 对中文是错的;
+- 字距保持 **0**(中文不需要正字距,WCAG 对表意文字的字距要求亦豁免);
+- **一律左对齐,禁止两端对齐**;
+- 中西文混排间距与避头尾由角色层统一提供(`text-autospace` / `line-break: strict`),组件不要自己插空格。
 
-### 圆角(radius)
+落地方式:
+- **Vue 侧两层并用**——CSS 变量管自绘样式,Naive UI `themeOverrides` 管组件库,取值同源;
+- **Flutter 侧**集中在 `lib/theme/` 的 `ThemeData` / `ThemeExtension`,深浅两套。
 
-| Token | 值 |
-| --- | --- |
-| `--radius-sm` | `4px` |
-| `--radius-md` | `8px` |
-| `--radius-lg` | `12px` |
-| `--radius-full` | `9999px` |
-
-### 阴影(shadow)
-
-| Token | 值 |
-| --- | --- |
-| `--shadow-sm` | `0 1px 2px rgba(0, 0, 0, 0.04)` |
-| `--shadow-md` | `0 4px 12px rgba(0, 0, 0, 0.08)` |
-| `--shadow-lg` | `0 8px 24px rgba(0, 0, 0, 0.12)` |
-
-### 动效(motion)
-
-| Token | 值 |
-| --- | --- |
-| `--duration-fast` | `150ms` |
-| `--duration-base` | `250ms` |
-| `--duration-slow` | `350ms` |
-| `--easing-base` | `cubic-bezier(0.4, 0, 0.2, 1)` |
-
-### 落地方式
-
-Vue 侧两种任选其一(建议 `themeOverrides` + 少量 CSS 变量并用):
-
-1. **CSS 变量**:在 `src/styles/tokens.css` 定义 `:root { --color-primary: #2563EB; ... }`,组件样式引用 `var(--color-primary)`。
-2. **组件库主题覆盖**:在 `src/theme.ts` 集中映射,避免在组件内 hardcode。
-
-Flutter 侧的对应做法见 [`baseline-mobile.md`](./baseline-mobile.md)。
-
----
+映射表、组件配方与禁用值见 [`design-language.md`](./design-language.md) 第 ⑨ / ⑩ / ⑫ 节。
 
 ## ③ TypeScript 代码规范要点
 
@@ -283,7 +235,8 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 - [ ] **可运行**:子目录内 `make run` 可启动,可访问。
 - [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错。
 - [ ] **console 无 error**:无 JS 运行时错误(关键请求无 4xx/5xx 失败)。
-- [ ] **token 合规**:颜色 / 字号 / 圆角 / 间距 / 阴影 / 动效均走 token 或主题覆盖,无 hardcode magic number。
+- [ ] **token 合规**:颜色 / 字号 / 行高 / 圆角 / 间距 / 阴影 / 动效均走 token 或主题覆盖,无 hardcode magic number;**判据见 [`design-language.md`](./design-language.md) 第 ② 节**。
+- [ ] **中文排版合规**:正文行高 ≥ 1.5、行宽按 em 计、字重 ≤ 600、左对齐。
 - [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态。
 - [ ] **交互态完备**:hover / focus / active / disabled(触屏端按端基线调整)。
 - [ ] **a11y 底线**:见第 ⑦ 节。
@@ -295,7 +248,8 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 | --- | --- |
 | AI slop 配色 | 高饱和撞色、霓虹渐变滥用、无主次 |
 | 信息墙 | 大段文字无层次、无留白、无分组 |
-| magic number | 组件内散落 `#fff`、`12px`、`8px` 等硬编码视觉值 |
+| magic number | 组件内散落 `#fff`、`12px`、`8px` 等硬编码视觉值;或跳过语义层直接引用 ramp 阶 |
+| 中文排版违规 | 行高 < 1.5、用 `ch` 定中文行宽、字重 700+、两端对齐 |
 | 无状态设计 | 只做了"有数据"一态,缺 loading / empty / error |
 | 无反馈 | hover / focus / disabled 无任何视觉反馈 |
 | 假交互 | 按钮不可点、链接无跳转、表单提交无反应 |

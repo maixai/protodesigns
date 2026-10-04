@@ -98,13 +98,13 @@ description: 在 protodesigns 仓库下,根据用户自然语言需求(文字描
   - `targets` 含 `web` / `desktop` → `protodesign-developer`(见 [../../agents/protodesign-developer.md](../../agents/protodesign-developer.md));
   - `targets` 含 `mobile` → `protodesign-developer-flutter`(见 [../../agents/protodesign-developer-flutter.md](../../agents/protodesign-developer-flutter.md))。
 - **单点 tweak** → Main 直接改,不下放。
-- 下发时注入:设计要点 / 需求理解摘要 + 现状探查摘要 + **本次要加载的基线路径** + 明确改动范围。
+- 下发时注入:设计要点 / 需求理解摘要 + 现状探查摘要 + **本次要加载的基线路径**(共享基线 + 按 `targets` 叠加的端基线 + **设计语言 `design-language.md`**) + 明确改动范围。
 
 **实现硬约束**:
 
 - 新设计 → 新建独立子目录(扁平一层,自含 `meta.md` / `Makefile` / `tspconfig.yaml` / `contracts/`);
 - 改设计 → 直接改现有子目录,保持既有结构;
-- 新建目录时,以 `protos/example/`(web/桌面)与 `protos/example-app/`(mobile)为模板;
+- 新建目录时,以 `protos/example-web/`(web/桌面)与 `protos/example-app/`(mobile)为模板;
 - 严格遵循基线:共享基线 + 按 `targets` 叠加的端基线。
 
 ## Step 5:契约产出
@@ -148,6 +148,7 @@ cd <子目录> && make run
 - [../rules/protodesign-baseline.md](../rules/protodesign-baseline.md) —— 跨端共享基线。
 - [../rules/baseline-web.md](../rules/baseline-web.md) / [baseline-desktop.md](../rules/baseline-desktop.md) / [baseline-mobile.md](../rules/baseline-mobile.md) —— 端基线。
 - [../rules/contracts.md](../rules/contracts.md) —— 契约书写与跨端一致性规则。
+- [../rules/design-language.md](../rules/design-language.md) —— **设计语言 Tungsten 青瓷**:token 取值、中文排版规则、组件配方与禁用值。
 - [../../agents/protodesign-developer.md](../../agents/protodesign-developer.md) —— Vue 载体实现。
 - [../../agents/protodesign-developer-flutter.md](../../agents/protodesign-developer-flutter.md) —— Flutter 载体实现。
 - [../../agents/protodesign-reviewer.md](../../agents/protodesign-reviewer.md) —— web / 桌面验收。

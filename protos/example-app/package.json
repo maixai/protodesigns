@@ -1,0 +1,14 @@
+{
+  "name": "example-app-contracts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "本文件只承载契约工具链的依赖(TypeSpec / quicktype),与 Flutter 的 pubspec.yaml 无关;保留它才能让原型目录自包含。",
+  "devDependencies": {
+    "@typespec/compiler": "^1.16.0",
+    "@typespec/http": "^1.16.0",
+    "@typespec/json-schema": "^1.16.0",
+    "@typespec/openapi3": "^1.16.0",
+    "quicktype": "^26.0.0"
+  }
+}

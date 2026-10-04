@@ -1,0 +1,19 @@
+name: example_app
+description: protodesigns 的 mobile 原型样板,演示契约跨端一致与移动端基线。
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

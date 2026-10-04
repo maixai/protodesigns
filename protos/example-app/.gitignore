@@ -1,0 +1,20 @@
+# Flutter 构建产物与工具目录
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+
+# 契约工具链的依赖(与 pubspec 无关,仅用于 make contracts)
+node_modules/
+
+# 契约生成物:由 make contracts 产出,不入库(新克隆的目录执行 make run 会自动生成)
+contracts/generated/
+lib/contracts/generated/
+
+# 编辑器目录与文件
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.iml

@@ -1,0 +1,68 @@
+# 共享 make 目标:供 Flutter(mobile)原型的 Makefile include 后复用。
+# 与 Make.def 的差异:运行时用 flutter 命令而非 pnpm;契约生成的默认步骤是 schema + dart。
+#
+# 注意:契约工具链(TypeSpec / quicktype)是 Node 侧的,与 Flutter 的 pubspec 无关。
+# Flutter 原型因此需要携带一个**仅用于契约生成**的最小 package.json,
+# 这样原型目录仍然自包含(拿走一个目录即可重建)。
+
+FLUTTER ?= flutter
+PNPM    ?= pnpm
+# 默认跑 Chrome:浏览器里看布局与视觉最快;真机 / 模拟器用 make run DEVICE=<设备 id>
+DEVICE  ?= chrome
+
+.PHONY: run build contracts contracts-schema contracts-dart contracts-clean calibrate calibrate-update
+
+# 启动:先跑契约生成,保证 Dart 类型与契约一致。
+run: contracts
+	$(FLUTTER) run -d $(DEVICE)
+
+# 构建 Web 产物。
+build: contracts
+	$(FLUTTER) build web
+
+# ---- 契约生成(机制层,不含任何"本原型是哪个端"的判断)----
+CONTRACTS_SRC      ?= contracts
+CONTRACTS_TMP      ?= $(CONTRACTS_SRC)/generated
+CONTRACTS_DART_OUT ?= lib/contracts/generated
+CONTRACTS_DEPS     ?= contracts-schema contracts-dart
+
+# 契约生成入口。
+contracts: $(CONTRACTS_DEPS)
+
+# 编译 TypeSpec 契约,产出中间产物(JSON Schema / OpenAPI);
+# 用哪些 emitter、各写到哪个目录,由本原型的 tspconfig.yaml 决定。
+contracts-schema:
+	$(PNPM) exec tsp compile $(CONTRACTS_SRC)
+
+# 从 JSON Schema 生成 Dart 类型。
+# 说明:TypeSpec 官方没有 Dart emitter(只有 JS / Python / C# / Java),
+# 故 Dart 侧走 quicktype —— 它把 JSON Schema 转成带 fromJson/toJson 的 Dart 类。
+# 已知保真度取舍见 .claude/rules/contracts.md 与 baseline-mobile.md。
+contracts-dart: contracts-schema
+	rm -rf $(CONTRACTS_DART_OUT)
+	mkdir -p $(CONTRACTS_DART_OUT)
+	@for schema in $(CONTRACTS_TMP)/schema/*.yaml; do \
+	  [ -e "$$schema" ] || { echo "  (无 schema 产物,跳过)"; continue; }; \
+	  base=$$(basename "$$schema" .yaml); \
+	  kebab=$$(printf '%s' "$$base" | sed -E 's/([a-z0-9])([A-Z])/\1-\2/g' | tr '[:upper:]' '[:lower:]'); \
+	  echo "  $(CONTRACTS_TMP)/schema/$$base.yaml -> $(CONTRACTS_DART_OUT)/$$kebab.dart"; \
+	  $(PNPM) exec quicktype --src-lang schema "$$schema" --lang dart --out "$(CONTRACTS_DART_OUT)/$$kebab.dart" || exit 1; \
+	done
+
+# 清理全部生成物。
+contracts-clean:
+	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_DART_OUT)
+
+# ---- 设计校准 ----
+# 移动端的平台特有交互(手势返回 / 软键盘 / 安全区 / 权限弹窗)在浏览器里验不了,
+# 本目标只覆盖"能自动化的部分":静态分析与组件级视觉回归;
+# 其余必须真机 / 模拟器确认,评审时未确认项一律登记为「未验证」。
+calibrate:
+	$(FLUTTER) analyze
+	$(FLUTTER) test
+
+# 基线更新:确认视觉变化是预期的之后,重新生成 golden 基线。
+# 默认基线与 OS 无关(测试字体渲染为方块);若测试里加载了真实字体,基线才与 OS 绑定,
+# 那时不要在另一台 OS 上更新。详见 .claude/rules/baseline-mobile.md。
+calibrate-update:
+	$(FLUTTER) test --update-goldens

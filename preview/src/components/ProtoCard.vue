@@ -108,6 +108,14 @@ const anchorWidths = computed(() => {
 
     <dl class="proto-card__meta">
       <div class="proto-card__meta-row">
+        <dt>Targets</dt>
+        <dd>{{ proto.targets.join(' / ') }}</dd>
+      </div>
+      <div class="proto-card__meta-row">
+        <dt>Data</dt>
+        <dd>{{ proto.data }}</dd>
+      </div>
+      <div class="proto-card__meta-row">
         <dt>Owner</dt>
         <dd>{{ proto.owner }}</dd>
       </div>

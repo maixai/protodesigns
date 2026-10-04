@@ -7,12 +7,65 @@ PNPM ?= pnpm
 PORT ?= 5173
 HOST ?= 0.0.0.0
 
-.PHONY: run build
+.PHONY: run build contracts contracts-schema contracts-ts contracts-dart contracts-clean calibrate calibrate-update
 
-# 启动 dev server(--host / --port 会被 pnpm 原样转发给 vite dev 脚本)
-run:
+# 启动 dev server(--host / --port 会被 pnpm 原样转发给 vite dev 脚本);
+# 先跑契约生成,保证类型与契约一致(生成物不入库,新克隆的目录依赖此步)。
+run: contracts
 	$(PNPM) dev --host $(HOST) --port $(PORT)
 
-# 构建产物
-build:
+# 构建产物(先跑契约生成,否则 vue-tsc 找不到生成类型)。
+build: contracts
 	$(PNPM) build
+
+# ---- 契约生成(机制层,不含任何"本原型是哪个端"的判断)----
+# 输入:contracts/*.tsp —— 数据模型的单一事实源,手写
+# 中间:contracts/generated/ —— OpenAPI 与 JSON Schema,生成物勿手改
+# 产物:src/contracts/generated/ —— 各端类型,生成物勿手改
+#
+# 语言相关的步骤按需组合:web / 桌面原型走默认的 schema + ts;
+# 其他载体(如 Flutter)在自己的 Makefile 里覆盖 CONTRACTS_DEPS 追加 contracts-dart。
+CONTRACTS_SRC    ?= contracts
+CONTRACTS_TMP    ?= $(CONTRACTS_SRC)/generated
+CONTRACTS_TS_OUT ?= src/contracts/generated
+CONTRACTS_DEPS   ?= contracts-schema contracts-ts
+
+# 契约生成入口。
+contracts: $(CONTRACTS_DEPS)
+
+# 编译 TypeSpec 契约,产出中间产物(OpenAPI / JSON Schema);
+# 用哪些 emitter、各写到哪个目录,由本原型的 tspconfig.yaml 决定。
+contracts-schema:
+	$(PNPM) exec tsp compile $(CONTRACTS_SRC)
+
+# 从 JSON Schema 生成 TypeScript 裸类型:每个 schema 出一个同名 .d.ts,各自自包含
+# (被引用的类型在 schema 内已内联,故不会产生跨文件的重复导出)。
+contracts-ts: contracts-schema
+	rm -rf $(CONTRACTS_TS_OUT)
+	mkdir -p $(CONTRACTS_TS_OUT)
+	@for schema in $(CONTRACTS_TMP)/schema/*.yaml; do \
+	  [ -e "$$schema" ] || { echo "  (无 schema 产物,跳过)"; continue; }; \
+	  base=$$(basename "$$schema" .yaml); \
+	  kebab=$$(printf '%s' "$$base" | sed -E 's/([a-z0-9])([A-Z])/\1-\2/g' | tr '[:upper:]' '[:lower:]'); \
+	  echo "  $(CONTRACTS_TMP)/schema/$$base.yaml -> $(CONTRACTS_TS_OUT)/$$kebab.d.ts"; \
+	  $(PNPM) exec json2ts "$$schema" --additionalProperties false -o "$(CONTRACTS_TS_OUT)/$$kebab.d.ts" || exit 1; \
+	done
+
+# 清理全部生成物。
+contracts-clean:
+	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_TS_OUT)
+
+# ---- 设计校准(双引擎)----
+# 同一原型在 Chromium 与 WebKit 上各跑一遍:逐宽度截图 + 断言不破版。
+# 两个引擎都要跑,是因为桌面壳在 macOS / Linux 用 WebKit 系、在 Windows 用 Chromium 系;
+# 只在 Chrome 里验过的布局,到了壳里可能不成立。
+# 需要原型自带 playwright.config.ts 与 tests/calibrate/。
+# DEV_COMMAND 把当前可用的包管理器命令注入给 playwright 的 webServer(见 playwright.config.ts)。
+DEV_COMMAND ?= $(PNPM) dev --host 127.0.0.1 --port $(PORT)
+
+calibrate:
+	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test
+
+# 基线更新:确认布局变化是预期的之后,重新生成截图基线(改动的图需在评审里过目)。
+calibrate-update:
+	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test --update-snapshots

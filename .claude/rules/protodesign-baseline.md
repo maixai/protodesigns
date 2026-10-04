@@ -1,22 +1,34 @@
-# protodesign-baseline:原型设计 + 代码规范单一事实源
+# protodesign-baseline:跨端共享基线
 
 ## ① 定位
 
-本规则是 **protodesigns 仓库自身唯一的"技术栈 + 原型设计 + 代码规范"单一事实源**。它**完全自包含**:下方技术栈、设计 token 基线、TS 规范、原型结构、数据与 API、交互状态、响应式与 a11y、验收清单,全部固化在本文件内,**不依赖仓库根 `CLAUDE.md` 提供规范,也不指向任何仓库外文件**。
+本文件是 protodesigns 的**跨端共享基线**,与以下文件共同构成完整的规范体系:
 
-本规则由三方共同锚定,保证同一套标准不漂移:
+| 文件 | 覆盖内容 |
+| --- | --- |
+| **本文件** | 定位 / 设计 token / TS 规范 / 原型结构 / 数据与 API / 交互状态 / a11y / 共享验收清单 |
+| [`baseline-web.md`](./baseline-web.md) | `targets` 含 `web` 时的响应式与验收项 |
+| [`baseline-desktop.md`](./baseline-desktop.md) | `targets` 含 `desktop` 时的窗口语义、壳能力与验收项 |
+| [`baseline-mobile.md`](./baseline-mobile.md) | `targets` 含 `mobile` 时的平台语义与验收项 |
+| [`contracts.md`](./contracts.md) | 契约书写约定与跨端一致性规则 |
+
+**按原型的 `meta.md` 声明选用端基线**:`targets` 含哪个端,就叠加哪份端基线;共享基线永远适用。
+
+本基线由三方共同锚定,保证同一套标准不漂移:
 
 - `protodesign` Skill 自身(实现硬约束的依据);
-- `protodesign-developer`(实现时逐条遵守);
-- `protodesign-reviewer`(验收时逐项核对)。
+- `protodesign-developer*`(实现时逐条遵守);
+- `protodesign-reviewer*`(验收时逐项核对)。
 
-所有原型子目录应遵循本基线;若某产品有专属品牌规范,以用户提供的品牌规范**覆盖本基线第 2 节的默认 token 值**,但仍须**集中定义在 token 层**(`src/theme.ts` 或 `src/styles/tokens.css`),严禁散落 hardcode 在组件里。
+若某产品有专属品牌规范,以用户提供的品牌规范**覆盖本基线第 ② 节的默认 token 值**,但仍须**集中定义在 token 层**,严禁散落 hardcode 在组件里。
+
+> **默认 token 是"起点"而非"组织品牌"**:protodesigns 面向多个互不相关的产品,第 ② 节的值只是新产品开箱可用的默认,任何原型都可以整体替换。
 
 ---
 
 ## ② 设计 token 基线
 
-设计语言统一走 **design token**;组件内**严禁 hardcode 颜色、字号、圆角、间距、阴影、动效时长**等视觉数值——必须引用下方 token(经 CSS 变量或 Naive UI `themeOverrides` 统一映射)。
+设计语言统一走 **design token**;组件内**严禁 hardcode 颜色、字号、圆角、间距、阴影、动效时长**等视觉数值——必须引用下方 token(经 CSS 变量或组件库主题统一映射)。
 
 ### 色彩(color)
 
@@ -96,35 +108,12 @@
 
 ### 落地方式
 
-两种任选其一(建议 Naive UI 项目用 `themeOverrides` + 少量 CSS 变量并用):
+Vue 侧两种任选其一(建议 `themeOverrides` + 少量 CSS 变量并用):
 
 1. **CSS 变量**:在 `src/styles/tokens.css` 定义 `:root { --color-primary: #2563EB; ... }`,组件样式引用 `var(--color-primary)`。
-2. **Naive UI themeOverrides**:在 `src/theme.ts` 集中映射到组件,例如:
+2. **组件库主题覆盖**:在 `src/theme.ts` 集中映射,避免在组件内 hardcode。
 
-```typescript
-// src/theme.ts —— 集中定义 Naive UI 主题覆盖,把 token 映射到组件,避免在组件内 hardcode。
-import type { GlobalThemeOverrides } from 'naive-ui'
-
-export const themeOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#2563EB',
-    primaryColorHover: '#3B82F6',
-    primaryColorPressed: '#1D4ED8',
-    primaryColorSuppl: '#3B82F6',
-    successColor: '#16A34A',
-    warningColor: '#D97706',
-    errorColor: '#DC2626',
-    infoColor: '#0891B2',
-    textColorBase: '#303133',
-    textColor1: '#303133',
-    textColor2: '#4E5969',
-    textColor3: '#8A909A',
-    borderColor: '#E5E6EB',
-    borderRadius: '8px',
-    fontSize: '14px',
-  },
-}
-```
+Flutter 侧的对应做法见 [`baseline-mobile.md`](./baseline-mobile.md)。
 
 ---
 
@@ -133,17 +122,17 @@ export const themeOverrides: GlobalThemeOverrides = {
 1. **strict 全开**:`strict: true`,并额外开启 `noUncheckedIndexedAccess` / `exactOptionalPropertyTypes` / `noImplicitOverride`,不得关闭任何 strict 子选项。
 2. **禁止 `any`**:用 `unknown` 替代,经类型收窄后再操作。
 3. **禁止类型断言绕过检查**:不用 `as T` 逃逸类型系统;用 `satisfies` 校验类型保留字面量类型;对接外部 API 无法避免时才用 `as`,并加注释说明原因。
-4. **具名导出**:统一 `named export`,**禁止 `default export`**(重构重命名可被 IDE 追踪)。
-5. **文件名 kebab-case**:如 `user-profile.ts`、`user.ts`、`user.types.ts`;不用 `PascalCase` 命名非组件文件。
+4. **具名导出**:统一 `named export`,**禁止 `default export`**。
+5. **文件名 kebab-case**:如 `user-profile.ts`;不用 `PascalCase` 命名非组件文件。**契约生成物例外**(由生成器命名)。
 6. **Result 模式**:可预期的业务失败返回 `Result<T>`,不抛异常;`throw` 仅用于真正不可恢复的程序错误。
-7. **接口 / 类型**:对象形状优先 `interface`(支持 `extends`),联合 / 交叉 / 映射用 `type`;不用 `I` 前缀 / `Type` 后缀。
+7. **接口 / 类型**:对象形状优先 `interface`,联合 / 交叉 / 映射用 `type`;不用 `I` 前缀 / `Type` 后缀。
 8. **判别联合**表示有限状态(如加载状态),而非一堆可选字段。
 9. **命名**:变量/函数 `camelCase`,类/接口/类型/枚举 `PascalCase`,编译期常量 `UPPER_SNAKE_CASE`;Boolean 变量用 `is/has/can` 前缀。
 10. **异步**:统一 `async/await`,明确 `Promise<T>` 泛型,无依赖的并发请求用 `Promise.all`。
 11. **错误处理**:catch 块里 `error` 是 `unknown`,须收窄后使用。
-12. **代码风格**:用 `const`(不用 `let`/`var`),可选链 `?.` 与空值合并 `??`,提前 `return` 减少嵌套,禁原始类型包装对象。
+12. **代码风格**:用 `const`,可选链 `?.` 与空值合并 `??`,提前 `return` 减少嵌套,禁原始类型包装对象。
 
-`Result` 模式定义(每个原型在 `src/api/` 内自行定义或共享):
+`Result` 模式定义:
 
 ```typescript
 // src/api/result.ts —— 统一 API 返回结果:调用方在类型层面被迫处理失败分支。
@@ -156,65 +145,77 @@ export type Result<T, E = Error> =
 
 ## ④ 原型结构基线
 
-### 技术栈
+### 技术栈(统一固定)
 
-| 项 | 选型 |
-| --- | --- |
-| 语言 | TypeScript(strict,规范见第 ③ 节) |
-| 构建 | Vite |
-| UI 框架 | Vue 3 + Naive UI |
-| 包管理 | pnpm(每子目录独立 install) |
-| Node 版本 | `^20.19.0 \|\| >=22.12.0`(Vite 引擎要求) |
+| 端 | 载体 | 说明 |
+| --- | --- | --- |
+| `web` / `desktop` | TypeScript + Vite + Vue 3 + 组件库 | **同一份代码**:浏览器里跑即 web,套 Electron 壳即 desktop |
+| `mobile` | Flutter(Dart) | 独立一份代码 |
 
-- 每个产品服务一个 `protos/` 下的**独立子目录**(如 `protos/example/`),各自是**独立原型项目**:自含 `package.json` 与 `pnpm-lock.yaml`,互相无依赖耦合;根目录不维护 `package.json` / `pnpm-workspace.yaml`。
-- 每个子目录含 `Makefile`,内容**一行**:
+### 目录组织
 
-```makefile
-include ../Make.def
-```
-
-- 在子目录内 `make run` 即启动 dev server;默认 `0.0.0.0:5173`,并行开发用 `make run PORT=<端口>` 覆盖,仅本机访问用 `HOST=localhost`。
-- 新原型骨架:
+每个原型是 `protos/` 下的**扁平一层、完全自包含**的独立项目:
 
 ```text
-<子目录>/
-├── Makefile          # include ../Make.def
-├── package.json      # 独立依赖(Vue 3 + Naive UI + Vite + vue-tsc)
-├── pnpm-lock.yaml
-├── vite.config.ts
-├── index.html
-└── src/
-    ├── main.ts       # 入口,挂载 Naive UI 配置与路由
-    ├── App.vue
-    ├── theme.ts      # design token 映射(Naive UI themeOverrides)
-    ├── api/          # 强类型 API 函数(具名导出,返回 Promise<Result<T>>)
-    ├── mocks/        # dummy 数据 + delay() 模拟延迟
-    ├── components/   # 页面级组件
-    └── pages/        # 页面(按需)
+protos/<slug>/
+├── meta.md                    # 原型声明
+├── Makefile                   # include ../Make.def(或 ../Make.def.flutter)
+├── tspconfig.yaml             # 契约生成配置
+├── contracts/                 # 契约源头 + 生成中间产物
+│   ├── main.tsp
+│   └── generated/             # 生成物,勿手改,不入库
+└── src/ 或 lib/               # 载体代码
+    └── contracts/generated/   # 生成的类型,勿手改,不入库
 ```
+
+- **一个原型 = 一个设计 = 一个目录**,不设"产品"中间层;同产品的多端原型用 `meta.md` 的 `product` 字段软关联。
+- 各子目录自含 `package.json` 与锁文件,互不依赖;根目录不维护 workspace。
+- 在子目录内 `make run` 即启动;端口用 `make run PORT=<端口>` 覆盖。
+
+### meta.md 声明
+
+```yaml
+---
+name: 示例原型
+slug: example
+description: 一句话说明这个原型演示什么
+owner: 姓名
+owner_email: 邮箱
+product: example              # 可选:软关联同产品的多个端原型
+targets: [web, desktop]       # 必填:web | desktop | mobile
+data: local-first             # 必填:remote-http | local-first | hybrid
+---
+```
+
+| 字段 | 必填 | 作用 |
+| --- | --- | --- |
+| `targets` | 是 | 决定叠加哪些端基线、生成哪些产物、用哪个 Make.def |
+| `data` | 是 | 决定契约产出的形态;两种形态差别大,不设默认值以免猜错方向 |
+| `product` | 否 | 把同产品的多端原型软关联,便于核对契约一致性 |
 
 ---
 
 ## ⑤ 数据与 API 基线
 
-- **dummy 数据用真实内容**:贴近真实业务的文案 / 数字 / 字段结构(如真实人名、邮箱、金额、状态枚举),**禁止 lorem ipsum**;让原型演示起来有真实感。
-- **强类型 API**:`src/api/<domain>.ts` 定义具名导出的 API 函数,签名与返回类型即"规范化 API 设计",供后续真实开发参考接口需求。
-- **Result 模式**:API 函数返回 `Promise<Result<T>>`。
-- **模拟延迟**:`src/mocks/` 提供 `delay()`,模拟 **150-300ms** 网络延迟。
-- **刷新即重置**:不引入 MSW / 真实后端 / 本地持久化,刷新页面即回到初始 dummy 状态。
-- **结构约定**:
+### 契约是单一事实源
 
-```text
-src/
-├── api/
-│   ├── <domain>.ts       # 强类型 API 函数(具名导出,Promise<Result<T>>)
-│   └── <domain>.types.ts # 该域共用类型(API 契约的一部分)
-└── mocks/
-    ├── delay.ts          # delay():150-300ms 模拟网络往返
-    └── <domain>.ts       # 内置 dummy 数据(贴近真实业务)
-```
+- `contracts/main.tsp` 定义**数据长什么样**,是手写的唯一源头;各端类型由 `make contracts` 生成。
+- **不手写类型**:`src/api/` 等处的类型必须来自 `src/contracts/generated/`,不得重复定义。
+- 契约的书写约定与跨端一致性规则见 [`contracts.md`](./contracts.md)。
 
-`delay` 实现参考(每个原型可复制此写法):
+### 数据访问层
+
+- `src/api/` 定义**强类型 API 函数**(具名导出),函数签名即"规范化 API 设计",供后续真实开发参考。
+- 数据来自 `src/mocks/` 内置 **dummy 数据**;API 函数通过 `delay()` 模拟 **150-300ms** 网络延迟。
+- **不引入 MSW**:本仓库的数据形态以本地优先为主,MSW 拦的是 HTTP 请求而拦不到本地读写,且它在 Electron 宿主上是已知短板。手写 mock 模块是跨宿主唯一无痛的方案。
+- 业务失败统一用 **Result 模式**:API 函数返回 `Promise<Result<T>>`,调用方在类型层面被迫处理失败。
+
+### dummy 数据要求
+
+- 用**贴近真实业务**的文案 / 数字 / 字段结构,**禁止 lorem ipsum**;
+- **刷新即重置**:不接真实后端、不做本地持久化。
+
+`delay` 实现参考:
 
 ```typescript
 // src/mocks/delay.ts —— 模拟网络延迟的辅助工具,供 dummy API 层使用。
@@ -238,7 +239,7 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 
 ## ⑥ 交互状态基线
 
-### 三态(异步数据视图必齐)
+### 四态(异步数据视图必齐)
 
 每个依赖异步数据的视图必须覆盖四种状态,缺一不可:
 
@@ -255,28 +256,14 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 
 | 状态 | 要求 |
 | --- | --- |
-| hover | 有可见反馈(颜色 / 阴影 / 背景变化) |
+| hover | 有可见反馈(颜色 / 阴影 / 背景变化)。**触屏端不适用**,见 [`baseline-mobile.md`](./baseline-mobile.md) |
 | focus | 焦点可见(键盘操作者能看清当前焦点,不能吞焦点样式) |
 | active | 按压反馈 |
 | disabled | 视觉禁用 + 不可点击 |
 
 ---
 
-## ⑦ 响应式与 a11y 基线
-
-### 响应式(三断点必可用)
-
-在以下三个宽度都**可用且不破版**(无横向溢出、无文字重叠、无内容被裁):
-
-| 断点 | 宽度 | 典型设备 |
-| --- | --- | --- |
-| 移动 | `375px` | 手机 |
-| 平板 | `768px` | 平板 / 折叠屏 |
-| 桌面 | `1280px` | 笔记本 |
-
-- 用断点 / 媒体查询或 Naive UI 栅格(`NGrid` / `NRow` + `NCol`)实现;小屏优先保证内容单列可读。
-
-### a11y 底线
+## ⑦ a11y 底线(跨端共用)
 
 - 正文文字与背景对比度 ≥ **4.5:1**(大字号 / 装饰性元素 ≥ 3:1)。
 - 可交互元素**可键盘操作**(Tab 可达、Enter / Space 可触发)。
@@ -285,19 +272,24 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 - 图片有 `alt`(装饰图可空 `alt=""`)。
 - 焦点顺序合理,焦点可见。
 
+各端的额外要求见对应端基线。
+
 ---
 
-## ⑧ 验收清单
+## ⑧ 共享验收清单
 
-实现完成后逐项自检(最终由 `protodesign-reviewer` 逐项核对):
+实现完成后逐项自检(最终由 reviewer 逐项核对):
 
-- [ ] **可运行**:子目录内 `make run` 可启动,浏览器可访问。
+- [ ] **可运行**:子目录内 `make run` 可启动,可访问。
+- [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错。
 - [ ] **console 无 error**:无 JS 运行时错误(关键请求无 4xx/5xx 失败)。
-- [ ] **token 合规**:颜色 / 字号 / 圆角 / 间距 / 阴影 / 动效均走 token 或 Naive UI `themeOverrides`,无 hardcode magic number。
-- [ ] **三态完备**:异步视图有 loading / empty / error / 有数据四态,交互元素有 hover / focus / active / disabled 态。
-- [ ] **响应式**:375 / 768 / 1280 三断点均可用、无破版。
-- [ ] **a11y 底线**:对比度达标、可键盘操作、语义化标签、焦点可见。
-- [ ] **反模式清单**(以下任何一项命中即判 fail):
+- [ ] **token 合规**:颜色 / 字号 / 圆角 / 间距 / 阴影 / 动效均走 token 或主题覆盖,无 hardcode magic number。
+- [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态。
+- [ ] **交互态完备**:hover / focus / active / disabled(触屏端按端基线调整)。
+- [ ] **a11y 底线**:见第 ⑦ 节。
+- [ ] **端基线**:按 `meta.md` 的 `targets` 逐份核对对应端基线。
+
+### 反模式清单(命中任何一项即判 fail)
 
 | 反模式 | 说明 |
 | --- | --- |
@@ -307,5 +299,5 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 | 无状态设计 | 只做了"有数据"一态,缺 loading / empty / error |
 | 无反馈 | hover / focus / disabled 无任何视觉反馈 |
 | 假交互 | 按钮不可点、链接无跳转、表单提交无反应 |
-| 破版 | 某断点横向溢出 / 文字重叠 / 内容被裁 |
 | 空壳 | dummy 数据用 lorem ipsum,页面无真实感 |
+| 手写类型 | 绕过契约生成物,自行重复定义数据结构 |

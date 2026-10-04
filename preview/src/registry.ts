@@ -1,25 +1,63 @@
 // registry 数据访问:聚合产物是构建期静态数据,由 scripts/aggregate.mjs 生成。
 // 运行时仍需校验其结构,防止字段缺失导致渲染异常;全程不使用 any。
-import type { ProtoMeta } from './types'
+import type { ProtoData, ProtoMeta, ProtoTarget } from './types'
 import raw from './generated/protos-registry.json'
+import rawBuildPlan from './generated/build-plan.json'
 
-// ProtoMeta 的字段清单,用于运行时结构校验。
-const PROTO_FIELDS: ReadonlyArray<keyof ProtoMeta> = [
+// 本次构建**确实产出过预览产物**的原型 slug。
+//
+// 为什么需要它:静态服务对未知路径会回退到预览站自己的 index.html,若给出来自未构建原型的
+// 「在新标签打开」链接,打开的是预览站 SPA 本身,而它的路由里没有 /p/... → 一片空白,
+// 看起来像坏掉了。因此必须提前知道哪些链接是活的。
+const builtSlugs: ReadonlySet<string> = new Set(
+  Array.isArray(rawBuildPlan.built)
+    ? rawBuildPlan.built.filter((slug): slug is string => typeof slug === 'string')
+    : [],
+)
+
+// 判断某原型本次是否构建出了预览产物;未构建时不应给出可打开的预览链接。
+export function isBuilt(slug: string): boolean {
+  return builtSlugs.has(slug)
+}
+
+// ProtoMeta 中值为字符串的字段清单,用于运行时结构校验。
+const STRING_FIELDS: ReadonlyArray<keyof ProtoMeta> = [
   'name',
   'slug',
   'description',
   'owner',
   'owner_email',
+  'data',
   'updated_at',
   'dir',
 ]
 
-// 判定未知值是否为合法的 ProtoMeta:非空对象且全部字段均为字符串。
+// 合法的端与数据形态取值,用于运行时收窄。
+const TARGET_VALUES: readonly ProtoTarget[] = ['web', 'desktop', 'mobile']
+const DATA_VALUES: readonly ProtoData[] = ['remote-http', 'local-first', 'hybrid']
+
+// 判定未知值是否为合法的端取值。
+function isProtoTarget(value: unknown): value is ProtoTarget {
+  return typeof value === 'string' && (TARGET_VALUES as readonly string[]).includes(value)
+}
+
+// 判定未知值是否为合法的数据形态取值。
+function isProtoData(value: unknown): value is ProtoData {
+  return typeof value === 'string' && (DATA_VALUES as readonly string[]).includes(value)
+}
+
+// 判定未知值是否为合法的 ProtoMeta:字符串字段齐备、targets 为非空合法数组、product 为字符串或 null。
 function isProtoMeta(value: unknown): value is ProtoMeta {
   if (typeof value !== 'object' || value === null) return false
   // 聚合产物来自外部脚本,JSON 推断类型不保证运行时结构,收窄为可索引对象逐字段校验。
   const record = value as Record<string, unknown>
-  return PROTO_FIELDS.every((field) => typeof record[field] === 'string')
+  if (!STRING_FIELDS.every((field) => typeof record[field] === 'string')) return false
+  if (!isProtoData(record['data'])) return false
+  const targets = record['targets']
+  if (!Array.isArray(targets) || targets.length === 0) return false
+  if (!targets.every((item) => isProtoTarget(item))) return false
+  const product = record['product']
+  return product === null || typeof product === 'string'
 }
 
 // 判定未知值是否为 ProtoMeta 数组。

@@ -5,7 +5,7 @@ import { computed } from 'vue'
 import { NButton, NEmpty } from 'naive-ui'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import BrandMark from '../components/BrandMark.vue'
-import { getProto } from '../registry'
+import { getProto, isBuilt } from '../registry'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +19,14 @@ const slug = computed(() => {
 // 查 registry;未知 slug 时为 undefined,进入未找到分支。
 const proto = computed(() => (slug.value === undefined ? undefined : getProto(slug.value)))
 const iframeSrc = computed(() => (slug.value === undefined ? '' : `/p/${slug.value}/`))
+
+// 本次是否构建出了预览产物。未构建时必须**不给可打开的链接**:
+// 静态服务对未知路径回退到预览站自己的 index.html,打开后是预览站 SPA 而非原型,
+// 表现为一片空白。构建计划由 scripts/aggregate.mjs 产出。
+const built = computed(() => slug.value !== undefined && isBuilt(slug.value))
+
+// mobile 原型的产物依赖 Flutter SDK,未构建时原因基本就是本机没装,提示要说到点上。
+const needsFlutter = computed(() => proto.value?.targets.includes('mobile') ?? false)
 
 // 返回首页。
 function goBackHome(): void {
@@ -40,14 +48,27 @@ function goBackHome(): void {
         </div>
         <div class="proto-page__actions">
           <RouterLink to="/" class="proto-page__back">← 返回首页</RouterLink>
-          <a class="proto-page__open" :href="iframeSrc" target="_blank" rel="noopener">
+          <a v-if="built" class="proto-page__open" :href="iframeSrc" target="_blank" rel="noopener">
             在新标签打开
           </a>
         </div>
       </header>
       <main class="proto-page__main">
-        <div class="proto-page__frame">
+        <div v-if="built" class="proto-page__frame">
           <iframe class="proto-page__iframe" :src="iframeSrc" :title="proto.name" />
+        </div>
+
+        <div v-else class="proto-page__not-built">
+          <p class="proto-page__not-built-title">该原型本次未构建出预览产物</p>
+          <p class="proto-page__not-built-hint">
+            <template v-if="needsFlutter">
+              mobile 原型的预览由 Flutter Web 构建产出。本机未安装 Flutter SDK 时，
+              <code>make build</code> 会跳过它；安装 Flutter SDK 后重跑 <code>make build</code> 即可。
+            </template>
+            <template v-else>
+              该原型不在本次构建计划内，请重跑 <code>make build</code>。
+            </template>
+          </p>
         </div>
       </main>
     </template>
@@ -137,6 +158,42 @@ function goBackHome(): void {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 未构建时的说明区:替代 iframe,说清原因与恢复方式,不留空白 */
+.proto-page__not-built {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.proto-page__not-built-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-heading);
+  color: var(--color-text-strong);
+}
+
+.proto-page__not-built-hint {
+  max-width: 44ch;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--text-sm--line);
+  color: var(--color-text-secondary);
+}
+
+.proto-page__not-built-hint code {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-container);
+  border: var(--border-width) solid var(--color-border-light);
+  font-size: var(--font-size-xs);
 }
 
 /* 平板起面包屑升档,呼应首页 hero 标题的断点升档 */

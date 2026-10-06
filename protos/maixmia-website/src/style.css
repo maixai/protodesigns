@@ -1,0 +1,417 @@
+/* ==========================================================================
+   Tungsten 青瓷 —— 设计 token(取值唯一来源:.claude/rules/design-language.md)
+   三层结构:ramp → 语义角色 → 组件。组件只引用语义角色层与结构 token,
+   禁止在组件里引用本文件定义的 ramp 阶。
+
+   深浅分段机制(本页特有):本页同一文档内深浅区块共存,节奏固定、
+   不响应 prefers-color-scheme。因此深色不是全局主题,而是区块级作用域:
+     - :root 定义浅色 ramp 与全部结构 token;
+     - .dl-scope 定义语义角色层(引用 ramp 名,深浅通用)+ 浅色差异项;
+     - .dl-scope--dark 在区块容器上整体重定义 ramp(反转中性 ramp + 强调色提亮),
+       语义角色层因此自动解析到深色取值 —— 与 design-language.md 第 ④ 节
+       "深色策略:整体反转中性 ramp,语义角色层一行都不用改"一致;
+     - .dl-scope--light 显式复位浅色 ramp,用于深色子树内嵌套浅色区块。
+   ========================================================================== */
+
+:root {
+  /* ---- ramp 层:中性色(暖调,色相 35°,饱和约 8%)—— 浅色 ---- */
+  --dl-neutral-0: #ffffff;
+  --dl-neutral-50: #faf8f5;
+  --dl-neutral-100: #f4f1ec;
+  --dl-neutral-200: #e8e4dc;
+  --dl-neutral-300: #d8d2c8;
+  --dl-neutral-400: #b3aaa0;
+  --dl-neutral-500: #756c63;
+  --dl-neutral-600: #5c554d;
+  --dl-neutral-700: #46403a;
+  --dl-neutral-800: #302b25;
+  --dl-neutral-900: #221d18;
+  --dl-neutral-950: #14110d;
+
+  /* ---- ramp 层:强调色(青瓷)—— 浅色 ---- */
+  --dl-accent-50: #eff6f4;
+  --dl-accent-500: #3f8a7c;
+  --dl-accent-600: #2e6f63;
+  --dl-accent-700: #245a50;
+
+  /* ---- 结构 token(深浅无关) ---- */
+  /* 字体族:不引入任何 webfont,只取 design-language.md 字体栈的系统回退部分,
+     保持原型自包含(见 design-language.md 第 ⑤ 节)。 */
+  --dl-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --dl-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Cascadia Mono', monospace;
+
+  /* 字号阶:比例 1.25,基准 15px */
+  --dl-font-size-xs: 12px;
+  --dl-font-size-sm: 13px;
+  --dl-font-size-md: 15px;
+  --dl-font-size-lg: 19px;
+  --dl-font-size-xl: 23px;
+  --dl-font-size-2xl: 29px;
+  --dl-font-size-3xl: 37px;
+
+  /* 行高分档:中文正文 1.7 */
+  --dl-line-tight: 1.25;
+  --dl-line-snug: 1.45;
+  --dl-line-body: 1.7;
+  --dl-line-loose: 1.85;
+
+  /* 字距 / 段距 / 行宽:中文字距保持 0,行宽按 em 计(不能用 ch) */
+  --dl-tracking-normal: 0;
+  --dl-tracking-label: 0.01em;
+  --dl-tracking-caps: 0.06em;
+  --dl-para-gap: 1.5em;
+  --dl-measure: 35em;
+
+  /* 间距(4px 基准) */
+  --dl-space-1: 4px;
+  --dl-space-2: 8px;
+  --dl-space-3: 12px;
+  --dl-space-4: 16px;
+  --dl-space-6: 24px;
+  --dl-space-8: 32px;
+  --dl-space-12: 48px;
+
+  /* 圆角 / 边框 / 控件 / 触达 */
+  --dl-radius-sm: 6px;
+  --dl-radius-md: 8px;
+  --dl-radius-lg: 12px;
+  --dl-radius-pill: 9999px;
+  --dl-border-width: 1px;
+  --dl-control-height: 36px;
+  --dl-target-size: 44px;
+
+  /* 层序阶梯 */
+  --dl-z-base: 0;
+  --dl-z-sticky: 100;
+  --dl-z-overlay: 200;
+  --dl-z-modal: 300;
+  --dl-z-toast: 400;
+
+  /* 动效 */
+  --dl-duration-fast: 140ms;
+  --dl-duration-base: 200ms;
+  --dl-duration-slow: 280ms;
+  --dl-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 交互位移:按压下沉 / 悬停抬起 */
+  --dl-lift-press: 1px;
+  --dl-lift-hover: -2px;
+
+  /* 图标:描边统一 1.5px,不随尺寸缩放 */
+  --dl-icon-sm: 16px;
+  --dl-icon-md: 20px;
+  --dl-icon-lg: 24px;
+  --dl-icon-stroke: 1.5px;
+
+  /* 布局常量:内容容器、吸顶栏高度 */
+  --dl-container-max: 1520px;
+  --dl-header-height: 60px;
+}
+
+/* ==========================================================================
+   语义角色层(默认浅色映射;引用 ramp 名,深色作用域内自动解析到深色 ramp)
+   ========================================================================== */
+.dl-scope {
+  --dl-bg-base: var(--dl-neutral-50);
+  --dl-bg-elevated: var(--dl-neutral-0);
+  --dl-bg-sunken: var(--dl-neutral-100);
+  --dl-bg-hover: var(--dl-neutral-100);
+  --dl-text-primary: var(--dl-neutral-900);
+  --dl-text-secondary: var(--dl-neutral-700);
+  --dl-text-tertiary: var(--dl-neutral-500);
+  --dl-text-disabled: var(--dl-neutral-400);
+  --dl-border-subtle: var(--dl-neutral-100);
+  --dl-border-base: var(--dl-neutral-200);
+  --dl-border-strong: var(--dl-neutral-300);
+
+  --dl-accent: var(--dl-accent-600);
+  --dl-accent-soft: var(--dl-accent-50);
+
+  /* ---- 浅色差异项(深色作用域会覆盖) ---- */
+  /* hover / active 由 --dl-accent 经 color-mix 派生,不新增 ramp 阶:
+     浅色里悬停应变暗,故向黑混合。 */
+  --dl-accent-hover: color-mix(in oklab, var(--dl-accent), #000000 12%);
+  --dl-accent-active: color-mix(in oklab, var(--dl-accent), #000000 22%);
+  --dl-text-on-accent: var(--dl-neutral-0);
+  --dl-highlight: #8a6420;
+  --dl-success: #3f6b4f;
+  --dl-warning: #8a6420;
+  --dl-error: #9c4038;
+  --dl-info: #3d5a70;
+  --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
+  --dl-shadow-md: 0 2px 8px rgba(52, 43, 33, 0.07);
+  --dl-shadow-lg: 0 8px 24px rgba(52, 43, 33, 0.1);
+  /* 氛围辉光仅深色区使用,浅色为空。 */
+  --dl-glow: none;
+
+  /* 焦点环:由 --dl-accent 派生,深浅通用 */
+  --dl-focus-ring: 0 0 0 3px color-mix(in oklab, var(--dl-accent) 45%, transparent);
+
+  color: var(--dl-text-primary);
+  background-color: var(--dl-bg-base);
+}
+
+/* ==========================================================================
+   深色作用域:整体反转中性 ramp + 提亮强调色(取自 design-language.md ④)
+   ========================================================================== */
+.dl-scope--dark {
+  --dl-neutral-0: #1c1916;
+  --dl-neutral-50: #14110e;
+  --dl-neutral-100: #26221d;
+  --dl-neutral-200: #38332c;
+  --dl-neutral-300: #4a443b;
+  --dl-neutral-400: #6b6358;
+  --dl-neutral-500: #8f867a;
+  --dl-neutral-600: #b5aca0;
+  --dl-neutral-700: #d6cfc4;
+  --dl-neutral-800: #e8e2d8;
+  --dl-neutral-900: #f5f1ea;
+  --dl-neutral-950: #fdfbf7;
+
+  --dl-accent-50: #16302b;
+  --dl-accent-500: #6fb3a4;
+  --dl-accent-600: #8cc7b9;
+  --dl-accent-700: #63a79a;
+
+  /* 深色差异项:悬停应变亮,向白混合;强调色上的文字用深色底 */
+  --dl-accent-hover: color-mix(in oklab, var(--dl-accent), #ffffff 14%);
+  --dl-accent-active: color-mix(in oklab, var(--dl-accent), #ffffff 24%);
+  --dl-text-on-accent: #14110e;
+  --dl-highlight: #e3b876;
+  --dl-success: #7fb894;
+  --dl-warning: #e3b876;
+  --dl-error: #d98a80;
+  --dl-info: #8fb0c9;
+  /* 深色下阴影不承担层级,取值进一步减弱 */
+  --dl-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --dl-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --dl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.24);
+  /* 全页唯一一处氛围辉光:极低饱和的青瓷,从 --dl-accent 派生,只用于 Hero 顶部。 */
+  --dl-glow: radial-gradient(
+    60% 55% at 50% 0%,
+    color-mix(in oklab, var(--dl-accent) 14%, transparent),
+    transparent 72%
+  );
+}
+
+/* 显式浅色作用域:用于深色子树内嵌套浅色区块(本页暂未用到,机制预留)。 */
+.dl-scope--light {
+  --dl-neutral-0: #ffffff;
+  --dl-neutral-50: #faf8f5;
+  --dl-neutral-100: #f4f1ec;
+  --dl-neutral-200: #e8e4dc;
+  --dl-neutral-300: #d8d2c8;
+  --dl-neutral-400: #b3aaa0;
+  --dl-neutral-500: #756c63;
+  --dl-neutral-600: #5c554d;
+  --dl-neutral-700: #46403a;
+  --dl-neutral-800: #302b25;
+  --dl-neutral-900: #221d18;
+  --dl-neutral-950: #14110d;
+  --dl-accent-50: #eff6f4;
+  --dl-accent-500: #3f8a7c;
+  --dl-accent-600: #2e6f63;
+  --dl-accent-700: #245a50;
+}
+
+/* ==========================================================================
+   基础排版(中文排版硬约束见 design-language.md 第 ⑤ 节)
+   ========================================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--dl-font-sans);
+  font-size: var(--dl-font-size-md);
+  line-height: var(--dl-line-body);
+  letter-spacing: var(--dl-tracking-normal);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  text-autospace: normal;
+  line-break: strict;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--dl-focus-ring);
+  border-radius: var(--dl-radius-sm);
+}
+
+/* 动效降级:状态切换仍发生,位移与缩放去掉;用极短时长而非 0 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   共享布局与组件类
+   ========================================================================== */
+
+/* 内容容器:宽屏放宽至 1520px 并居中,两侧留 24px  gutter;区块背景全幅 */
+.dl-container {
+  width: min(calc(100% - 2 * var(--dl-space-6)), var(--dl-container-max));
+  margin-inline: auto;
+}
+
+/* 区块纵向节奏:由间距 token 组合(80px),不新增间距阶 */
+.dl-section {
+  padding-block: calc(var(--dl-space-12) + var(--dl-space-8));
+  scroll-margin-top: calc(var(--dl-header-height) + var(--dl-space-4));
+}
+
+/* 区块头:眉标 + 标题 + 导语;文字块守正文行宽 */
+.dl-section-head {
+  display: grid;
+  gap: var(--dl-space-3);
+  max-width: var(--dl-measure);
+  margin-bottom: calc(var(--dl-space-8) + var(--dl-space-4));
+}
+
+.dl-eyebrow {
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+  letter-spacing: var(--dl-tracking-caps);
+  text-transform: uppercase;
+  color: var(--dl-accent);
+}
+
+.dl-h2 {
+  font-size: var(--dl-font-size-2xl);
+  line-height: var(--dl-line-tight);
+  font-weight: 600;
+  letter-spacing: var(--dl-tracking-normal);
+  color: var(--dl-text-primary);
+}
+
+.dl-lede {
+  font-size: var(--dl-font-size-lg);
+  line-height: var(--dl-line-snug);
+  color: var(--dl-text-secondary);
+  max-width: var(--dl-measure);
+}
+
+.dl-mono {
+  font-family: var(--dl-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 按钮:主 / 次两档,大号用于区块级 CTA */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dl-space-2);
+  min-height: var(--dl-control-height);
+  padding-inline: var(--dl-space-4);
+  border: var(--dl-border-width) solid transparent;
+  border-radius: var(--dl-radius-md);
+  font-size: var(--dl-font-size-sm);
+  font-weight: 500;
+  line-height: var(--dl-line-snug);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dl-duration-fast) var(--dl-ease-standard),
+    border-color var(--dl-duration-fast) var(--dl-ease-standard),
+    color var(--dl-duration-fast) var(--dl-ease-standard),
+    transform var(--dl-duration-fast) var(--dl-ease-standard);
+}
+
+.dl-btn:active {
+  transform: translateY(var(--dl-lift-press));
+}
+
+.dl-btn--primary {
+  background-color: var(--dl-accent);
+  color: var(--dl-text-on-accent);
+}
+
+.dl-btn--primary:hover {
+  background-color: var(--dl-accent-hover);
+}
+
+.dl-btn--primary:active {
+  background-color: var(--dl-accent-active);
+}
+
+.dl-btn--ghost {
+  background-color: transparent;
+  border-color: var(--dl-border-strong);
+  color: var(--dl-text-primary);
+}
+
+.dl-btn--ghost:hover {
+  background-color: var(--dl-bg-hover);
+}
+
+.dl-btn--lg {
+  min-height: var(--dl-target-size);
+  padding-inline: var(--dl-space-6);
+  font-size: var(--dl-font-size-md);
+}
+
+.dl-btn:disabled,
+.dl-btn[aria-disabled='true'] {
+  background-color: var(--dl-bg-sunken);
+  border-color: transparent;
+  color: var(--dl-text-disabled);
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 移动端导航抽屉(Naive UI)内容布局:类挂到组件内部节点,需全局定义 */
+.site-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dl-space-3);
+}

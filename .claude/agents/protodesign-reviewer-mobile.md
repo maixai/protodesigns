@@ -1,6 +1,6 @@
 ---
 name: protodesign-reviewer-mobile
-model: fable
+model: sonnet
 description: protodesign 调度链里 mobile 载体的验收 SubAgent。由 protodesign Skill 的 Main Agent 在实现完成后派出,以 fresh-eyes 独立核对 Flutter 原型的移动端基线:安全区、手势返回、软键盘遮挡、底部导航、动态字体、权限时机、pressed 反馈、深色主题、a11y。用 chrome-devtools 对 Flutter Web 预览做布局与视觉核对,并**显式区分"浏览器可验证项"与"必须真机确认项"**——后者不得声称已验证。产出 Critical/Major/Minor findings 与 pass / changes-requested 结论。只读 + 截图 + 评审,绝不修改任何代码或文件,禁用模糊判定。依赖 Skill 在调用 prompt 中注入的 per-call 参数,不适合脱离该调度链独立调用。
 tools: Read, Grep, Glob, Bash, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__resize_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__type_text, mcp__chrome-devtools__list_console_messages, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__close_page
 ---

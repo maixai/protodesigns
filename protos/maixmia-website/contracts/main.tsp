@@ -97,3 +97,48 @@ model OnboardingStep {
   order: int32;
   icon: string;
 }
+
+// ---- 安装引导 ----
+
+// 安装目标(安装引导的三个选项):桌面 App / Headless / 移动 App。
+enum InstallTargetId {
+  desktopApp,
+  headless,
+  mobileApp,
+}
+
+@summary("InstallTarget")
+@jsonSchema
+model InstallTarget {
+  id: InstallTargetId;
+}
+
+// 桌面平台:Windows / macOS / Linux。
+enum DesktopPlatformId {
+  windows,
+  macos,
+  linux,
+}
+
+// 桌面构建:某个平台下的一个可选架构 / 包形态。
+// arch 是技术标识(apple-silicon / intel / amd64 / arm64 / deb / rpm / appimage),
+// minOs 是最低系统版本(技术写法);两者都不随语言变化,展示名由数据层补充。
+@summary("DesktopBuild")
+@jsonSchema
+model DesktopBuild {
+  platform: DesktopPlatformId;
+  arch: string;
+  minOs: string;
+}
+
+// 移动平台:iOS / Android(均未上架,只提供等待列表入口)。
+enum MobilePlatformId {
+  ios,
+  android,
+}
+
+@summary("MobilePlatform")
+@jsonSchema
+model MobilePlatform {
+  id: MobilePlatformId;
+}

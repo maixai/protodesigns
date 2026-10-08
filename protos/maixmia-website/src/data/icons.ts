@@ -90,6 +90,19 @@ export const ICONS = {
     paths: ['M4 4h7v7H4z', 'M13 4h7v7h-7z', 'M4 13h7v7H4z', 'M13 13h7v7h-7z'],
     circles: [],
   },
+  // 复制:两张叠放的纸(组件内直接按名引用,不走契约)
+  copy: {
+    paths: [
+      'M11 9h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z',
+      'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
+    ],
+    circles: [],
+  },
+  // 完成:对勾(复制成功态,纯字形变化,不上色)
+  check: {
+    paths: ['M4.5 12.5l5 5L19.5 7'],
+    circles: [],
+  },
 } as const satisfies Record<string, IconShape>
 
 export type IconName = keyof typeof ICONS

@@ -1,4 +1,4 @@
-// 两种形态区块词条(zh-CN):桌面 App(本地工作)与 headless(后台远程)的分工。
+// 两种形态区块词条(zh-CN):桌面 App(本地工作)与 Headless(后台远程)的分工。
 export const formFactors = {
   eyebrow: '两种形态',
   title: '装好一次,随处可用',
@@ -9,7 +9,7 @@ export const formFactors = {
       points: ['本地文件与工具触手可及', '注册到平台后,远程也能用'],
     },
     headless: {
-      title: 'headless',
+      title: 'Headless',
       desc: '部署在服务器后台,没有界面,专为远程工作而生。',
       points: ['常驻后台,随时响应', '适合分享给他人一起使用'],
     },

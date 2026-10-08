@@ -1,10 +1,10 @@
 // zh-CN 词条汇总:Messages 类型的唯一来源;en 必须满足同一类型,缺词条即编译报错。
 import { anywhere } from './anywhere'
 import { config } from './config'
-import { cta } from './cta'
 import { footer } from './footer'
 import { formFactors } from './form-factors'
 import { hero } from './hero'
+import { install } from './install'
 import { nav } from './nav'
 import { quickstart } from './quickstart'
 import { reach } from './reach'
@@ -22,7 +22,7 @@ export const zhCN = {
   share,
   config,
   quickstart,
-  cta,
+  install,
   footer,
 }
 

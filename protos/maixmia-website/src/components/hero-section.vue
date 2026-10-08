@@ -1,28 +1,19 @@
 <script setup lang="ts">
-// Hero:深色区块,全页唯一的 h1。
-// 刻意不放任何主视觉 —— 纯文字构成,靠字阶与留白承担份量。
+// Hero:全页唯一的 h1。刻意不放任何主视觉 —— 纯文字构成,靠字阶与留白承担份量。
 // 背景使用全页唯一一处氛围辉光(--dl-glow,仅在深色作用域有值)。
+// 区块外壳(深浅作用域 / 居中容器 / 两栏布局)由 app.vue 的分栏骨架统一提供,
+// 本组件只渲染内容;深色作用域在骨架的左栏上,--dl-glow 经继承生效。
 import { useI18n } from '../i18n'
 
 const { t } = useI18n()
 </script>
 
 <template>
-  <section class="hero dl-scope dl-scope--dark">
-    <div class="dl-container">
-      <div class="hero__pitch">
-        <p class="hero__eyebrow dl-mono">{{ t.hero.eyebrow }}</p>
-        <h1 class="hero__title">{{ t.hero.title }}</h1>
-        <p class="hero__subtitle">{{ t.hero.subtitle }}</p>
-        <div class="hero__ctas">
-          <a class="dl-btn dl-btn--primary dl-btn--lg" href="#quickstart">
-            {{ t.hero.primaryCta }}
-          </a>
-          <a class="dl-btn dl-btn--ghost dl-btn--lg" href="#form-factors">
-            {{ t.hero.secondaryCta }}
-          </a>
-        </div>
-      </div>
+  <section class="hero">
+    <div class="hero__pitch">
+      <p class="hero__eyebrow dl-mono">{{ t.hero.eyebrow }}</p>
+      <h1 class="hero__title">{{ t.hero.title }}</h1>
+      <p class="hero__subtitle">{{ t.hero.subtitle }}</p>
     </div>
   </section>
 </template>
@@ -31,7 +22,8 @@ const { t } = useI18n()
 .hero {
   background-image: var(--dl-glow);
   background-repeat: no-repeat;
-  /* 无主视觉时,份量全落在字阶与上下留白上:留白给足,首屏才不显得单薄。 */
+  /* 无主视觉时,份量全落在字阶与上下留白上:留白给足,首屏才不显得单薄。
+     (两栏模式下 padding 由骨架接管,见 app.vue。) */
   padding-block: calc(var(--dl-space-12) * 2);
 }
 
@@ -66,18 +58,12 @@ const { t } = useI18n()
   color: var(--dl-text-secondary);
 }
 
-.hero__ctas {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--dl-space-3);
-  margin-top: var(--dl-space-2);
-}
-
-/* 窄屏:双 CTA 纵向堆叠,不破版 */
-@media (max-width: 560px) {
-  .hero__ctas {
-    flex-direction: column;
-    align-items: stretch;
+/* 两栏模式的中等宽度(1024–1279):左栏内容宽约 360–460px,
+   标题降一阶(2xl)—— 37px 时中文标题(约 11.5em)会挤出一个难看的两行折,
+   29px 在该宽度区间内一行放得下。≥1280 恢复 3xl,窄屏堆叠模式不受影响。 */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .hero__title {
+    font-size: var(--dl-font-size-2xl);
   }
 }
 </style>

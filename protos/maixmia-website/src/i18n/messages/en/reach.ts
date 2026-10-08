@@ -3,7 +3,7 @@ export const reach = {
   sectionLabel: 'Where you can reach Mia',
   items: {
     desktopApp: 'Desktop app',
-    headless: 'headless',
+    headless: 'Headless',
     browser: 'Browser',
     mobileApp: 'Mobile app',
   },

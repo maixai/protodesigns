@@ -1,4 +1,4 @@
-// 两种形态区块词条(en):桌面 App(本地工作)与 headless(后台远程)的分工。
+// 两种形态区块词条(en):桌面 App(本地工作)与 Headless(后台远程)的分工。
 export const formFactors = {
   eyebrow: 'Two forms',
   title: 'Install once, use everywhere',
@@ -9,7 +9,7 @@ export const formFactors = {
       points: ['Local files and tools within reach', 'Remote-ready once registered'],
     },
     headless: {
-      title: 'headless',
+      title: 'Headless',
       desc: 'Deployed on a server, no interface — built for remote work.',
       points: ['Always on, always responsive', 'Made to be shared with others'],
     },

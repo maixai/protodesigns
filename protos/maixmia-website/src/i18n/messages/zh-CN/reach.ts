@@ -3,7 +3,7 @@ export const reach = {
   sectionLabel: 'Mia 的可达方式',
   items: {
     desktopApp: '桌面 App',
-    headless: 'headless',
+    headless: 'Headless',
     browser: '浏览器',
     mobileApp: '移动 App',
   },

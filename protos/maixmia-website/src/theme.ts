@@ -2,8 +2,9 @@
 // (映射表见 .claude/rules/design-language.md 第 ⑨ 节)。
 // Naive 的 themeOverrides 需要静态颜色值,无法引用 CSS 变量,故此处重复取值
 // 并在注释里标明来源 token;改 token 时两处必须同步。
-// 本页深浅分段共存:浅色映射挂根 provider,深色区块(顶栏 / Hero / 页脚)
-// 用嵌套 n-config-provider 挂 darkOverrides(与父级深合并)。
+// 本页整体深色(固定节奏,不响应系统偏好):根部 provider 与顶栏都挂 darkOverrides,
+// 登录轻提示等浮层由根部 provider 渲染,故一并走深色。
+// lightOverrides 保留为浅色作用域(.dl-scope--light)的配对映射,当前页面无组件使用。
 import type { GlobalThemeOverrides } from 'naive-ui'
 
 // 与 --dl-font-sans / --dl-font-mono 同源(系统回退栈,不引入 webfont)。
@@ -53,6 +54,29 @@ export const lightOverrides: GlobalThemeOverrides = {
     heightMedium: '36px',
     heightLarge: '44px',
   },
+  // 登录轻提示:message 容器由根部 n-message-provider 渲染(浅色上下文)。
+  // Naive 默认 fontSize 14px / padding 10px 20px 均不在设计 token 阶内,显式对齐;
+  // 阴影默认是冷黑 boxShadow2(rgba(0,0,0,.12/.08/.05)),对齐到暖调 --dl-shadow-md。
+  Message: {
+    // --dl-font-size-sm
+    fontSize: '13px',
+    // --dl-space-3 / --dl-space-4
+    padding: '12px 16px',
+    // --dl-radius-md
+    borderRadius: '8px',
+    // --dl-radius-sm
+    closeBorderRadius: '6px',
+    // --dl-shadow-md(浅色)
+    boxShadow: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    boxShadowInfo: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    boxShadowSuccess: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    boxShadowError: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    boxShadowWarning: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    boxShadowLoading: '0 2px 8px rgba(52, 43, 33, 0.07)',
+    // 已知偏离留档:message 容器的 z-index 是 Naive 内建字面量 6000
+    // (写死在 message 的 CSSr 样式里,不是主题变量),无法经 themeOverrides
+    // 映射到 --dl-z-toast(400);按规范不用 !important 硬压,登记为已知偏离。
+  },
 }
 
 // 深色映射:对应 .dl-scope--dark 的语义角色层(反转中性 ramp + 提亮强调色)。
@@ -88,5 +112,25 @@ export const darkOverrides: GlobalThemeOverrides = {
   Button: {
     heightMedium: '36px',
     heightLarge: '44px',
+  },
+  // 登录轻提示等浮层:整页深色,故浮层也走深色映射(根部 provider 已改挂本映射)。
+  // 背景与文字取自 Naive 的 popoverColor / textColor2(深色下即 #26221d / #d6cfc4),
+  // 无需另设;此处只把尺寸与阴影对齐到设计 token。
+  Message: {
+    // --dl-font-size-sm
+    fontSize: '13px',
+    // --dl-space-3 / --dl-space-4
+    padding: '12px 16px',
+    // --dl-radius-md
+    borderRadius: '8px',
+    // --dl-radius-sm
+    closeBorderRadius: '6px',
+    // --dl-shadow-md(深色取值见 style.css)
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
+    boxShadowInfo: '0 2px 8px rgba(0, 0, 0, 0.2)',
+    boxShadowSuccess: '0 2px 8px rgba(0, 0, 0, 0.2)',
+    boxShadowError: '0 2px 8px rgba(0, 0, 0, 0.2)',
+    boxShadowWarning: '0 2px 8px rgba(0, 0, 0, 0.2)',
+    boxShadowLoading: '0 2px 8px rgba(0, 0, 0, 0.2)',
   },
 }

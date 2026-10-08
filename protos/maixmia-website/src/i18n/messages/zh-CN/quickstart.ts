@@ -5,7 +5,7 @@ export const quickstart = {
   items: {
     download: {
       title: '装好 Mia',
-      desc: '桌面 App 或 headless 二选一,装在你的电脑或服务器上。',
+      desc: '桌面 App 或 Headless 二选一,装在你的电脑或服务器上。',
     },
     badge: {
       title: '注册到 Mia 平台',

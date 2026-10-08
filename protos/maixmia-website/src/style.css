@@ -175,6 +175,23 @@
   --dl-accent-600: #8cc7b9;
   --dl-accent-700: #63a79a;
 
+  /* 深色语义修复:.dl-scope 通用映射里 sunken / hover / border-subtle 同取
+     neutral-100;浅色下三者恰好同值且语义方向正确,但深色 ramp 反转后
+     neutral-100(#26221d)比 base(#14110e)更亮 —— "下沉"变成了"抬起",
+     且三个角色塌缩成同一个值、彼此不可区分。此处按语义显式重映射:
+       - sunken:向黑混合,恢复"比 base 更暗"的下沉语义(对 base 约 1.04:1,
+         与浅色 sunken 的弱层级一致);
+       - hover:深色下悬停反馈应变亮,维持 neutral-100;
+       - border-subtle:提到 neutral-100 与 neutral-200 之间,从 1.19:1
+         提到约 1.32:1,恢复发丝描边的可辨识性(仍低于 border-base 的 1.50:1)。 */
+  --dl-bg-sunken: color-mix(in oklab, var(--dl-neutral-50), #000000 30%);
+  --dl-bg-hover: var(--dl-neutral-100);
+  --dl-border-subtle: color-mix(
+    in oklab,
+    var(--dl-neutral-100),
+    var(--dl-neutral-200) 50%
+  );
+
   /* 深色差异项:悬停应变亮,向白混合;强调色上的文字用深色底 */
   --dl-accent-hover: color-mix(in oklab, var(--dl-accent), #ffffff 14%);
   --dl-accent-active: color-mix(in oklab, var(--dl-accent), #ffffff 24%);
@@ -322,7 +339,9 @@ a {
   font-size: var(--dl-font-size-xs);
   letter-spacing: var(--dl-tracking-caps);
   text-transform: uppercase;
-  color: var(--dl-accent);
+  /* 青瓷配额收紧:眉标降为三级文字色(仅五个特性面板使用本类;
+     Hero 眉标是独立的 .hero__eyebrow,不受影响) */
+  color: var(--dl-text-tertiary);
 }
 
 .dl-h2 {
@@ -407,11 +426,4 @@ a {
   color: var(--dl-text-disabled);
   cursor: not-allowed;
   transform: none;
-}
-
-/* 移动端导航抽屉(Naive UI)内容布局:类挂到组件内部节点,需全局定义 */
-.site-drawer__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--dl-space-3);
 }

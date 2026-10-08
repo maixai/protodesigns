@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 根组件:浅色 Naive 主题挂根部;.dl-scope 语义角色层挂在根容器上一次,全页生效。
-// n-message-provider 挂根部:顶栏「登录」与 Hero「查看文档」的轻提示经 useMessage
-// 调用;消息容器 Teleport 到 body,不参与文档流、不影响 sticky。
+// n-message-provider 提供首页轻提示与登出致意,不参与文档流。
+// 原生页内锚点仍渲染首页,仅控制台路由替换主体,不渲染营销页脚。
 import { NConfigProvider, NMessageProvider } from 'naive-ui'
 import { lightOverrides } from './theme'
+import { currentRoute } from './router'
+import ConsolePage from './pages/console-page.vue'
 import { useI18n } from './i18n'
 import SiteHeader from './components/site-header.vue'
 import SiteFooter from './components/site-footer.vue'
@@ -23,7 +25,8 @@ useI18n()
     <n-message-provider>
       <div class="dl-scope">
         <SiteHeader />
-        <main id="main">
+        <ConsolePage v-if="currentRoute.page === 'console'" />
+        <main v-else id="main">
           <HeroSection />
           <CompareBand />
           <CapabilitiesGrid />
@@ -31,7 +34,7 @@ useI18n()
           <PlatformsBand />
           <QuickstartSection />
         </main>
-        <SiteFooter />
+        <SiteFooter v-if="currentRoute.page === 'home'" />
       </div>
     </n-message-provider>
   </n-config-provider>

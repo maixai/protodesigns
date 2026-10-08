@@ -1,24 +1,31 @@
 <script setup lang="ts">
-// 顶栏:浅色 sticky。品牌字标(几何节点记号 + Minos 字标)+ 语言切换器
-// (紧凑 disclosure 下拉,见 language-switcher.vue)+ 「登录」按钮,无导航项。
-// 登录暂不接流程,点击弹轻提示(避免假交互),
-// 消息容器由根部 n-message-provider Teleport 到 body,不参与文档流,不影响 sticky。
-import { useMessage } from 'naive-ui'
+// 首页与控制台共用顶栏;未登录入口与账户菜单互斥,登录直接进入控制台。
+import { nextTick, ref } from 'vue'
+import { isAuthenticated, signIn } from '../auth/session'
+import { currentRoute, navigateTo } from '../router'
+import AccountMenu from './account-menu.vue'
 import { useI18n } from '../i18n'
 import LanguageSwitcher from './language-switcher.vue'
 
 const { t } = useI18n()
-const message = useMessage()
+const loginRef = ref<HTMLButtonElement | null>(null)
 
 function onLogin(): void {
-  message.info(t.value.nav.loginHint)
+  signIn()
+  navigateTo('console')
+}
+
+// 确认登出后账户触发钮被移除,焦点移交给替代它的登录入口。
+async function onSignedOut(): Promise<void> {
+  await nextTick()
+  loginRef.value?.focus()
 }
 </script>
 
 <template>
   <header id="top" class="site-header">
     <div class="dl-container site-header__inner">
-      <a class="site-header__brand" href="#top" aria-label="Minos">
+      <a class="site-header__brand" :href="currentRoute.page === 'home' ? '#top' : '#/'" aria-label="Minos">
         <!-- 几何节点记号:三节点两两相连的三角形,内联 SVG,不引入图标库 -->
         <svg
           class="site-header__mark"
@@ -40,7 +47,8 @@ function onLogin(): void {
 
       <div class="site-header__actions">
         <LanguageSwitcher />
-        <button class="dl-btn dl-btn--primary" type="button" @click="onLogin">
+        <AccountMenu v-if="isAuthenticated" @signed-out="onSignedOut" />
+        <button v-else ref="loginRef" class="dl-btn dl-btn--primary" type="button" @click="onLogin">
           {{ t.nav.login }}
         </button>
       </div>

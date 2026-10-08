@@ -10,6 +10,28 @@ import type { Page } from '@playwright/test'
 const WIDTHS = [375, 768, 1280, 1600] as const
 const VIEWPORT_HEIGHT = 900
 
+async function waitForConsole(page: Page): Promise<void> {
+  await expect(page.getByRole('heading', { level: 1, name: 'Overview', exact: true })).toBeVisible()
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'ready')
+}
+
+async function signInToConsole(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.locator('.site-header').getByRole('button', { name: 'Sign in', exact: true }).click()
+  await waitForConsole(page)
+}
+
+// 量元素本体,伪元素扩命中区不算达标;只检查可见且非 inert 的交互项。
+async function smallTargets(page: Page): Promise<string[]> {
+  return page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('a, button'))
+    .filter((element) => element.closest('[inert]') === null && element.getClientRects().length > 0)
+    .filter((element) => {
+      const rect = element.getBoundingClientRect()
+      return rect.width < 44 || rect.height < 44
+    })
+    .map((element) => `${element.textContent?.trim()}: ${element.getBoundingClientRect().width}×${element.getBoundingClientRect().height}`))
+}
+
 // 横向溢出量:> 0 表示内容超出视口宽度,属于破版。
 async function horizontalOverflow(page: Page): Promise<number> {
   return page.evaluate(
@@ -249,7 +271,7 @@ test('跨层 Mesh 层选择器:三条键盘路径可切换,非活动面板 inert
   expect(await section.evaluate((el) => el.offsetHeight)).toBe(heightL2)
 })
 
-test('顶栏滚动时固定在视口顶端,登录点击弹轻提示', async ({ page }) => {
+test('顶栏滚动时固定在视口顶端,登录后自动进入控制台', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await page.goto('/')
@@ -268,11 +290,14 @@ test('顶栏滚动时固定在视口顶端,登录点击弹轻提示', async ({ p
   const top = await header.evaluate((el) => el.getBoundingClientRect().top)
   expect(Math.abs(top)).toBeLessThanOrEqual(1)
 
-  // 登录暂不接流程,但点击必须弹轻提示,不能是无反应的假交互。
   const login = header.getByRole('button', { name: 'Sign in' })
   await expect(login).toBeVisible()
   await login.click()
-  await expect(page.locator('.n-message')).toContainText('sign-in')
+  await waitForConsole(page)
+  await expect(page).toHaveURL(/#\/console$/)
+  await expect(header.getByRole('button', { name: /Account menu/ })).toBeVisible()
+  await expect(login).toHaveCount(0)
+  await expect(page.locator('.site-footer')).toHaveCount(0)
 })
 
 test('顶栏语言切换后页面文案与 <html lang> 随之变化', async ({ page }) => {
@@ -316,4 +341,224 @@ test('页脚锚点链接指向页内真实区块', async ({ page }) => {
   await page.locator('.site-footer').getByRole('link', { name: 'Quickstart' }).click()
   await expect(page).toHaveURL(/#quickstart$/)
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+})
+
+for (const width of WIDTHS) {
+  test(`控制台宽度 ${width}px:截图、触达、对比度、浅色不随系统变化`, async ({ page }) => {
+    const runtimeErrors: string[] = []
+    page.on('pageerror', (error) => runtimeErrors.push(error.message))
+    page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()) })
+    page.on('response', (response) => { if (response.status() >= 400) runtimeErrors.push(`${response.status()} ${response.url()}`) })
+    page.on('requestfailed', (request) => runtimeErrors.push(`Request failed: ${request.url()}`))
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' })
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await signInToConsole(page)
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+    expect(await smallTargets(page)).toEqual([])
+    expect(await contrastViolations(page)).toEqual([])
+    await expect(page).toHaveScreenshot(`console-${width}.png`, { fullPage: true })
+    await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+    await expect(page).toHaveScreenshot(`console-${width}.png`, { fullPage: true })
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+    if (width < 768) {
+      const nav = page.getByRole('navigation', { name: 'Console navigation' })
+      expect(await nav.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+      await nav.getByRole('link', { name: 'Settings', exact: true }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+    }
+    expect(runtimeErrors).toEqual([])
+  })
+}
+
+test('账户菜单:真实 Tab、Enter、Space、Esc 与登出对话框焦点约束', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await signInToConsole(page)
+  // 在已登录首页,品牌仍是 #top 原生锚点,登录按钮互斥消失。
+  await page.locator('.site-header__brand').click()
+  await waitForStable(page)
+  await expect(page.locator('.site-header__brand')).toHaveAttribute('href', '#top')
+  const trigger = page.getByRole('button', { name: /Account menu/ })
+  await page.locator('.site-header__brand').focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: /Switch language/ })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(trigger).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'true')
+  const group = page.locator('#account-popover')
+  const consoleItem = group.getByRole('button', { name: 'Console', exact: true })
+  const logoutItem = group.getByRole('button', { name: 'Sign out', exact: true })
+  await expect(consoleItem).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(logoutItem).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(consoleItem).toBeFocused()
+  await page.keyboard.press('Enter')
+  await waitForConsole(page)
+  await expect(page).toHaveURL(/#\/console$/)
+  await expect(trigger).toBeFocused()
+  await expect(group).toHaveCount(0)
+
+  await page.keyboard.press('Space')
+  await expect(consoleItem).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await expect(logoutItem).toBeFocused()
+  await page.keyboard.press('Enter')
+  const dialog = page.getByRole('dialog', { name: 'Sign out?', exact: true })
+  const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true })
+  const confirm = dialog.getByRole('button', { name: 'Confirm sign out', exact: true })
+  await expect(dialog).toBeVisible()
+  await expect(cancel).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(confirm).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(cancel).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(confirm).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(trigger).toBeFocused()
+  await expect(page).toHaveURL(/#\/console$/)
+
+  // 取消按钮与 Esc 一样恢复触发钮;确认后才清会话,且焦点移交登录按钮。
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Enter')
+  await expect(cancel).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(dialog).toBeHidden()
+  await expect(trigger).toBeFocused()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await expect(confirm).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(page.locator('.site-header').getByRole('button', { name: 'Sign in', exact: true })).toBeFocused()
+  await expect(trigger).toHaveCount(0)
+  await expect(page.locator('.n-message')).toContainText('You are signed out')
+})
+
+test('账户菜单:外部点击与 focusout 关闭,取消与确认登出', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await signInToConsole(page)
+  const trigger = page.getByRole('button', { name: /Account menu/ })
+  await trigger.click()
+  await page.getByRole('heading', { level: 1 }).click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  await trigger.focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  await trigger.click()
+  await page.locator('#account-popover').getByRole('button', { name: 'Sign out', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Sign out?', exact: true })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(trigger).toBeFocused()
+  await expect(page).toHaveURL(/#\/console$/)
+  await trigger.click()
+  await page.locator('#account-popover').getByRole('button', { name: 'Sign out', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Confirm sign out' }).click()
+  await waitForStable(page)
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+})
+
+test('未登录路由守卫、未知路径回落、刷新清会话、原生锚点仍可用', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/#/console/networks?s=empty')
+  await waitForStable(page)
+  await expect(page).toHaveURL(/#\/$/)
+  await page.goto('/#/not-a-page')
+  await waitForStable(page)
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await waitForConsole(page)
+  await page.evaluate(() => { window.location.hash = '#/console/unknown' })
+  await waitForConsole(page)
+  await page.locator('.site-header__brand').click()
+  await waitForStable(page)
+  await page.locator('.site-footer').getByRole('link', { name: 'Quickstart' }).click()
+  await expect(page).toHaveURL(/#quickstart$/)
+  await expect(page.getByRole('button', { name: /Account menu/ })).toBeVisible()
+  await page.getByRole('button', { name: /Account menu/ }).click()
+  await page.locator('#account-popover').getByRole('button', { name: 'Console', exact: true }).click()
+  await waitForConsole(page)
+  await page.reload()
+  await waitForStable(page)
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+})
+
+test('侧边栏六项各有路由、标题与 aria-current,中英词条贯穿控制台', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await signInToConsole(page)
+  const sections = [
+    { id: 'networks', label: 'Networks' }, { id: 'machines', label: 'Machines' },
+    { id: 'access', label: 'Access control' }, { id: 'dns', label: 'DNS' },
+    { id: 'settings', label: 'Settings' }, { id: 'overview', label: 'Overview' },
+  ]
+  const nav = page.getByRole('navigation', { name: 'Console navigation' })
+  for (const section of sections) {
+    const link = nav.getByRole('link', { name: section.label, exact: true })
+    await link.click()
+    await expect(page).toHaveURL(new RegExp(`#/console${section.id === 'overview' ? '' : `/${section.id}`}$`))
+    await expect(link).toHaveAttribute('aria-current', 'page')
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1)
+    await expect(page.getByRole('heading', { level: 1, name: section.label, exact: true })).toBeVisible()
+    if (section.id !== 'overview') await expect(page.locator('.console-placeholder')).toContainText('Detailed design will follow')
+  }
+  await page.getByRole('button', { name: /Switch language/ }).click()
+  await page.getByRole('button', { name: '中文', exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1, name: '概览', exact: true })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '控制台导航' }).getByRole('link', { name: '访问控制' })).toBeVisible()
+  await page.getByRole('button', { name: /账户菜单/ }).click()
+  await page.locator('#account-popover').getByRole('button', { name: '登出', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '确认登出？', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '确认登出', exact: true })).toBeVisible()
+})
+
+test('概览四态可通过 URL 演示,错误重试真正重发请求', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await signInToConsole(page)
+  await page.evaluate(() => { window.location.hash = '#/console?s=empty' })
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'loading')
+  await expect(page.getByRole('status')).toContainText('Loading networks')
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'empty')
+  await expect(page.getByRole('heading', { name: 'No networks or devices yet' })).toBeVisible()
+  await page.evaluate(() => { window.location.hash = '#/console?s=error' })
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'error')
+  await expect(page.getByRole('alert')).toContainText('Workspace data could not be loaded')
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'loading')
+  await expect(page.locator('.console-overview')).toHaveAttribute('data-state', 'error')
+  await page.evaluate(() => { window.location.hash = '#/console' })
+  await waitForConsole(page)
+  await expect(page.locator('.network-card')).toHaveCount(3)
+  await expect(page.locator('.machine-card')).toHaveCount(5)
+})
+
+test('控制台与模态在 200% 文本缩放下不破版,交互本体达 44×44', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
+  await signInToConsole(page)
+  // 只在测试中覆盖字号 token,模拟用户放大文本,不修改原型持久状态。
+  await page.addStyleTag({ content: ':root { --dl-font-size-xs: 24px; --dl-font-size-sm: 26px; --dl-font-size-md: 30px; --dl-font-size-lg: 38px; --dl-font-size-xl: 46px; --dl-font-size-2xl: 58px; }' })
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+  await page.getByRole('button', { name: /Account menu/ }).click()
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+  await page.locator('#account-popover').getByRole('button', { name: 'Sign out', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  const width = await dialog.evaluate((el) => el.scrollWidth - el.clientWidth)
+  expect(width).toBeLessThanOrEqual(0)
+  expect(await smallTargets(page)).toEqual([])
 })

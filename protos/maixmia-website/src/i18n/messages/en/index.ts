@@ -1,5 +1,7 @@
 // en 词条汇总:必须满足 Messages 类型(以 zh-CN 为来源),缺词条即编译报错。
 import type { Messages } from '../zh-CN'
+import { account } from './account'
+import { workspace } from './workspace'
 import { anywhere } from './anywhere'
 import { config } from './config'
 import { footer } from './footer'
@@ -15,6 +17,8 @@ export const en = {
   meta: {
     title: 'Mia — your AI agent, wherever you are',
   },
+  account,
+  workspace,
   nav,
   hero,
   reach,

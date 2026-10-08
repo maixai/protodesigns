@@ -642,9 +642,23 @@ test('顶栏滚动时固定在视口顶端', async ({ page }) => {
   const login = header.getByRole('button', { name: 'Sign in' })
   await expect(login).toBeVisible()
 
-  // 登录暂不接流程,但点击必须弹轻提示,不能是无反应的假交互。
+  // 忽略登录过程,同步成为已登录态并进入工作台。
   await login.click()
-  await expect(page.locator('.n-message')).toContainText('sign-in')
+  await expect(page).toHaveURL(/#\/workspace$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Workspace', exact: true })).toBeVisible()
+  await expect(header.getByRole('button', { name: 'Account menu: 林一舟' })).toBeVisible()
+  await expect(login).toHaveCount(0)
+})
+
+test('未登录首页的面板切换继续保持原生片段深链', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+  await waitForStable(page)
+  await page.getByRole('tab', { name: 'Quickstart', exact: true }).click()
+  await expect(page).toHaveURL(/#quickstart$/)
+  await expect(page.getByRole('tabpanel', { name: 'Quickstart', exact: true })).toBeVisible()
+  await expect(page.locator('.site-header').getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Your AI agent, always within reach' })).toBeVisible()
 })
 
 test('切换语言后页面文案与 <html lang> 随之变化', async ({ page }) => {
@@ -655,9 +669,8 @@ test('切换语言后页面文案与 <html lang> 随之变化', async ({ page })
   ).toBeVisible()
 
   await page.getByRole('button', { name: 'Language' }).click()
-  // 语言下拉经 menu-props / node-props 注入了 menu / menuitemradio 角色
-  // (NDropdown 默认不输出任何 ARIA 角色),按角色 + 文案定位。
-  await page.getByRole('menuitemradio', { name: '中文' }).click()
+  // disclosure 的命名容器中使用天然可聚焦的原生按钮。
+  await page.locator('.site-header').getByRole('group', { name: 'Language', exact: true }).getByRole('button', { name: '中文', exact: true }).click()
 
   await expect(
     page.getByRole('heading', { level: 1, name: '随时在你身边的 AI Agent' }),
@@ -815,9 +828,9 @@ test('安装引导:外框满宽、左列守行宽、三面板高度齐平(双语
   // en @ 1280(默认语言)
   await expectInstallGeometry(page, 1280)
 
-  // zh @ 1280:经语言下拉切换(menuitemradio 单选语义)
+  // zh @ 1280:经语言 disclosure 的原生按钮切换
   await page.getByRole('button', { name: 'Language' }).click()
-  await page.getByRole('menuitemradio', { name: '中文' }).click()
+  await page.locator('.site-header').getByRole('group', { name: 'Language', exact: true }).getByRole('button', { name: '中文', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
   await expectInstallGeometry(page, 1280)
 
@@ -827,7 +840,7 @@ test('安装引导:外框满宽、左列守行宽、三面板高度齐平(双语
 
   // en @ 1600
   await page.getByRole('button', { name: '语言' }).click()
-  await page.getByRole('menuitemradio', { name: 'English' }).click()
+  await page.locator('.site-header').getByRole('group', { name: '语言', exact: true }).getByRole('button', { name: 'English', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expectInstallGeometry(page, 1600)
 })

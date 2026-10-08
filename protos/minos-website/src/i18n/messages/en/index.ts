@@ -1,5 +1,7 @@
 // en 词条汇总:必须满足 Messages 类型(以 zh-CN 为来源),缺词条即编译报错。
 import type { Messages } from '../zh-CN'
+import { account } from './account'
+import { consoleMessages } from './console'
 import { capabilities } from './capabilities'
 import { compare } from './compare'
 import { footer } from './footer'
@@ -14,6 +16,8 @@ export const en = {
     title: 'Minos — every device you own, on one private network',
   },
   nav,
+  account,
+  console: consoleMessages,
   hero,
   compare,
   capabilities,

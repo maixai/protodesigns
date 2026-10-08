@@ -7,9 +7,9 @@ using TypeSpec.JsonSchema;
 // Mia 官网首页原型的契约:本文件是"数据长什么样"的单一事实源。
 // 各端类型(src/contracts/generated/ 等)由 `make contracts` 从此处生成,不手写。
 //
-// 本契约严格只覆盖首页自身的结构:Mia 的两种形态、可达面、通知渠道、
-// 统一管理的配置类别、四块核心价值与快速开始三步。
-// 文案一律不进契约(文案在 i18n 词条里),契约只描述结构与取值集合。
+// 本契约覆盖首页结构(Mia 的两种形态、可达面、通知渠道、统一管理的配置类别、
+// 四块核心价值、快速开始与安装引导),以及账户、登录态、路由、工作台会话与消息。
+// 界面文案在 i18n 词条里;契约描述结构、取值集合与用户内容。
 //
 // 书写约定:
 //   1. 需要独立产出类型的"入口类型"加 @summary("<类型名>") + @jsonSchema 两个标注;
@@ -141,4 +141,59 @@ enum MobilePlatformId {
 @jsonSchema
 model MobilePlatform {
   id: MobilePlatformId;
+}
+
+// ---- 账户、登录态与路由 ----
+
+@summary("AccountProfile")
+@jsonSchema
+model AccountProfile {
+  name: string;
+  email: string;
+}
+
+// 未登录 / 已登录互斥,用判别联合表达,载体里不出现互斥的可选字段。
+@summary("AccountSession")
+@jsonSchema
+union AccountSession {
+  anonymous: { status: "anonymous"; profile: null; },
+  authenticated: { status: "authenticated"; profile: AccountProfile; },
+}
+
+// 原型内的路由状态:home 是官网首页,workspace 是登录后进入的 AI Agent 工作台。
+// demoState 只是 dummy 数据层的演示开关(让异步四态可被直接寻址),不代表生产接口参数。
+@summary("AppRoute")
+@jsonSchema
+model AppRoute {
+  page: "home" | "workspace";
+  demoState: "normal" | "empty" | "error";
+}
+
+// ---- 工作台的会话与消息 ----
+
+@summary("ChatSession")
+@jsonSchema
+model ChatSession {
+  id: string;
+  title: string;
+  updatedAt: utcDateTime;
+}
+
+@summary("ChatMessage")
+@jsonSchema
+model ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  body: string;
+  createdAt: utcDateTime;
+}
+
+// 对话记录的异步四态:前三态无数据,ready 带消息列表。
+@summary("TranscriptState")
+@jsonSchema
+union TranscriptState {
+  loading: { status: "loading"; },
+  empty: { status: "empty"; },
+  error: { status: "error"; },
+  ready: { status: "ready"; messages: ChatMessage[]; },
 }

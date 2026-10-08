@@ -1,45 +1,25 @@
 <script setup lang="ts">
-// 顶栏:深色 sticky。仅保留品牌字标、语言切换与登录按钮(无导航项、无抽屉);
-// 登录暂不接流程,点击弹轻提示(避免假交互),消息容器由根部 n-message-provider
-// Teleport 到 body,不参与文档流,不影响 sticky。
-import { NConfigProvider, NDropdown, useMessage } from 'naive-ui'
-import type { DropdownOption } from 'naive-ui'
-import type { HTMLAttributes } from 'vue'
+// 顶栏:首页与工作台共用深色 sticky;登录直接同步切换到工作台。
+import { NConfigProvider } from 'naive-ui'
+import { nextTick, ref } from 'vue'
 import { darkOverrides } from '../theme'
 import { useI18n } from '../i18n'
-import type { Locale } from '../i18n'
+import { isAuthenticated, signIn } from '../auth/session'
+import { navigateTo } from '../router'
+import LanguageSwitcher from './language-switcher.vue'
+import AccountMenu from './account-menu.vue'
 
-const { t, locale, setLocale } = useI18n()
-const message = useMessage()
-
-const languageOptions = [
-  { label: '中文', key: 'zh-CN' },
-  { label: 'English', key: 'en' },
-]
-
-// NDropdown 默认不输出任何 ARIA 角色(选项是普通 div,无障碍树里只剩 StaticText)。
-// 用官方 menu-props / node-props(2.31.0 / 2.29.1 引入)注入 menu 语义:
-// 语言切换是单选,选项用 menuitemradio + aria-checked 反映当前语言。
-// (Naive 要求返回类型带索引签名,故 aria-checked 用字符串而非布尔。)
-type DropdownAttrs = HTMLAttributes & Record<string, string | number | undefined>
-
-function dropdownMenuProps(): DropdownAttrs {
-  return { role: 'menu' }
-}
-
-function dropdownNodeProps(option: DropdownOption): DropdownAttrs {
-  return {
-    role: 'menuitemradio',
-    'aria-checked': option.key === locale.value ? 'true' : 'false',
-  }
-}
-
-function onSelectLanguage(key: string | number): void {
-  if (key === 'zh-CN' || key === 'en') setLocale(key as Locale)
-}
+const { t } = useI18n()
+const loginRef = ref<HTMLButtonElement | null>(null)
 
 function onLogin(): void {
-  message.info(t.value.nav.loginHint)
+  signIn()
+  navigateTo('workspace')
+}
+
+async function onSignedOut(): Promise<void> {
+  await nextTick()
+  loginRef.value?.focus()
 }
 </script>
 
@@ -57,18 +37,9 @@ function onLogin(): void {
         </a>
 
         <div class="site-header__actions">
-          <n-dropdown
-            trigger="click"
-            :options="languageOptions"
-            :menu-props="dropdownMenuProps"
-            :node-props="dropdownNodeProps"
-            @select="onSelectLanguage"
-          >
-            <button class="site-header__lang" type="button" :aria-label="t.nav.language">
-              {{ locale === 'zh-CN' ? '中文' : 'EN' }}
-            </button>
-          </n-dropdown>
-          <button class="dl-btn dl-btn--primary" type="button" @click="onLogin">
+          <LanguageSwitcher />
+          <AccountMenu v-if="isAuthenticated" @signed-out="onSignedOut" />
+          <button v-else ref="loginRef" class="dl-btn dl-btn--primary" type="button" @click="onLogin">
             {{ t.nav.login }}
           </button>
         </div>
@@ -123,20 +94,4 @@ function onLogin(): void {
   margin-inline-start: auto;
 }
 
-.site-header__lang {
-  min-height: var(--dl-control-height);
-  padding-inline: var(--dl-space-3);
-  border: var(--dl-border-width) solid var(--dl-border-strong);
-  border-radius: var(--dl-radius-md);
-  font-size: var(--dl-font-size-sm);
-  color: var(--dl-text-secondary);
-  transition:
-    background-color var(--dl-duration-fast) var(--dl-ease-standard),
-    color var(--dl-duration-fast) var(--dl-ease-standard);
-}
-
-.site-header__lang:hover {
-  background-color: var(--dl-bg-hover);
-  color: var(--dl-text-primary);
-}
 </style>

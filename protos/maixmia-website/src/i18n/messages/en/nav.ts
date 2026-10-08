@@ -10,5 +10,5 @@ export const nav = {
   features: 'Highlights',
   language: 'Language',
   login: 'Sign in',
-  loginHint: 'Prototype demo: sign-in is not wired up yet',
+  currentLanguage: 'Current language',
 }

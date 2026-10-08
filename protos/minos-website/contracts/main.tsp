@@ -7,8 +7,8 @@ using TypeSpec.JsonSchema;
 // Minos 官网首页原型的契约:本文件是"数据长什么样"的单一事实源。
 // 各端类型(src/contracts/generated/ 等)由 `make contracts` 从此处生成,不手写。
 //
-// 本契约严格只覆盖首页自身的结构:四项核心能力、旧方式四条痛点、跨层 Mesh 三层
-// 及其能力映射、跨平台清单、快速开始三步。
+// 本契约覆盖首页结构、账户身份与控制台概览,以及原型中的有限状态。
+// 首页结构包含核心能力、旧方式痛点、跨层 Mesh、跨平台清单与快速开始。
 // 主视觉走马灯的 5 屏与各区块图版是静态图版(坐标与标注手写固定),不进契约。
 // 文案一律不进契约(文案在 i18n 词条里),契约只描述结构与取值集合。
 //
@@ -106,4 +106,89 @@ model MeshLayer {
 model SetupStep {
   order: int32;
   icon: string;
+}
+
+// ---- 账户与控制台 ----
+@summary("AccountProfile")
+@jsonSchema
+model AccountProfile {
+  name: string;
+  email: string;
+  organization: string;
+}
+
+enum ConsoleSection {
+  overview,
+  networks,
+  machines,
+  access,
+  dns,
+  settings,
+}
+
+@summary("ConsoleNavItem")
+@jsonSchema
+model ConsoleNavItem {
+  id: ConsoleSection;
+  icon: string;
+}
+
+@summary("NetworkSummary")
+@jsonSchema
+model NetworkSummary {
+  name: string;
+  cidr: string;
+  machineCount: int32;
+  status: "active" | "paused";
+}
+
+@summary("MachineSummary")
+@jsonSchema
+model MachineSummary {
+  hostname: string;
+  ip: string;
+  os: "linux" | "macos" | "windows";
+  lastSeen: utcDateTime;
+  latencyMs: int32 | null;
+  status: "online" | "offline";
+}
+
+model OverviewStats {
+  networkCount: int32;
+  machineCount: int32;
+  onlineCount: int32;
+}
+
+@summary("ConsoleOverview")
+@jsonSchema
+model ConsoleOverview {
+  stats: OverviewStats;
+  networks: NetworkSummary[];
+  machines: MachineSummary[];
+}
+
+// 状态也由契约生成,避免载体重复手写对象形状;profile 与状态互斥。
+@summary("AccountSession")
+@jsonSchema
+union AccountSession {
+  anonymous: { status: "anonymous"; profile: null; },
+  authenticated: { status: "authenticated"; profile: AccountProfile; },
+}
+
+// demoState 只控制 dummy API 演示,不代表生产接口参数。
+@summary("AppRoute")
+@jsonSchema
+model AppRoute {
+  page: "home" | "console";
+  section: ConsoleSection;
+  demoState: "normal" | "empty" | "error";
+}
+
+@summary("OverviewState")
+@jsonSchema
+union OverviewState {
+  loading: { status: "loading"; },
+  empty: { status: "empty"; },
+  error: { status: "error"; },
+  ready: { status: "ready"; data: ConsoleOverview; },
 }

@@ -10,5 +10,5 @@ export const nav = {
   features: '功能亮点',
   language: '语言',
   login: '登录',
-  loginHint: '原型演示,暂无登录流程',
+  currentLanguage: '当前语言',
 }

@@ -1,0 +1,544 @@
+/* ==========================================================================
+   Tungsten 青瓷 —— 设计 token(取值唯一来源:.claude/rules/design-language.md)
+   三层结构:ramp → 语义角色 → 组件。组件只引用语义角色层与结构 token,
+   禁止在组件里引用本文件定义的 ramp 阶。
+
+   本页为纯浅色页(设计要点明确),不响应 prefers-color-scheme:
+     - :root 定义浅色 ramp 与全部结构 token;
+     - .dl-scope 定义语义角色层(引用 ramp 名),挂在页面根容器上一次即可。
+   ========================================================================== */
+
+:root {
+  /* ---- ramp 层:中性色(暖调,色相 35°,饱和约 8%)—— 浅色 ---- */
+  --dl-neutral-0: #ffffff;
+  --dl-neutral-50: #faf8f5;
+  --dl-neutral-100: #f4f1ec;
+  --dl-neutral-200: #e8e4dc;
+  --dl-neutral-300: #d8d2c8;
+  --dl-neutral-400: #b3aaa0;
+  --dl-neutral-500: #756c63;
+  --dl-neutral-600: #5c554d;
+  --dl-neutral-700: #46403a;
+  --dl-neutral-800: #302b25;
+  --dl-neutral-900: #221d18;
+  --dl-neutral-950: #14110d;
+
+  /* ---- ramp 层:强调色(青瓷)—— 浅色 ---- */
+  --dl-accent-50: #eff6f4;
+  --dl-accent-500: #3f8a7c;
+  --dl-accent-600: #2e6f63;
+  --dl-accent-700: #245a50;
+
+  /* ---- 结构 token ---- */
+  /* 字体族:取 design-language.md 第 ⑤ 节声明的字体栈,再补上各平台的系统中文字体兜底。
+     不引入任何 webfont(保持原型自包含):未装 IBM Plex / Inter 的环境按栈回退,
+     装了的环境即按设计语言声明的字形渲染。 */
+  --dl-font-sans:
+    'IBM Plex Sans', 'Inter', 'Source Han Sans SC', 'Noto Sans SC',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --dl-font-mono:
+    'IBM Plex Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    'Cascadia Mono', monospace;
+
+  /* 字号阶:比例 1.25,基准 15px */
+  --dl-font-size-xs: 12px;
+  --dl-font-size-sm: 13px;
+  --dl-font-size-md: 15px;
+  --dl-font-size-lg: 19px;
+  --dl-font-size-xl: 23px;
+  --dl-font-size-2xl: 29px;
+  --dl-font-size-3xl: 37px;
+
+  /* 行高分档:中文正文 1.7 */
+  --dl-line-tight: 1.25;
+  --dl-line-snug: 1.45;
+  --dl-line-body: 1.7;
+  --dl-line-loose: 1.85;
+
+  /* 字距 / 段距 / 行宽:中文字距保持 0,行宽按 em 计(不能用 ch) */
+  --dl-tracking-normal: 0;
+  --dl-tracking-label: 0.01em;
+  --dl-tracking-caps: 0.06em;
+  --dl-para-gap: 1.5em;
+  --dl-measure: 35em;
+
+  /* 间距(4px 基准) */
+  --dl-space-1: 4px;
+  --dl-space-2: 8px;
+  --dl-space-3: 12px;
+  --dl-space-4: 16px;
+  --dl-space-6: 24px;
+  --dl-space-8: 32px;
+  --dl-space-12: 48px;
+
+  /* 圆角 / 边框 / 控件 / 触达 */
+  --dl-radius-sm: 6px;
+  --dl-radius-md: 8px;
+  --dl-radius-lg: 12px;
+  --dl-radius-pill: 9999px;
+  --dl-border-width: 1px;
+  --dl-control-height: 36px;
+  --dl-target-size: 44px;
+
+  /* 层序阶梯 */
+  --dl-z-base: 0;
+  --dl-z-sticky: 100;
+  --dl-z-overlay: 200;
+  --dl-z-modal: 300;
+  --dl-z-toast: 400;
+
+  /* 动效 */
+  --dl-duration-fast: 140ms;
+  --dl-duration-base: 200ms;
+  --dl-duration-slow: 280ms;
+  --dl-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 交互位移:按压下沉 */
+  --dl-lift-press: 1px;
+
+  /* 图标:描边统一 1.5px,不随尺寸缩放 */
+  --dl-icon-sm: 16px;
+  --dl-icon-md: 20px;
+  --dl-icon-lg: 24px;
+  --dl-icon-stroke: 1.5px;
+
+  /* 布局常量:内容容器、吸顶栏高度 */
+  --dl-container-max: 1520px;
+  --dl-header-height: 60px;
+
+  /* 图版固有尺寸:标签页 5 屏共用的 SVG viewBox(几何常量,非视觉值;
+     与 src/components/figure-geometry.ts 的 FIGURE_WIDTH / FIGURE_HEIGHT 同步) */
+  --dl-figure-width: 720px;
+  --dl-figure-height: 520px;
+}
+
+/* ==========================================================================
+   语义角色层(浅色映射;组件只允许引用这一层与上面的结构 token)
+   ========================================================================== */
+.dl-scope {
+  --dl-bg-base: var(--dl-neutral-50);
+  --dl-bg-elevated: var(--dl-neutral-0);
+  --dl-bg-sunken: var(--dl-neutral-100);
+  --dl-bg-hover: var(--dl-neutral-100);
+  /* 可按下控件的按压底色:hover 与 sunken 在本语言里同值,不能拿 sunken 当按压态,
+     故由 hover 再派生一档,不新增 ramp 阶。 */
+  --dl-bg-active: color-mix(in oklab, var(--dl-bg-hover), #000000 8%);
+  --dl-text-primary: var(--dl-neutral-900);
+  --dl-text-secondary: var(--dl-neutral-700);
+  --dl-text-tertiary: var(--dl-neutral-500);
+  --dl-text-disabled: var(--dl-neutral-400);
+  --dl-border-subtle: var(--dl-neutral-100);
+  --dl-border-base: var(--dl-neutral-200);
+  --dl-border-strong: var(--dl-neutral-300);
+
+  --dl-accent: var(--dl-accent-600);
+  --dl-accent-soft: var(--dl-accent-50);
+
+  /* hover / active 由 --dl-accent 经 color-mix 派生,不新增 ramp 阶:
+     浅色里悬停应变暗,故向黑混合。 */
+  --dl-accent-hover: color-mix(in oklab, var(--dl-accent), #000000 12%);
+  --dl-accent-active: color-mix(in oklab, var(--dl-accent), #000000 22%);
+  --dl-text-on-accent: var(--dl-neutral-0);
+  --dl-highlight: #8a6420;
+  --dl-success: #3f6b4f;
+  --dl-warning: #8a6420;
+  --dl-error: #9c4038;
+  --dl-info: #3d5a70;
+  --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
+  --dl-shadow-md: 0 2px 8px rgba(52, 43, 33, 0.07);
+  --dl-shadow-lg: 0 8px 24px rgba(52, 43, 33, 0.1);
+
+  /* 焦点环:由 --dl-accent 派生 */
+  --dl-focus-ring: 0 0 0 3px color-mix(in oklab, var(--dl-accent) 45%, transparent);
+
+  /* 蓝图网格线:由 ramp 经 color-mix 派生的极淡发丝线(语义层,供 .dl-grid 工具类引用)。
+     网格是结构不是装饰,必须一眼可见:两档(次/主)清晰分级。
+     强度口径(避免不同量法对不上数):最暗像素是加强档主级横线 × 主级竖线的交点,
+     逐像素实测 #d9d4ce,压在底色 #faf8f5 上 ——
+     按 WCAG 相对亮度(relative luminance)差约 0.28;按 oklab 感知亮度差 ΔL 约 0.10。
+     两种口径差约 2.7 倍,本文件的对比度断言一律用 WCAG 相对亮度。
+     强度上限由「压在网格上的文字色 vs 最暗网格像素(主×主交点)≥ 4.5:1」反推:
+     网格面上只允许一级 / 二级文字色(实测二级 vs 加强交点 6.9:1,余量充足);
+     accent 眉标一律带与区块同色的不透明注记遮罩(见 spec-head / hero  eyebrow),
+     与网格彻底解耦;三级文字色不得落在网格面上(实测三级 vs 加强交点仅 3.5:1)。
+     网格每个方向只画一层(见 .dl-grid):同向主/次级线不叠加,
+     最暗像素出现在主级横线与主级竖线的交叉处。
+     取值经逐像素实测标定(oklab color-mix 的复合色比 sRGB alpha 推算暗,不可按名义值推)。 */
+  --dl-grid-minor: color-mix(in oklab, var(--dl-neutral-400) 8.5%, transparent);
+  --dl-grid-major: color-mix(in oklab, var(--dl-neutral-400) 15%, transparent);
+  --dl-grid-minor-strong: color-mix(in oklab, var(--dl-neutral-400) 14%, transparent);
+  --dl-grid-major-strong: color-mix(in oklab, var(--dl-neutral-400) 26%, transparent);
+
+  color: var(--dl-text-primary);
+  background-color: var(--dl-bg-base);
+}
+
+/* ==========================================================================
+   基础排版(中文排版硬约束见 design-language.md 第 ⑤ 节)
+   ========================================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--dl-font-sans);
+  font-size: var(--dl-font-size-md);
+  line-height: var(--dl-line-body);
+  letter-spacing: var(--dl-tracking-normal);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  text-autospace: normal;
+  line-break: strict;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--dl-focus-ring);
+  border-radius: var(--dl-radius-sm);
+}
+
+/* 动效降级:状态切换仍发生,位移与缩放去掉;用极短时长而非 0 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   共享布局与组件类
+   ========================================================================== */
+
+/* 内容容器:宽屏放宽至 1520px 并居中,两侧留 24px gutter;区块背景全幅 */
+.dl-container {
+  width: min(calc(100% - 2 * var(--dl-space-6)), var(--dl-container-max));
+  margin-inline: auto;
+}
+
+/* 区块纵向节奏:由间距 token 组合(80px),不新增间距阶 */
+.dl-section {
+  padding-block: calc(var(--dl-space-12) + var(--dl-space-8));
+  scroll-margin-top: calc(var(--dl-header-height) + var(--dl-space-4));
+}
+
+/* 区块头文字块守正文行宽(技术规格单式区块头组件见 components/spec-head.vue) */
+.dl-h2 {
+  font-size: var(--dl-font-size-2xl);
+  line-height: var(--dl-line-tight);
+  font-weight: 600;
+  letter-spacing: var(--dl-tracking-normal);
+  color: var(--dl-text-primary);
+  /* 换行均衡:中文可逐字断行、西文按词断行,自然断点在部分宽度会留下很短的尾行;
+     balance 让各行长度接近。一行放得下时不生效,行数也不会增加。 */
+  text-wrap: balance;
+}
+
+.dl-lede {
+  font-size: var(--dl-font-size-lg);
+  /* 导语是成句正文(不是表格 / 小标题),行高守正文档 */
+  line-height: var(--dl-line-body);
+  color: var(--dl-text-secondary);
+  max-width: var(--dl-measure);
+}
+
+.dl-mono {
+  font-family: var(--dl-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 按钮:主 / 次两档,大号用于区块级 CTA */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dl-space-2);
+  min-height: var(--dl-control-height);
+  padding-inline: var(--dl-space-4);
+  border: var(--dl-border-width) solid transparent;
+  border-radius: var(--dl-radius-md);
+  font-size: var(--dl-font-size-sm);
+  font-weight: 500;
+  line-height: var(--dl-line-snug);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dl-duration-fast) var(--dl-ease-standard),
+    border-color var(--dl-duration-fast) var(--dl-ease-standard),
+    color var(--dl-duration-fast) var(--dl-ease-standard),
+    transform var(--dl-duration-fast) var(--dl-ease-standard);
+}
+
+.dl-btn:active {
+  transform: translateY(var(--dl-lift-press));
+}
+
+.dl-btn--primary {
+  background-color: var(--dl-accent);
+  color: var(--dl-text-on-accent);
+}
+
+.dl-btn--primary:hover {
+  background-color: var(--dl-accent-hover);
+}
+
+.dl-btn--primary:active {
+  background-color: var(--dl-accent-active);
+}
+
+.dl-btn--ghost {
+  background-color: transparent;
+  border-color: var(--dl-border-strong);
+  color: var(--dl-text-primary);
+}
+
+.dl-btn--ghost:hover {
+  background-color: var(--dl-bg-hover);
+}
+
+.dl-btn--lg {
+  min-height: var(--dl-target-size);
+  padding-inline: var(--dl-space-6);
+  font-size: var(--dl-font-size-md);
+}
+
+.dl-btn:disabled,
+.dl-btn[aria-disabled='true'] {
+  background-color: var(--dl-bg-sunken);
+  border-color: transparent;
+  color: var(--dl-text-disabled);
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ==========================================================================
+   工程蓝图工具类:网格底板 / 角部 registration marks / 图版内的图元
+   ========================================================================== */
+
+/* 蓝图网格底板:次级网格每 24px(--dl-space-6),主级网格每 96px(--dl-space-12 × 2)略强。
+   只设 background-image,与各区块自己的 background-color 叠加;
+   --soft / --strong 两个变体供不同区块选用(Hero 与能力区加重,其余减淡)。
+   每个方向只用一条渐变、在 96px 周期内用显式色标一次画完主级线与三条次级线:
+   主级线不再坐在次级线上,同向不叠加,线色完全由 token 决定;
+   全图最暗像素只剩「主级横线 × 主级竖线」的交叉点一处。 */
+.dl-grid {
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      var(--dl-grid-major) 0 var(--dl-border-width),
+      transparent var(--dl-border-width) var(--dl-space-6),
+      var(--dl-grid-minor) var(--dl-space-6) calc(var(--dl-space-6) + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) + var(--dl-border-width)) calc(var(--dl-space-6) * 2),
+      var(--dl-grid-minor) calc(var(--dl-space-6) * 2) calc(var(--dl-space-6) * 2 + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) * 2 + var(--dl-border-width)) calc(var(--dl-space-6) * 3),
+      var(--dl-grid-minor) calc(var(--dl-space-6) * 3) calc(var(--dl-space-6) * 3 + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) * 3 + var(--dl-border-width)) calc(var(--dl-space-12) * 2)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      var(--dl-grid-major) 0 var(--dl-border-width),
+      transparent var(--dl-border-width) var(--dl-space-6),
+      var(--dl-grid-minor) var(--dl-space-6) calc(var(--dl-space-6) + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) + var(--dl-border-width)) calc(var(--dl-space-6) * 2),
+      var(--dl-grid-minor) calc(var(--dl-space-6) * 2) calc(var(--dl-space-6) * 2 + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) * 2 + var(--dl-border-width)) calc(var(--dl-space-6) * 3),
+      var(--dl-grid-minor) calc(var(--dl-space-6) * 3) calc(var(--dl-space-6) * 3 + var(--dl-border-width)),
+      transparent calc(var(--dl-space-6) * 3 + var(--dl-border-width)) calc(var(--dl-space-12) * 2)
+    );
+}
+
+.dl-grid--strong {
+  --dl-grid-minor: var(--dl-grid-minor-strong);
+  --dl-grid-major: var(--dl-grid-major-strong);
+}
+
+/* 角部 registration marks:四角各一个发丝 L 形记号,用 8 条线性渐变画出,
+   不增加任何 DOM;内缩 --dl-space-2,避开卡片圆角与边框。 */
+.dl-corners {
+  background-image:
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong)),
+    linear-gradient(var(--dl-border-strong), var(--dl-border-strong));
+  background-repeat: no-repeat;
+  background-size:
+    var(--dl-space-3) var(--dl-border-width),
+    var(--dl-border-width) var(--dl-space-3),
+    var(--dl-space-3) var(--dl-border-width),
+    var(--dl-border-width) var(--dl-space-3),
+    var(--dl-space-3) var(--dl-border-width),
+    var(--dl-border-width) var(--dl-space-3),
+    var(--dl-space-3) var(--dl-border-width),
+    var(--dl-border-width) var(--dl-space-3);
+  background-position:
+    left var(--dl-space-2) top var(--dl-space-2),
+    left var(--dl-space-2) top var(--dl-space-2),
+    right var(--dl-space-2) top var(--dl-space-2),
+    right var(--dl-space-2) top var(--dl-space-2),
+    left var(--dl-space-2) bottom var(--dl-space-2),
+    left var(--dl-space-2) bottom var(--dl-space-2),
+    right var(--dl-space-2) bottom var(--dl-space-2),
+    right var(--dl-space-2) bottom var(--dl-space-2);
+}
+
+/* ---- 图版图元:标签页 5 屏共用的 SVG / 覆盖层样式 ----
+   SVG 内的几何全部手写固定坐标(确定性,校准基线依赖);
+   文字标签一律用 HTML 覆盖层(SVG 缩放时字号不漂移,恒为 --dl-font-size-xs)。 */
+
+/* 连线:发丝描边,non-scaling-stroke 保证任何缩放下同一粗细 */
+.fig-edge {
+  stroke: var(--dl-border-strong);
+  stroke-width: var(--dl-border-width);
+}
+
+/* 备用路径 / 拒绝路径:虚线 */
+.fig-edge--dashed {
+  stroke: var(--dl-text-tertiary);
+  stroke-dasharray: 4 5;
+}
+
+/* 失效链路:极淡 */
+.fig-edge--failed {
+  stroke: var(--dl-border-base);
+}
+
+/* 失效叉号 / 拒绝叉号:状态色,与图例记号一致 */
+.fig-cross {
+  stroke: var(--dl-error);
+  stroke-width: var(--dl-icon-stroke);
+  stroke-linecap: round;
+}
+
+/* 节点:统一半径、同一套描边、无填充强调 —— 全是 peer,没有视觉特权节点。
+   填充取图版底色(--dl-bg-base):图版已去白底,填充与底同色才不显白色方块 */
+.fig-node {
+  fill: var(--dl-bg-base);
+  stroke: var(--dl-accent);
+  stroke-width: var(--dl-icon-stroke);
+}
+
+/* 引出线:发丝,连接标注与图内对象 */
+.fig-leader {
+  stroke: var(--dl-border-strong);
+  stroke-width: var(--dl-border-width);
+}
+
+/* 方框(设备 / 策略 / 资源 / 牌):发丝边界;填充同图版底色,与底同色不显白块 */
+.fig-box {
+  fill: var(--dl-bg-base);
+  stroke: var(--dl-border-strong);
+  stroke-width: var(--dl-border-width);
+}
+
+/* 虚线边界框(微边界 / 环境边界) */
+.fig-box--dashed {
+  fill: none;
+  stroke: var(--dl-text-tertiary);
+  stroke-dasharray: 4 5;
+}
+
+/* 箭头头部(小三角记号) */
+.fig-arrowhead {
+  stroke: var(--dl-border-strong);
+  stroke-width: var(--dl-icon-stroke);
+  stroke-linecap: round;
+  fill: none;
+}
+
+/* 链路上的流动点(accent,SMIL 驱动;reduced-motion 下由组件层移除) */
+.fig-flow {
+  fill: var(--dl-accent);
+}
+
+/* HTML 覆盖层标签:等宽最小字号,与 SVG 缩放解耦。
+   地图注记式遮罩:底色取图版底(--dl-bg-base,与图版同色,视觉上不可见),
+   把身后的网格线 / 描边遮掉,保证文字在任何缩放下的对比度与可读性 */
+.fig-label {
+  position: absolute;
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-tight);
+  white-space: nowrap;
+  color: var(--dl-text-tertiary);
+  background-color: var(--dl-bg-base);
+  pointer-events: none;
+}
+
+/* 标注文字(引出线旁的中文 / 英文说明):次级文字色,比纯标签更重一档 */
+.fig-note {
+  color: var(--dl-text-secondary);
+}
+
+/* 标签落位变体:百分比定位之外的 translate 修正(几何值,非视觉值) */
+.fig-label--below {
+  transform: translateX(-50%);
+}
+
+.fig-label--above {
+  transform: translate(-50%, -100%);
+}
+
+.fig-label--right {
+  transform: translateY(-50%);
+}
+
+.fig-label--left {
+  transform: translate(-100%, -50%);
+}
+
+.fig-label--topleft {
+  transform: none;
+}
+
+.fig-label--center {
+  transform: translate(-50%, -50%);
+}

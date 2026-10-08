@@ -68,6 +68,23 @@ contracts/main.tsp ──┬─→ contracts/generated/openapi/openapi.yaml
 
 书写约定(入口类型加 `@summary` + `@jsonSchema` 等)与跨端一致性规则见 `.claude/rules/contracts.md`。
 
+## 质量检查
+
+| 目标 | 层 | 覆盖 | 何时跑 |
+| --- | --- | --- | --- |
+| `make smoke` | **L1 机械可判定** | 未捕获异常与 console error、失败请求、375/768/1280/1600 横向溢出;外加本原型在 `tests/calibrate/` 自写的断言(对比度、触达尺寸、四态、交互) | **每次改动后必跑**,不阻塞交付 |
+| `make calibrate` | 回归比对 | 双引擎(Chromium + WebKit)逐宽度截图 + 断言不破版 | 确认布局变化是预期的之前 |
+| `make calibrate-update` | 基线更新 | 重新生成截图基线(改动的图需过目) | 确认变化是预期的之后 |
+
+```bash
+make smoke        # 冒烟:秒级,零 LLM 判定
+make calibrate    # 双引擎校准(慢,含像素比对)
+```
+
+**`make smoke` 的判定来源有两块**:仓库级通用冒烟规格 `tests/smoke/`(任何原型都有,复制样板目录即得),以及本原型在 `tests/calibrate/` 里自写的断言。它跑 chromium 单引擎并跳过像素比对 —— 截图基线按创建时的 OS 生成,跨 OS 必然假失败,而冒烟本就不看像素。
+
+**改动原型后至少跑一次 `make smoke`**;`baseline-web.md` 的四宽度要求由它断言,不靠目视。
+
 ## 根级工作流(聚合预览)
 
 | 目标 | 含义 |
@@ -130,13 +147,19 @@ protodesigns/
 protos/<slug>/
 ├── meta.md                       # 原型声明(targets / data / product)
 ├── Makefile                      # include ../Make.def(或 ../Make.def.flutter)
+├── playwright.config.ts          # web / 桌面原型:校准与冒烟的 project 定义
 ├── tspconfig.yaml                # 契约生成配置
 ├── contracts/
 │   ├── main.tsp                  # 契约源头(手写)
 │   └── generated/                # 生成物,不入库
+├── tests/                        # 仅 web / 桌面原型
+│   ├── smoke/                    # 通用冒烟规格:与样板目录保持逐字一致,勿改
+│   └── calibrate/                # 本原型自写的深度断言 + 截图基线
 └── src/ 或 lib/                  # 载体代码
     └── contracts/generated/      # 生成的类型,不入库
 ```
+
+> mobile 原型没有 `tests/smoke/` 与 `tests/calibrate/`:它的确定性层是 `test/` 下的 golden 测试,由 `make smoke`(= `make calibrate`)跑 `flutter analyze` + `flutter test`。
 
 ## 更多约定
 

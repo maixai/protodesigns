@@ -10,7 +10,7 @@ PNPM    ?= pnpm
 # 默认跑 Chrome:浏览器里看布局与视觉最快;真机 / 模拟器用 make run DEVICE=<设备 id>
 DEVICE  ?= chrome
 
-.PHONY: deps run build contracts contracts-schema contracts-dart contracts-clean calibrate calibrate-update
+.PHONY: deps run build contracts contracts-schema contracts-dart contracts-clean smoke calibrate calibrate-update
 
 # ---- 依赖安装 ----
 # 契约工具链(TypeSpec / quicktype)在 Node 侧,走 pnpm 安装;
@@ -65,6 +65,12 @@ contracts-dart: contracts-schema
 # 清理全部生成物。
 contracts-clean:
 	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_DART_OUT)
+
+# ---- 冒烟检查(Tier 1:确定性、零 LLM 判定,每次改动后必跑,不阻塞交付)----
+# 移动端的确定性层与 calibrate 完全重合(静态分析 + 组件级 golden 回归,两者都不含 LLM 判定),
+# 故直接复用,不另写一套配方 —— 与 web 侧不同:web 的 calibrate 含双引擎与像素比对,
+# 冒烟要的是"单引擎 + 不判像素",两者才需要分开。
+smoke: calibrate
 
 # ---- 设计校准 ----
 # 移动端的平台特有交互(手势返回 / 软键盘 / 安全区 / 权限弹窗)在浏览器里验不了,

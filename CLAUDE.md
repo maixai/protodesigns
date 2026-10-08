@@ -68,9 +68,12 @@
 
 ## 设计校准
 
-- web / desktop 原型用 **Playwright 双引擎(Chromium + WebKit)** 校准:逐宽度截图 + 断言不破版。两个引擎都要跑,因为桌面壳在 macOS / Linux 用 WebKit 系、在 Windows 用 Chromium 系。
+- **确定性检查(L1)**:`make smoke` —— 秒级、零 LLM 判定,每次改动后必跑且不阻塞交付。覆盖未捕获异常与 console error、失败请求、四宽度横向溢出,外加本原型在 `tests/calibrate/` 自写的断言;跑单引擎并跳过像素比对。
+- **回归比对**:web / desktop 原型用 **Playwright 双引擎(Chromium + WebKit)** 校准:逐宽度截图 + 断言不破版。两个引擎都要跑,因为桌面壳在 macOS / Linux 用 WebKit 系、在 Windows 用 Chromium 系。
 - 命令:`make calibrate`(校验)/ `make calibrate-update`(确认变化是预期的之后更新基线)。
+- **截图基线按 OS 生成**(字体栅格化与抗锯齿不同),跨 OS 必然假失败;换 OS 时不要用另一台机器的基线判失败。
 - mobile 原型的平台特有交互(手势、键盘、安全区、权限)**浏览器验不了**,必须真机 / 模拟器确认;评审时未确认项一律登记为「未验证」,不得当作通过。
+- 以上属 L1 / 回归层。需要判断力的项(深色模式、桌面壳能力、中文排版、a11y 语义、反模式)归 L3 完整评审,按风险节点触发,不在每轮跑。
 
 ## 检索纪律
 

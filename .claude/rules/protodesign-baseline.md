@@ -230,14 +230,22 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 
 ## ⑧ 共享验收清单
 
-实现完成后逐项自检(最终由 reviewer 逐项核对):
+实现完成后逐项自检;核对分两层进行 —— **机械可判定的交给 `make smoke` 脚本(L1),需要判断力的才派评审 SubAgent(L3)**,详见 `protodesign` Skill 的「三层验收的分工」。
+
+### L1:机械可判定(`make smoke` 覆盖,每次必跑,不阻塞)
 
 - [ ] **可运行**:子目录内 `make run` 可启动,可访问。
-- [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错。
-- [ ] **console 无 error**:无 JS 运行时错误(关键请求无 4xx/5xx 失败)。
+- [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错;`make build` 通过。
+- [ ] **运行时无错误**:无未捕获异常、无 console error、关键请求无 4xx/5xx 失败。
+- [ ] **多宽度不破版**:375 / 768 / 1280 / 1600 无横向溢出(由断言判定,不靠目视)。
+
+> 这四项由仓库级通用冒烟规格 `tests/smoke/` 保证,任何原型(含新建的)都有。其余可机械化的项(对比度、触达尺寸、四态可达、交互行为)由各原型在 `tests/calibrate/` 自行断言 —— **写了就归 L1,没写就归 L3**。
+
+### L3:需要判断力(完整评审 SubAgent 核对,按风险节点触发)
+
 - [ ] **token 合规**:颜色 / 字号 / 行高 / 圆角 / 间距 / 阴影 / 动效均走 token 或主题覆盖,无 hardcode magic number;**判据见 [`design-language.md`](./design-language.md) 第 ② 节**。
 - [ ] **中文排版合规**:正文行高 ≥ 1.5、行宽按 em 计、字重 ≤ 600、左对齐。
-- [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态。
+- [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态(该原型若已在 calibrate 里断言,则此项目动由 L1 保证)。
 - [ ] **交互态完备**:hover / focus / active / disabled(触屏端按端基线调整)。
 - [ ] **a11y 底线**:见第 ⑦ 节。
 - [ ] **端基线**:按 `meta.md` 的 `targets` 逐份核对对应端基线。

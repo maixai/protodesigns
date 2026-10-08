@@ -38,7 +38,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 4. **主题**:在 `lib/theme/` 集中定义 `ThemeData` / `ThemeExtension`,深浅两套;token 值取自 [../rules/design-language.md](../rules/design-language.md)(Flutter 落地见其第 ⑩ 节)。
 5. **数据层**:Dart 侧强类型 API + 内存 dummy 数据 + 模拟延迟;不接真实后端、不做本地持久化(原型期刷新即重置)。
 6. **页面与 widget**:按设计要点搭页面,补齐四态与 **pressed / focus / disabled** 态(hover 不适用);按 `baseline-mobile.md` 处理安全区、键盘、手势返回、底部导航、权限时机。
-7. **自检**:`make contracts` 无报错;`flutter analyze` 无 error;`make run`(默认 Chrome 预览)确认可启动。平台特有交互(手势 / 键盘 / 安全区)在浏览器里验不了,交回时**显式说明哪些项待真机确认**。
+7. **自检**:`make smoke`(等价于 `make calibrate`:`flutter analyze` + `flutter test` 组件级 golden)必须全绿;`make run`(默认 Chrome 预览)确认可启动。**报红必须自己修到绿再交回**。平台特有交互(手势 / 键盘 / 安全区)在浏览器里验不了,交回时**显式说明哪些项待真机确认**。自检不等于验收:需要判断力的项仍归 L3 完整评审。
 
 ## 返回格式
 

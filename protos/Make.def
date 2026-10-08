@@ -7,7 +7,7 @@ PNPM ?= pnpm
 PORT ?= 5173
 HOST ?= 0.0.0.0
 
-.PHONY: deps run build contracts contracts-schema contracts-ts contracts-dart contracts-clean calibrate calibrate-update
+.PHONY: deps run build contracts contracts-schema contracts-ts contracts-dart contracts-clean smoke calibrate calibrate-update
 
 # ---- 依赖安装 ----
 # 新克隆的目录先跑一次 make deps:node_modules 是契约工具链与构建的共同前置。
@@ -60,17 +60,28 @@ contracts-ts: contracts-schema
 contracts-clean:
 	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_TS_OUT)
 
+# ---- 冒烟检查(Tier 1:确定性、零 LLM 判定,每次改动后必跑,不阻塞交付)----
+# 一次跑两类检查,覆盖「新原型也天然有基础覆盖」与「本原型的深度断言」:
+#   - project=smoke   → tests/smoke 的仓库级通用兜底(console error / 请求失败 / 多宽度横向溢出);
+#   - project=chromium → tests/calibrate 的本原型断言(溢出 / 对比度 / 触达尺寸 / 四态 / 交互),
+#     其中像素比对被 SMOKE=1 降级为不判定(基线按 OS 生成,跨 OS 必然假失败)。
+# 只跑单引擎:冒烟求快,双引擎的跨端渲染差异由 `make calibrate` 覆盖。
+# 需要人 / LLM 判断的项(信息层次、a11y 语义、桌面壳能力)不在本目标范围,归完整评审。
+# DEV_COMMAND 把当前可用的包管理器命令注入给 playwright 的 webServer(见 playwright.config.ts)。
+DEV_COMMAND ?= $(PNPM) dev --host 127.0.0.1 --port $(PORT)
+
+smoke: contracts
+	DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke --project=chromium
+
 # ---- 设计校准(双引擎)----
 # 同一原型在 Chromium 与 WebKit 上各跑一遍:逐宽度截图 + 断言不破版。
 # 两个引擎都要跑,是因为桌面壳在 macOS / Linux 用 WebKit 系、在 Windows 用 Chromium 系;
 # 只在 Chrome 里验过的布局,到了壳里可能不成立。
 # 需要原型自带 playwright.config.ts 与 tests/calibrate/。
-# DEV_COMMAND 把当前可用的包管理器命令注入给 playwright 的 webServer(见 playwright.config.ts)。
-DEV_COMMAND ?= $(PNPM) dev --host 127.0.0.1 --port $(PORT)
-
+# 显式指定两个引擎 project:config 里还有 smoke project,不指定会被一并跑进来。
 calibrate:
-	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test
+	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test --project=chromium --project=webkit
 
 # 基线更新:确认布局变化是预期的之后,重新生成截图基线(改动的图需在评审里过目)。
 calibrate-update:
-	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test --update-snapshots
+	DEV_COMMAND="$(DEV_COMMAND)" $(PNPM) exec playwright test --update-snapshots --project=chromium --project=webkit

@@ -6,6 +6,10 @@ import { defineConfig, devices } from '@playwright/test'
 //
 // 注意:两个引擎的截图基线各自独立(文件名带 project 名),
 // 因为字体栅格化不同会导致逐像素差异 —— 跨引擎不做像素比对,只做布局断言。
+//
+// 三类 project:
+//   - chromium / webkit:tests/calibrate 的逐原型深度断言 + 像素基线(`make calibrate`);
+//   - smoke:tests/smoke 的仓库级通用兜底(`make smoke`,见下方 SMOKE 开关)。
 const PORT = Number(process.env['PORT'] ?? 5173)
 const BASE_URL = process.env['BASE_URL'] ?? `http://127.0.0.1:${PORT}`
 // dev server 启动命令:默认用 pnpm;由 make 调用时通过 DEV_COMMAND 注入实际可用的包管理器命令
@@ -13,8 +17,20 @@ const BASE_URL = process.env['BASE_URL'] ?? `http://127.0.0.1:${PORT}`
 const DEV_COMMAND =
   process.env['DEV_COMMAND'] ?? `pnpm dev --host 127.0.0.1 --port ${PORT}`
 
+// SMOKE=1:冒烟模式。冒烟只关心确定性断言(溢出 / console error / 请求失败 / 交互),
+// 像素基线不在其判定范围内 —— 基线按创建时的 OS 生成,换 OS 跑必然假失败。
+//
+// 两个覆盖缺一不可:
+//   - ignoreSnapshots:跳过截图断言(基线缺失时调阈值救不了,是"找不到基线"的硬失败);
+//   - snapshotDir:把基线根目录挪到 test-results/(已 gitignore)。
+//     实测 Playwright 1.63 在 ignoreSnapshots 下**仍会把缺失的基线落盘**;若落进真实
+//     snapshots 目录,等于让之后的 `make calibrate` 拿未复核的图当期望值 —— 像素门禁就此失效。
+const SMOKE = process.env['SMOKE'] === '1'
+const CALIBRATE_SMOKE_OVERRIDES = SMOKE
+  ? { ignoreSnapshots: true, snapshotDir: 'test-results/smoke-baselines' }
+  : {}
+
 export default defineConfig({
-  testDir: './tests/calibrate',
   fullyParallel: true,
   reporter: [['list']],
   // 允许 1% 的像素差,吸收字体栅格化与抗锯齿噪声。
@@ -25,8 +41,19 @@ export default defineConfig({
     baseURL: BASE_URL,
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    {
+      name: 'chromium',
+      testDir: './tests/calibrate',
+      use: { ...devices['Desktop Chrome'] },
+      ...CALIBRATE_SMOKE_OVERRIDES,
+    },
+    {
+      name: 'webkit',
+      testDir: './tests/calibrate',
+      use: { ...devices['Desktop Safari'] },
+      ...CALIBRATE_SMOKE_OVERRIDES,
+    },
+    { name: 'smoke', testDir: './tests/smoke', use: { ...devices['Desktop Chrome'] } },
   ],
   // 复用已在跑的 dev server,没有则自动拉起。
   webServer: {

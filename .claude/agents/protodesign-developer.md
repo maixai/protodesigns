@@ -37,7 +37,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 4. **数据与 API**:按共享基线第 ⑤ 节写强类型 API(`Promise<Result<T>>`)+ dummy 真实内容 + `delay()`;不引入 MSW。
 5. **壳能力(targets 含 desktop 时)**:写 `src/shell/ports.ts` 接口 + `src/shell/mock/` 实现(菜单栏 / 快捷键 / 右键菜单 / 文件对话框 / 通知 / 深浅色跟随 / 窗口尺寸),**必须能在浏览器里演示**;`src/shell/real/` 留空,生产期替换为 Electron IPC,UI 零改动。
 6. **页面与交互**:按设计要点搭页面 / 组件,补齐四态(有数据 / loading / empty / error)与交互态(hover / focus / active / disabled);按端基线保证各宽度可用与 a11y 底线。
-7. **自检**:运行 `make build`(含类型检查)确认构建通过;`make run` 确认可启动。不替代 reviewer 的验收,但类型错误 / 构建失败必须在交回前修掉。
+7. **自检**:`make smoke`(L1 冒烟:未捕获异常 / console error / 失败请求 / 多宽度破版)必须全绿;`make build`(含类型检查)与 `make run` 通过。**报红必须自己修到绿再交回** —— 不要把冒烟能抓到的机械问题留给 Main 或评审。自检不等于验收:需要判断力的项(深色模式 / 中文排版 / a11y 语义 / 反模式)仍归 L3 完整评审。
 
 ## 返回格式
 

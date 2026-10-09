@@ -47,11 +47,11 @@
 | 字重 | 只允许 `400 / 500 / 600`,**700 及以上禁止** |
 | 段间距 | `--dl-para-gap` = `1.5em` |
 | 间距(4px 基准) | `--dl-space-1…12` = `4 / 8 / 12 / 16 / 24 / 32 / 48px` |
-| 圆角 | `--dl-radius-sm/md/lg` = `6 / 8 / 12px` |
+| 圆角 | `--dl-radius-sm/md/lg/xl` = `6 / 8 / 12 / 16px`(随元素尺寸选档,`xl` 归面板 / 浮层) |
 | 边框 | `--dl-border-width` = `1px`(层级以发丝描边为主) |
 | 阴影 | `--dl-shadow-xs/md/lg`,极轻暖调,只用于真正需要抬起的浮层 |
 | 动效 | `--dl-duration-fast/base/slow` = `140 / 200 / 280ms`,`--dl-ease-standard` |
-| 控件 / 触达 | `--dl-control-height` = `36px`,`--dl-target-size` = `44px` |
+| 控件 / 触达 | `--dl-control-height` = `36px`,`--dl-target-size` = `44px`(密集行 —— 纵向列表 / 树行与横向 tab 条及其行内控件 —— 是唯一例外,可降至 `24px`,须整行可点且相邻 24px 圆不相交;横向排布的间距判据天然成立,详见 `design-language.md` ⑥) |
 | 层级 | `--dl-z-sticky/overlay/modal/toast` = `100 / 200 / 300 / 400`,禁止就地写 `9999` |
 | 图标 | `--dl-icon-sm/md/lg` = `16 / 20 / 24px`,描边统一 `1.5px` 不随尺寸缩放 |
 

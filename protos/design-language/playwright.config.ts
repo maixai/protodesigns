@@ -34,8 +34,14 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [['list']],
   // 允许 1% 的像素差,吸收字体栅格化与抗锯齿噪声。
+  //
+  // animations: 'disabled' —— 截图时把 CSS 动画 / 过渡冻结到终态。
+  // 不冻结时,**fullPage 截图会持续报「Failed to take two consecutive stable screenshots」**:
+  // 实测两次捕获之间整页高度在 10757 与 10846 之间摆动(可复现 +89px),而这一页高达约 1 万像素、
+  // 一次捕获要几秒 —— 页面里任何在动的元素都会让「连续两张一致」永远不成立。
+  // 注意:基线必须与判定用同一组选项生成,否则等于拿另一套渲染结果当期望。
   expect: {
-    toHaveScreenshot: { maxDiffPixelRatio: 0.01 },
+    toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: 'disabled' },
   },
   use: {
     baseURL: BASE_URL,

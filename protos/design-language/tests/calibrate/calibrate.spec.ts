@@ -15,7 +15,28 @@ async function horizontalOverflow(page: Page): Promise<number> {
   )
 }
 
-// 等待页面进入稳定态:调教台已渲染完成。
+// 等页面高度连续多轮不变。
+// 只等某个选择器是不够的:除它之外的异步区块落地同样会撑高页面,而整页高达约 1 万像素、
+// 截图本身要几秒 —— 足够让它们落地,于是 Playwright 的「连续两张截图一致」永远不成立
+// (`Failed to take two consecutive stable screenshots`)。实测两次捕获之间页高长了 89px。
+// 这里按「页高稳定」而不是「某个元素出现」来判落定,与具体是哪个区块无关。
+const STABLE_SAMPLES = 3
+const STABLE_INTERVAL_MS = 150
+
+async function waitForStableHeight(page: Page): Promise<void> {
+  let previous = -1
+  let equalRounds = 0
+  // 上限 6s:即使某处持续变化,也不要让用例无限等下去(超时由用例自身的 timeout 兜底)。
+  for (let i = 0; i < 40; i += 1) {
+    const height = await page.evaluate(() => document.documentElement.scrollHeight)
+    equalRounds = height === previous ? equalRounds + 1 : 0
+    if (equalRounds >= STABLE_SAMPLES - 1) return
+    previous = height
+    await page.waitForTimeout(STABLE_INTERVAL_MS)
+  }
+}
+
+// 等待页面进入稳定态:调教台已渲染完成,且整页高度已落定。
 // 不等它落定就截图会让基线漂移,产生假失败。
 async function waitForPage(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: /青瓷/ })).toBeVisible()
@@ -23,6 +44,7 @@ async function waitForPage(page: Page): Promise<void> {
   // 必须等异步区块的数据落定(dummy API 有 150-300ms 随机延迟)。
   // 不等它,整页截图会时而抓到加载态、时而抓到完成态 —— 基线必然漂移。
   await expect(page.locator('.list__item').first()).toBeVisible()
+  await waitForStableHeight(page)
 }
 
 for (const width of WIDTHS) {
@@ -79,6 +101,9 @@ test('排版调教台的候选值确实生效', async ({ page }) => {
 
 // 对比度底线:正文 / 次级 / 三级文字在各自底色上都必须达到 4.5:1。
 // 把它做成断言而不是靠肉眼:设计语言里最容易悄悄失守的就是低阶文字色。
+//
+// 状态色与点缀色同样会作为文字出现(错误提示、Do / Don't 标签、状态徽标),
+// 也必须一并核算 —— 否则深色块漏配状态色时,对比度会静默跌破底线而测试照绿。
 async function collectContrast(page: Page): Promise<{ name: string; ratio: number }[]> {
   return page.evaluate(() => {
     // CSS 变量返回的是 hex 字面量,这里统一转成 rgb 再算相对亮度。
@@ -105,6 +130,15 @@ async function collectContrast(page: Page): Promise<{ name: string; ratio: numbe
       return (lighter + 0.05) / (darker + 0.05)
     }
 
+    // 状态 / 点缀色 → 各自的 subtle 底色,作为一组必须核算的色对。
+    const statusColors: [string, string][] = [
+      ['--dl-success', '--dl-success-subtle'],
+      ['--dl-warning', '--dl-warning-subtle'],
+      ['--dl-error', '--dl-error-subtle'],
+      ['--dl-info', '--dl-info-subtle'],
+      ['--dl-highlight', '--dl-highlight-subtle'],
+    ]
+
     const pairs: { name: string; fg: string; bg: string }[] = []
     for (const element of Array.from(document.querySelectorAll('[data-dl-dir]'))) {
       const style = getComputedStyle(element)
@@ -115,13 +149,20 @@ async function collectContrast(page: Page): Promise<{ name: string; ratio: numbe
         pairs.push({ name: `${token} on bg-base`, fg, bg: surface })
         pairs.push({ name: `${token} on bg-elevated`, fg, bg: card })
       }
+      for (const [fgToken, subtleToken] of statusColors) {
+        const fg = style.getPropertyValue(fgToken).trim()
+        const subtle = style.getPropertyValue(subtleToken).trim()
+        pairs.push({ name: `${fgToken} on bg-base`, fg, bg: surface })
+        pairs.push({ name: `${fgToken} on bg-elevated`, fg, bg: card })
+        pairs.push({ name: `${fgToken} on its subtle`, fg, bg: subtle })
+      }
     }
     return pairs.map((pair) => ({ ...pair, ratio: contrast(pair.fg, pair.bg) }))
   })
 }
 
 for (const colorScheme of ['light', 'dark'] as const) {
-  test(`文字色对比度达到 4.5:1(${colorScheme})`, async ({ page }) => {
+  test(`文字与状态色对比度达到 4.5:1(${colorScheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme })
     await page.goto('/')
     await waitForPage(page)

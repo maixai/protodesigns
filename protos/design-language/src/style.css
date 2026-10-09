@@ -216,6 +216,9 @@
   --dl-radius-sm: 6px;
   --dl-radius-md: 8px;
   --dl-radius-lg: 12px;
+  /* 面板圆角:圆角随元素尺寸走 —— chip / 控件 / 卡片之外,还要有满高面板与浮层的
+     一档。业界大面板取 16–24px;取下沿 16px,与 6 / 8 / 12 的步进节奏一致。 */
+  --dl-radius-xl: 16px;
   --dl-radius-pill: 9999px;
   --dl-border-width: 1px;
   --dl-control-height: 36px;
@@ -280,13 +283,20 @@
   --dl-accent-500: #6fb3a4;
   --dl-accent-600: #8cc7b9;
   --dl-accent-700: #63a79a;
+  /* 点缀色与状态色:深色下整体提亮,取值来自 design-language.md ④ 的表
+     (本文件是规范的派生呈现,方向只有 rules → 页面)。此前只重定义了 -50 底色、
+     漏了 -600 前景色,导致深色下状态文字仍取浅色值、对比度跌破 4.5:1。 */
   --dl-highlight-50: #2c2418;
   --dl-highlight-600: #e3b876;
 
   --dl-success-50: #1e2a22;
+  --dl-success-600: #7fb894;
   --dl-warning-50: #2c2418;
+  --dl-warning-600: #e3b876;
   --dl-error-50: #2c1e1c;
+  --dl-error-600: #d98a80;
   --dl-info-50: #1c242b;
+  --dl-info-600: #8fb0c9;
 
   --dl-text-on-accent: #10201c;
 

@@ -21,6 +21,7 @@ import SpecExtrasSection from '../components/sections/spec-extras-section.vue'
 import SpacingSection from '../components/sections/spacing-section.vue'
 import ThemeSection from '../components/sections/theme-section.vue'
 import TokenIsolationSection from '../components/sections/token-isolation-section.vue'
+import TouchTargetSection from '../components/sections/touch-target-section.vue'
 import TypeTuningSection from '../components/sections/type-tuning-section.vue'
 import TypographySection from '../components/sections/typography-section.vue'
 import { CURRENT_DIRECTION } from '../theme/directions'
@@ -49,6 +50,7 @@ const direction = CURRENT_DIRECTION
           <async-states-section />
           <theme-section :direction-id="direction.id" />
           <spec-extras-section />
+          <touch-target-section />
           <do-dont-section />
           <token-isolation-section />
           <naive-mapping-section />

@@ -161,22 +161,56 @@ union AccountSession {
 }
 
 // 原型内的路由状态:home 是官网首页,workspace 是登录后进入的 AI Agent 工作台。
-// demoState 只是 dummy 数据层的演示开关(让异步四态可被直接寻址),不代表生产接口参数。
+// demoState 只是 dummy 数据层的演示开关(让异步四态与「等待交互」场景可被直接寻址),
+// 不代表生产接口参数。waiting 直达 Agent 等待用户确认的确认卡场景。
 @summary("AppRoute")
 @jsonSchema
 model AppRoute {
   page: "home" | "workspace";
-  demoState: "normal" | "empty" | "error";
+  demoState: "normal" | "empty" | "error" | "waiting";
 }
 
 // ---- 工作台的会话与消息 ----
+
+// 工作台里的 Agent:一个 Agent 承接多段会话,会话头显示当前会话归属的 Agent。
+enum AgentId {
+  planning,
+  research,
+  writing,
+}
+
+// 会话在**当前时刻**的状态:一个字段表达五态(取代原先只表达「是否等待用户交互」的
+// awaitingInteraction)。取值与 tab 上的状态图标一一对应:
+//   new       新会话
+//   streaming 响应(输出)中
+//   awaiting  等待交互(Agent 提请确认 / 需要用户拍板)
+//   completed 响应(输出)完成
+//   idle      等待对话(空闲)
+// 「是否已被用户看过」是**视图状态**,不进契约 —— 载体据它决定 awaiting / completed 的
+// 图标是否显示(看过即不再提示)。
+enum SessionStatus {
+  new,
+  streaming,
+  awaiting,
+  completed,
+  idle,
+}
 
 @summary("ChatSession")
 @jsonSchema
 model ChatSession {
   id: string;
   title: string;
+  agent: AgentId;
+  // 会话归属的项目:对话栏据此按项目隔离(只显示当前项目的会话)。
+  projectId: string;
   updatedAt: utcDateTime;
+  // 会话列表的次要行:便于扫读这段对话讲了什么。用「必填 + 空串表示无」而不是可选字段 ——
+  // 载体的 tsconfig 开了 exactOptionalPropertyTypes,可选字段在构造与展开更新时无法显式赋
+  // undefined,程序化组装一条 ChatSession 会处处别扭;空串语义与「可选」等价且更好处理。
+  preview: string;
+  // 该会话当前的状态(新会话 / 响应中 / 等待交互 / 响应完成 / 等待对话)。
+  status: SessionStatus;
 }
 
 @summary("ChatMessage")
@@ -196,4 +230,121 @@ union TranscriptState {
   empty: { status: "empty"; },
   error: { status: "error"; },
   ready: { status: "ready"; messages: ChatMessage[]; },
+}
+
+// ---- 工作台 Agent 与它的项目 ----
+
+// Agent 的运行状态:空闲 / 思考中 / 输出中 / 等待用户确认。
+enum AgentStatusId {
+  idle,
+  thinking,
+  streaming,
+  waiting,
+}
+
+// 项目条目在本次会话中的状态:新建 / 已修改 / 无变化 / 待确认(等待用户拍板)。
+// 状态芯片只对 created / modified / pending 渲染;none 表示无变化,不渲染芯片 ——
+// 旧设计里那枚「仅读」芯片既不承载行动信息、又挤占 260px 侧栏的宽度,故移除。
+// pending 只在 Agent 等待交互、该条目受影响时出现(见状态芯片的跨区域联动)。
+enum ProjectEntryStateId {
+  created,
+  modified,
+  none,
+  pending,
+}
+
+// 项目条目的类型:目录可折叠 / 展开,文件是只读展示行。
+enum ProjectEntryKindId {
+  directory,
+  file,
+}
+
+// 项目内的一个条目(目录或文件)。
+// 刻意用**扁平数组 + path** 而不是递归模型:本仓契约约定「每个生成的 schema 自包含,
+// 被引用的类型会内联」,而**递归类型无法内联**,会破坏该约定。层级由载体按 path 推导。
+@summary("ProjectEntry")
+@jsonSchema
+model ProjectEntry {
+  id: string;
+  path: string;                 // 相对项目根的路径,如 src/utils.ts
+  kind: ProjectEntryKindId;     // directory | file
+  state: ProjectEntryStateId;   // created | modified | none | pending
+}
+
+// 项目:Agent Host 上的一个目录,即 CLI 运行的 cwd。
+// entryCount 是摘要口径(供列表 / 头部展示);entries 是明细,列表接口下发空数组,
+// 树由「取项目树」接口按需加载(目录内容随时可能变,列表不必背着全量树)。
+@summary("Project")
+@jsonSchema
+model Project {
+  id: string;
+  name: string;                 // 展示名(目录名,技术标识,不随语言变化)
+  path: string;                 // 展示用短路径,如 ~/work/weekly-report
+  entryCount: int32;
+  entries: ProjectEntry[];
+}
+
+// 「打开项目」对话框里的一项:Agent Host 上检测到的候选目录。
+// path 是唯一标识(同 name 的目录可能存在于不同父目录下),勾选与去重都按 path。
+@summary("ProjectCandidate")
+@jsonSchema
+model ProjectCandidate {
+  path: string;
+  name: string;
+  fileCount: int32;
+  isGitRepo: boolean;
+}
+
+// Agent:身份 + 它打开的项目列表。
+@summary("Agent")
+@jsonSchema
+model Agent {
+  id: AgentId;            // 复用已有的 AgentId(planning / research / writing)
+  projects: Project[];
+}
+
+// ---- 运行遥测与「等待交互」确认 ----
+
+// Agent 运行时遥测(下一轮 UI 用，本轮先定契约与 mock)。
+// context 用量语义：只统计"最近一次请求的输入侧"(含 cache 读写)，**输出不计入占用**
+// —— 这是 Claude Code / Cursor / Codex 一致的口径。
+// projectName / projectPath 表达**当前项目**(CLI 运行的那个 cwd),不是 Agent 的某个
+// 「工作区」—— Agent 下可以有多个项目,遥测条最后一项说的必须是此刻正在用的那一个。
+@summary("AgentRuntime")
+@jsonSchema
+model AgentRuntime {
+  agentId: AgentId;
+  status: AgentStatusId;
+  statusDetail: string;   // 正在做什么的**具体**文案键；业界明令禁止「处理中」这类模糊词
+  modelName: string;
+  contextUsedTokens: int32;
+  contextWindowTokens: int32;
+  elapsedSeconds: int32;
+  projectName: string;    // 当前项目展示名(目录名)
+  projectPath: string;    // 当前项目短路径
+}
+
+// 「等待交互」时 Agent 提请确认的动作(下一轮 UI 用)。
+@summary("ConfirmationRequest")
+@jsonSchema
+model ConfirmationRequest {
+  id: string;
+  summary: string;      // 一句话说清要做什么
+  detail: string;       // 展开后的细节
+  affectedFiles: string[];
+}
+
+// ---- 会话搜索 ----
+
+// 会话搜索命中:结果必须能定位到具体某一轮对话。
+// 「标题命中」与「正文命中」是两种互斥的命中理由,用判别联合表达,判别符 reason 的取值
+// 与变体名一致 —— 载体按 reason 分流(标题命中不跳转不高亮,正文命中跳到 turnId 并高亮),
+// 不再用「空串 turnId」这类魔法值反推状态。
+// 变体只带该命中理由**确实拥有**的数据:正文片段(snippet)与可跳转轮次(turnId)只有正文
+// 命中才有 —— 标题命中没有上下文可截,载体据 reason 决定是否渲染片段行,不拿标题充当片段。
+@summary("ConversationSearchHit")
+@jsonSchema
+union ConversationSearchHit {
+  title: { reason: "title"; sessionId: string; title: string; },
+  body: { reason: "body"; sessionId: string; title: string; snippet: string; turnId: string; },
 }

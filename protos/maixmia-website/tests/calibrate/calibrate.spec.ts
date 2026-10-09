@@ -209,6 +209,36 @@ test('正文与背景对比度逐对达标', async ({ page }) => {
   expect(await contrastViolations(page)).toEqual([])
 })
 
+// 顶栏满幅(本次改动固化):顶栏不再套 .dl-container(1520px 上限),只保留外壳
+// gutter,品牌贴视口左缘、右侧动作区贴视口右缘 —— 否则宽屏下顶栏控件会与正文同宽、
+// 向内塌,顶部一条留白显得没铺满。24 与 style.css 的 --dl-chrome-gutter 同步
+// (测试读不到 CSS 变量,只能写死同值)。
+const CHROME_GUTTER = 24
+
+for (const width of [1280, 1600]) {
+  test(`顶栏满幅 @${width}:品牌贴左、动作贴右`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await page.goto('/')
+    await waitForStable(page)
+
+    // 品牌左缘落在 24px gutter 上。
+    const brand = await page.locator('.site-header__brand').boundingBox()
+    expect(brand).not.toBeNull()
+    if (brand === null) return
+    expect(Math.abs(brand.x - CHROME_GUTTER)).toBeLessThanOrEqual(1)
+
+    // 右侧动作区最后一个可见控件的右缘贴视口右缘 − gutter。
+    // 以 clientWidth 为基准而非 viewportSize().width —— 本页可纵向滚动,经典滚动条
+    // (Chromium 桌面)占在视口内,布局视口比视口参数窄约 15px,拿视口参数比会假红。
+    const layoutViewportWidth = await page.evaluate(() => document.documentElement.clientWidth)
+    const control = await page.locator('.site-header__actions > *:visible').last().boundingBox()
+    expect(control).not.toBeNull()
+    if (control === null) return
+    expect(Math.abs(control.x + control.width - (layoutViewportWidth - CHROME_GUTTER))).toBeLessThanOrEqual(1)
+  })
+}
+
 // 切换面板逐屏遍历:非活动 panel 是 visibility:hidden,天然截不到图、
 // 对比度断言也扫不到,必须逐屏激活后分别验证,否则覆盖率会假性达标。
 // 截图基线只在基准宽度 1280 逐屏各截一张;其余宽度保留整页截图(默认首屏)。
@@ -645,7 +675,8 @@ test('顶栏滚动时固定在视口顶端', async ({ page }) => {
   // 忽略登录过程,同步成为已登录态并进入工作台。
   await login.click()
   await expect(page).toHaveURL(/#\/workspace$/)
-  await expect(page.getByRole('heading', { level: 1, name: 'Workspace', exact: true })).toBeVisible()
+  // 会话头 h1 = 当前会话任务名(activeId 默认 weekly),不再是固定的页面名。
+  await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
   await expect(header.getByRole('button', { name: 'Account menu: 林一舟' })).toBeVisible()
   await expect(login).toHaveCount(0)
 })

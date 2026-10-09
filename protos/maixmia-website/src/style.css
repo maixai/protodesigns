@@ -77,6 +77,9 @@
   --dl-radius-sm: 6px;
   --dl-radius-md: 8px;
   --dl-radius-lg: 12px;
+  /* 面板 / 浮层档:满高面板用 lg(12px)圆弧相对面板尺寸太小、视觉上仍接近直角,
+     故补一档更大半径(见 design-language.md ⑥ 的分工)。 */
+  --dl-radius-xl: 16px;
   --dl-radius-pill: 9999px;
   --dl-border-width: 1px;
   --dl-control-height: 36px;
@@ -108,6 +111,11 @@
   /* 布局常量:内容容器、吸顶栏高度 */
   --dl-container-max: 1520px;
   --dl-header-height: 60px;
+
+  /* 外壳 gutter:顶栏与应用框架只共享 .dl-container 的视口内边距,
+     不共享它的 1520px 上限 —— 品牌/账号因此能贴到视口两侧,
+     把宽屏的横向空间用起来(内容区仍限宽居中)。 */
+  --dl-chrome-gutter: var(--dl-space-6);
 }
 
 /* ==========================================================================
@@ -138,6 +146,10 @@
   --dl-highlight: #8a6420;
   --dl-success: #3f6b4f;
   --dl-warning: #8a6420;
+  /* 警告色的浅底:用于「等待确认」徽标这类需要在警告语义族内成对出现的底 / 字组合
+     (bg 用本 token、字用 --dl-warning)。取值同 design-language 展示页的 --dl-warning-50,
+     以保证在警告色文字下达到正文级对比度。 */
+  --dl-warning-subtle: #fbf4e8;
   --dl-error: #9c4038;
   --dl-info: #3d5a70;
   --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
@@ -199,6 +211,9 @@
   --dl-highlight: #e3b876;
   --dl-success: #7fb894;
   --dl-warning: #e3b876;
+  /* 警告色浅底的深色取值:同展示页 --dl-warning-50 的深色档,配合提亮后的 --dl-warning
+     仍满足正文级对比度。 */
+  --dl-warning-subtle: #2c2418;
   --dl-error: #d98a80;
   --dl-info: #8fb0c9;
   /* 深色下阴影不承担层级,取值进一步减弱 */

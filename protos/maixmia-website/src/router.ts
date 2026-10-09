@@ -12,7 +12,7 @@ function parseHash(hash: string): AppRoute {
     return { page: 'home', demoState: 'normal' }
   }
   const demo = new URLSearchParams(query).get('s')
-  return { page: 'workspace', demoState: demo === 'empty' || demo === 'error' ? demo : 'normal' }
+  return { page: 'workspace', demoState: demo === 'empty' || demo === 'error' || demo === 'waiting' ? demo : 'normal' }
 }
 
 function clearHash(): void {

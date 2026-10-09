@@ -103,6 +103,67 @@ export const ICONS = {
     paths: ['M4.5 12.5l5 5L19.5 7'],
     circles: [],
   },
+  // 等待交互:交互式卡片(圆角矩形 + 两条选项内容)。会话 tab 的状态图标之一,
+  // 表达「Agent 递上一张要你拍板的卡片」。与 sparkles(星芒)/ check(对勾)在灰度下也互不相似。
+  choiceCard: {
+    paths: [
+      'M8 5h8a4 4 0 0 1 4 4v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4z',
+      'M9 10h6.5',
+      'M9 14h4',
+    ],
+    circles: [],
+  },
+  // 工作区文件类型(document):带折角与文字行的页面
+  fileText: {
+    paths: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
+    circles: [],
+  },
+  // (sheet):带表头行与分列的表格
+  table: {
+    paths: ['M4 5h16v14H4z', 'M4 10h16', 'M10 5v14'],
+    circles: [],
+  },
+  // (slide):演示画面 + 支架
+  presentation: {
+    paths: ['M4 4h16v11H4z', 'M12 15v4', 'M9 19h6'],
+    circles: [],
+  },
+  // (image):相框 + 山形与日点
+  image: {
+    paths: ['M4 5h16v14H4z', 'M4 16l4.5-4.5L14 17l3-3 3 3'],
+    circles: [{ cx: 8.8, cy: 9.2, r: 1.4 }],
+  },
+  // (data):数据库圆柱
+  database: {
+    paths: ['M12 3c4.4 0 8 1.1 8 2.5S16.4 8 12 8 4 6.9 4 5.5 7.6 3 12 3z', 'M4 5.5v13C4 19.9 7.6 21 12 21s8-1.1 8-2.5v-13', 'M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5'],
+    circles: [],
+  },
+  // (code):尖括号
+  code: {
+    paths: ['M9 8l-4 4 4 4', 'M15 8l4 4-4 4'],
+    circles: [],
+  },
+  // 搜索:放大镜(对话栏搜索框)
+  search: {
+    paths: ['M21 21l-4.3-4.3'],
+    circles: [{ cx: 11, cy: 11, r: 7 }],
+  },
+  // 对话栏折叠:左向尖角
+  chevronLeft: {
+    paths: ['M15 6l-6 6 6 6'],
+    circles: [],
+  },
+  // 对话栏展开:右向尖角
+  chevronRight: {
+    paths: ['M9 6l6 6-6 6'],
+    circles: [],
+  },
+  // 回到底部:向下的箭头(竖杆 + 箭头头),不复用旋转的 chevron / 下载图标 ——
+  // 「回到底部」是跳转语义,与「展开」「下载」都不是一回事。
+  arrowDown: {
+    paths: ['M12 5v14', 'M6 13l6 6 6-6'],
+    circles: [],
+  },
 } as const satisfies Record<string, IconShape>
 
 export type IconName = keyof typeof ICONS
@@ -123,6 +184,15 @@ export function toIconName(icon: string): IconName {
     case 'sparkles':
     case 'download':
     case 'badge':
+    case 'fileText':
+    case 'table':
+    case 'presentation':
+    case 'image':
+    case 'database':
+    case 'code':
+    case 'search':
+    case 'chevronLeft':
+    case 'chevronRight':
       return icon
     default:
       return 'grid'

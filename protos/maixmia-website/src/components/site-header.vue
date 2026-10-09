@@ -30,7 +30,7 @@ async function onSignedOut(): Promise<void> {
        那层 div 只带一个类名、不承载样式,因此去掉它不影响 Naive 组件的主题。 -->
   <n-config-provider abstract :theme-overrides="darkOverrides">
     <header id="top" class="site-header dl-scope dl-scope--dark">
-      <div class="dl-container site-header__inner">
+      <div class="site-header__inner">
         <a class="site-header__brand" href="#top" aria-label="Mia">
           <span class="site-header__mark" aria-hidden="true">M</span>
           <span class="site-header__word">Mia</span>
@@ -56,11 +56,15 @@ async function onSignedOut(): Promise<void> {
   border-bottom: var(--dl-border-width) solid var(--dl-border-subtle);
 }
 
+/* 顶栏刻意不套 .dl-container:它是 chrome 不是正文,只借外壳 gutter 贴视口两侧,
+   若继承 1520px 上限,宽屏下品牌与账号会向内塌、两侧留下大片空白。
+   正文内容仍由 .dl-container 限宽居中(见 style.css 的 --dl-chrome-gutter)。 */
 .site-header__inner {
   display: flex;
   align-items: center;
   gap: var(--dl-space-6);
   height: var(--dl-header-height);
+  padding-inline: var(--dl-chrome-gutter);
 }
 
 .site-header__brand {

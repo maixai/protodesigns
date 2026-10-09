@@ -55,7 +55,8 @@ test('账户 disclosure:键盘可达、Esc 关闭、登出二次确认与还焦'
   await tabTo(page, login)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/#\/workspace$/)
-  await expect(page.getByRole('heading', { level: 1, name: 'Workspace', exact: true })).toBeVisible()
+  // 会话头 h1 = 当前会话任务名(activeId 默认 weekly),不再是固定的页面名。
+  await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
   const account = header.getByRole('button', { name: 'Account menu: 林一舟', exact: true })
   await tabTo(page, account)
   await expect(account).toBeFocused()
@@ -125,7 +126,7 @@ for (const width of [375, 768, 1280, 1600]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-    await expect(page.getByRole('heading', { level: 1, name: 'Workspace', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
     const account = page.getByRole('button', { name: 'Account menu: 林一舟', exact: true })
     await account.click()
     const group = page.getByRole('group', { name: 'Account menu', exact: true })

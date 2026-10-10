@@ -7,9 +7,11 @@ import type { ProjectCandidate } from '../contracts/generated/project-candidate'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
+import type { FileContent } from '../contracts/generated/file-content'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import { delay } from '../mocks/delay'
+import { mockFileContent } from '../mocks/files'
 import {
   mockAgentRuntime,
   mockAgents,
@@ -147,4 +149,22 @@ export async function searchConversations(query: string, projectId: string): Pro
   const demoState = currentRoute.value.demoState
   await delay()
   return { ok: true, value: mockSearchHits(query, projectId, demoState) }
+}
+
+// 取一份文件内容(供文件面板渲染)。文件在会话里的状态(新建 / 已改 / 待确认)不在这里下发 ——
+// 它与文件树的芯片同源,由载体按同一条派生规则计算,避免两个事实源对不上。
+// confirmationId 指向**当前会话**的确认请求:待确认文件的「允许 / 拒绝」因此与转录里的确认卡
+// 作用于同一个 ConfirmationRequest。
+export async function getFileContent(projectId: string, path: string, sessionId: string): Promise<Result<FileContent>> {
+  const demoState = currentRoute.value.demoState
+  await delay()
+  // 演示态 error(与转录 / 项目列表同一套开关)让文件面板的 error 态可被直接寻址。
+  if (demoState === 'error') return { ok: false, error: new Error(t.value.workspace.fileError) }
+  const tree = mockProjectTree(projectId)
+  if (tree === null) return { ok: false, error: new Error(t.value.workspace.invalidProject) }
+  if (!tree.some((entry) => entry.path === path)) return { ok: false, error: new Error(t.value.workspace.fileNotFound) }
+  const request = mockConfirmationRequest(sessionId, demoState)
+  const base = mockFileContent(projectId, path)
+  const confirmationId = request !== undefined && request.affectedFiles.includes(path) ? request.id : ''
+  return { ok: true, value: { ...base, confirmationId } }
 }

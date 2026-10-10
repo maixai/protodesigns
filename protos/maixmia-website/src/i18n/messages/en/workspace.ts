@@ -95,6 +95,8 @@ export const workspace = {
   emptyMessage: 'Enter a message first',
   invalidAgent: 'Agent not found',
   noConfirmation: 'No confirmation pending',
+  fileError: 'The connection was interrupted while reading the file',
+  fileNotFound: 'File not found',
   sessions: {
     weekly: 'Turn project updates into an action plan',
     roadmap: 'Plan next quarter’s roadmap',
@@ -193,6 +195,68 @@ export const workspace = {
     // The second "waiting" conversation (quarterly): its own request copy, aligned with its file.
     quarterlySummary: 'Rewrite “release-plan.csv” with the latest data',
     quarterlyDetail: 'This week’s actual progress will be written back into the plan column of “release-plan.csv”. The current schedule will be replaced and cannot be restored from the project directory.',
+  },
+  // ---- File bar (the strip under the composer) and file panel (double-click a file in the tree
+  // to render it on the right) ----
+  // The file bar lists the files opened in the current conversation, each tab carrying the same
+  // state chip as the file tree (Created / Modified / Pending) — so the strip is not just "what is
+  // open" but an overview of "which files the agent touched".
+  fileBar: {
+    label: 'Open files',
+    closeFile: 'Close {name}',
+    menu: 'All open files and recently opened',
+    hiddenCount: '{count} collapsed',
+    recent: 'Recently opened',
+    // The two groups of recently opened files: this project first, then the others.
+    recentCurrent: 'This project',
+    recentOther: 'Other projects',
+    // Empty state of the always-present strip: it also carries the job of teaching the gesture.
+    empty: 'Double-click a file on the left to open it here',
+    menuEmpty: 'Nothing opened yet',
+    // A tab's title (mouse-readable): path plus how it was opened. File names are technical
+    // identifiers, written the same way in every language.
+    previewTag: 'Preview (click to keep open)',
+    pinnedTag: 'Pinned',
+  },
+  // The file panel shows the whole file with change markers by default (not just diff fragments),
+  // and can switch to unified / side-by-side diff. Line markers use shapes, not colour alone
+  // (added +, removed −, modified ~); word-level highlight marks what actually changed.
+  filePanel: {
+    label: 'File panel',
+    close: 'Close file panel',
+    viewLabel: 'View',
+    viewFile: 'Whole file',
+    viewUnified: 'Unified diff',
+    viewSide: 'Side-by-side',
+    sideUnavailable: 'The window is too narrow, so side-by-side fell back to unified',
+    wrap: 'Wrap lines',
+    // Title bar (also the drag handle): accessible name plus hover hint.
+    headerLabel: 'File title bar',
+    headerHint: 'Drag the title bar to move the window · double-click it to reset',
+    moveHint: 'Arrow keys move the window',
+    // Resize handles (APG Window Splitter): accessible names for the four edges plus the key hint.
+    resizeRight: 'Resize panel width (right edge)',
+    resizeLeft: 'Resize panel width (left edge)',
+    resizeBottom: 'Resize panel height (bottom edge)',
+    resizeTop: 'Resize panel height (top edge)',
+    resizeHint: 'Arrow keys to resize · Shift for a large step · Home/End for min/max',
+    // Column headers of the side-by-side diff (left = before, right = after).
+    oldLabel: 'Before',
+    newLabel: 'After',
+    fold: 'Expand {count} unchanged lines',
+    unchangedCount: '{count} unchanged lines',
+    added: 'Added line',
+    removed: 'Removed line',
+    modified: 'Modified line',
+    unchanged: 'Unchanged',
+    addedStat: '+{count}',
+    removedStat: '−{count}',
+    loading: 'Loading file…',
+    errorTitle: 'Unable to read this file',
+    errorBody: 'The connection was interrupted. Retry to keep viewing.',
+    retry: 'Retry',
+    emptyTitle: 'Cannot preview this file',
+    emptyBody: 'This is a binary file; the workspace previews text content only.',
   },
   // Workspace agent names: the conversation-heading subtitle shows the session's owning agent.
   agents: {

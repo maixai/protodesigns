@@ -334,6 +334,56 @@ model ConfirmationRequest {
   affectedFiles: string[];
 }
 
+// ---- 文件面板:一份文件的内容与变更标记 ----
+//
+// 文件面板默认**不是 diff、而是整个文件 + 变更标记**(依据:matklad 那篇被广泛引用的分析认为
+// 「在上下文里看改动」优于「只看片段」;亦与 GitHub 的 rich diff 同向)。因此契约把「整份文件的
+// 每一行」作为最小单位下发,每行自带它在该次改动里的角色与词级高亮区间 —— 载体据此渲染
+// 行号栏的变更标记(形状区分)、词级高亮与折叠,而不必由契约预先切成 diff 片段。
+
+// 行级变更类型:新增 / 删除 / 修改 / 无变化。用**形状**而非仅颜色区分(WCAG 1.4.1)。
+enum FileLineChangeId {
+  added,
+  removed,
+  modified,
+  none,
+}
+
+// 行内词级高亮的字符区间(半开区间 [start, end),按 UTF-16 码元计)。
+// 词级是默认粒度(GitHub 与 IntelliJ 的既有默认):整行染色会把「改了一个词」放大成「整行被改」。
+model FileInlineSpan {
+  start: int32;
+  end: int32;
+}
+
+// 文件的一行:行号 + 变更类型 + 文本 + 词级高亮区间 + 该行修改前的内容。
+// previous 只在 change 为 modified 时有意义,其余为空串 —— 用「必填 + 空串表示无」而非可选字段,
+// 与本契约其它实体一致(载体的 tsconfig 开了 exactOptionalPropertyTypes,可选字段难以展开更新)。
+// spans 描述的是 text(改动后)里的高亮区间。
+model FileLine {
+  number: int32;
+  change: FileLineChangeId;
+  text: string;
+  previous: string;
+  spans: FileInlineSpan[];
+}
+
+// 文件面板要渲染的一份文件内容。
+// language 只用于等宽展示(不做真语法高亮);confirmationId 是「待确认」文件对应的确认请求 id
+// —— 面板内的允许 / 拒绝因此与转录里的确认卡作用于同一个 ConfirmationRequest(非待确认时为空串)。
+// 文件在**会话里的状态**(新建 / 已改 / 待确认)不进本契约:它与文件树的芯片同源,由载体的同一
+// 派生函数计算(允许确认后即时从 pending 变 modified),放进契约会成为对不上的第二个事实源。
+@summary("FileContent")
+@jsonSchema
+model FileContent {
+  path: string;
+  language: string;
+  addedCount: int32;
+  removedCount: int32;
+  confirmationId: string;
+  lines: FileLine[];
+}
+
 // ---- 会话搜索 ----
 
 // 会话搜索命中:结果必须能定位到具体某一轮对话。

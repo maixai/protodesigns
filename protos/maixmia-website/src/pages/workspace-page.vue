@@ -11,8 +11,10 @@ import type { AppRoute } from '../contracts/generated/app-route'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { ProjectTreeRow } from '../data/project-tree'
+import type { FileTab, FileWorkspace, FilePanelState, RecentFile } from '../data/open-files'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
-import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getProjectTree, getTranscript, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
+import { emptyFileWorkspace, fileTabKey, rememberRecent } from '../data/open-files'
+import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
@@ -20,6 +22,8 @@ import AgentSelector from '../components/agent-selector.vue'
 import ConfirmationCard from '../components/confirmation-card.vue'
 import ConversationSwitcher from '../components/conversation-switcher.vue'
 import DliIcon from '../components/dl-icon.vue'
+import FileBar from '../components/file-bar.vue'
+import FilePanel from '../components/file-panel.vue'
 import ProjectMenu from '../components/project-menu.vue'
 import ProjectPickerDialog from '../components/project-picker-dialog.vue'
 
@@ -103,6 +107,18 @@ const expandedDirs = ref<Set<string>>(new Set())
 const projectTrees = ref<Record<string, ProjectEntry[]>>({})
 const treeStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const isPickerOpen = ref(false)
+// ---- 文件栏与文件面板(双击文件树里的文件 → 在右侧渲染该文件)----
+// 打开集 / 活动文件 / 最近打开都是**视图状态**(不进契约),且是**全局**的:跨项目、跨会话共享,
+// 换项目 / 换会话都不清空。每个 tab 自带所属项目(栏里可能混装多个项目的文件),故 tab 上要
+// 自己声明出处。刷新即重置。关闭 ≠ 删除 —— 关掉的文件仍在「最近打开」里,可再打开。
+const fileWorkspace = ref<FileWorkspace>(emptyFileWorkspace())
+const recentFiles = ref<RecentFile[]>([])
+const fileContent = ref<FilePanelState>({ status: 'loading' })
+// 文件内容加载的版本号:快速换文件时,乱序返回的旧内容不得覆盖新文件。
+let fileVersion = 0
+// 键盘在文件行上按 Enter = 钉住打开;native button 的 keydown 会再派发一次 click,
+// 用这个标记把那次 click(单击语义)吞掉,避免「钉住」被随后的「预览」降级。
+let suppressFileRowClick = false
 // 工作台重装的版本号:项目 / 会话 / 转录 / 遥测共用一次装载,乱序返回时只认最新一次。
 let workspaceVersion = 0
 // 转录的接管代次:新建对话 / 发送 / 切会话 / 打开搜索命中都会推进它。
@@ -222,13 +238,18 @@ function formatFileCount(count: number): string {
   return t.value.workspace.fileCount.replace('{count}', String(count))
 }
 
-// 条目状态芯片:等待确认时受影响的条目显示为 pending;允许后变 modified(已改);
-// 拒绝则回到原状态。none(无变化)不渲染芯片 —— 芯片只承载「新建 / 已改 / 待确认」。
-function entryState(row: ProjectTreeRow): ProjectEntryStateId {
-  if (!affectedPaths.value.includes(row.path)) return row.state
+// 条目状态芯片的**唯一派生规则**(文件树、文件栏、文件面板共用这一条):等待确认时受影响的条目
+// 显示为 pending;允许后变 modified(已改);拒绝则回到原状态。none(无变化)不渲染芯片 ——
+// 芯片只承载「新建 / 已改 / 待确认」。三处共用同一条规则,芯片因此不会互相对不上。
+function resolveEntryState(base: ProjectEntryStateId, path: string): ProjectEntryStateId {
+  if (!affectedPaths.value.includes(path)) return base
   if (confirmationOutcome.value === 'allowed') return 'modified'
-  if (confirmationOutcome.value === 'rejected') return row.state
+  if (confirmationOutcome.value === 'rejected') return base
   return 'pending'
+}
+
+function entryState(row: ProjectTreeRow): ProjectEntryStateId {
+  return resolveEntryState(row.state, row.path)
 }
 
 function chipLabel(state: ProjectEntryStateId): string | null {
@@ -263,6 +284,157 @@ function toggleDirectory(projectId: string, path: string): void {
   if (next.has(key)) next.delete(key)
   else next.add(key)
   expandedDirs.value = next
+}
+
+// ---- 文件栏与文件面板:打开 / 关闭 / 排序 / 取内容 / 跨项目 -
+
+const fileTabs = computed<FileTab[]>(() => fileWorkspace.value.tabs)
+const activeFileKey = computed(() => fileWorkspace.value.activeKey)
+// 活动文件(= 打开集里那个 tab)—— 面板的内容与出处都由它决定,与「当前项目」**解耦**。
+const activeFile = computed<FileTab | null>(() => fileTabs.value.find((item) => fileTabKey(item) === activeFileKey.value) ?? null)
+// 面板显示 ⟺ 有活动文件。关闭面板 = 收起活动标记(文件仍在栏上,这正是「关闭 ≠ 删除」)。
+const isFilePanelOpen = computed(() => activeFile.value !== null)
+// 「允许 / 拒绝」只在文件属于**当前会话的**待确认请求时出现 —— 跨项目不提供写动作。
+const canConfirmActiveFile = computed(() => activeFile.value !== null && activeFile.value.projectId === selectedProjectId.value)
+// ▾ 菜单的「最近打开」:跨项目;**仍然打开着**的那些不重复列(它们已在栏上)。
+const recentForBar = computed<RecentFile[]>(() => recentFiles.value.filter((entry) => !fileTabs.value.some((tab) => tab.projectId === entry.projectId && tab.path === entry.path)))
+
+// 当前项目的展示名:从项目树打开文件时作为该 tab 的出处。
+const currentProjectName = computed(() => projects.value.find((project) => project.id === selectedProjectId.value)?.name ?? '')
+
+// tab 的状态芯片:按该 tab **自己的项目**回查条目(别的项目的树没加载时为 none → 不渲染芯片)。
+function entryStateOfTab(tab: FileTab): ProjectEntryStateId {
+  const entry = projectTrees.value[tab.projectId]?.find((item) => item.path === tab.path)
+  const base = entry?.state ?? 'none'
+  // 「待确认 → 允许后变已改」这条联动只属于**当前会话**(确认请求挂在当前项目的那条会话上);
+  // 其它项目的 tab 拿不到那层的上下文,只报基础状态。
+  return tab.projectId === selectedProjectId.value ? resolveEntryState(base, tab.path) : base
+}
+
+function setFileWorkspace(next: FileWorkspace): void {
+  fileWorkspace.value = next
+}
+
+// 取一份文件内容。版本号挡住乱序返回:快速换文件时,旧文件的响应不得盖住新文件。
+// 出处由**活动文件自己**给出(跨项目),不再取「当前项目」。
+async function loadFileContent(file: { projectId: string; path: string }): Promise<void> {
+  fileVersion += 1
+  const version = fileVersion
+  const sessionId = activeId.value
+  fileContent.value = { status: 'loading' }
+  const result = await getFileContent(file.projectId, file.path, sessionId)
+  if (!isAlive.value || version !== fileVersion) return
+  // 用户可能已经切走 / 关掉了这个文件(活动文件变了就不再写)。
+  const current = activeFile.value
+  if (current === null || current.projectId !== file.projectId || current.path !== file.path) return
+  if (!result.ok) {
+    fileContent.value = { status: 'error' }
+    return
+  }
+  // 空行数组 = 二进制 / 无可预览的文本 → 走「空态」。
+  fileContent.value = result.value.lines.length === 0 ? { status: 'empty' } : { status: 'ready', content: result.value }
+}
+
+// 打开文件:kind 为 preview(单击,占临时槽,顶掉旧预览)或 pinned(双击 / Enter,独占一格)。
+// 出处 = 传进来的项目(从项目树打开时是当前项目;从「最近打开」点开时是那条自己的项目)。
+// 已在栏上时:预览提升为固定(原地转正,不新增 tab);已固定的只切为活动。
+function openFile(projectId: string, projectName: string, path: string, kind: FileTab['kind']): void {
+  const workspace = fileWorkspace.value
+  const key = fileTabKey({ projectId, path })
+  const existing = workspace.tabs.find((tab) => fileTabKey(tab) === key)
+  let tabs = workspace.tabs
+  if (existing === undefined) {
+    const fresh: FileTab = { path, projectId, projectName, kind }
+    if (kind === 'preview') {
+      const previewIndex = workspace.tabs.findIndex((tab) => tab.kind === 'preview')
+      tabs = previewIndex >= 0 ? workspace.tabs.map((tab, index) => (index === previewIndex ? fresh : tab)) : [...workspace.tabs, fresh]
+    } else {
+      tabs = [...workspace.tabs, fresh]
+    }
+  } else if (kind === 'pinned' && existing.kind === 'preview') {
+    tabs = workspace.tabs.map((tab) => (fileTabKey(tab) === key ? { ...tab, kind } : tab))
+  }
+  setFileWorkspace({ tabs, activeKey: key })
+  recentFiles.value = rememberRecent(recentFiles.value, { agentId: selectedAgent.value, projectId, projectName, path })
+  // 内容由 watch(activeFile) 统一取。
+}
+
+// 从项目树打开:出处取**当前项目**。
+function openFromTree(path: string, kind: FileTab['kind']): void {
+  if (selectedProjectId.value === '') return
+  openFile(selectedProjectId.value, currentProjectName.value, path, kind)
+}
+
+// 文件树里的文件行:单击 = 预览(键盘派生的 click 不计,由 keydown 处理)。
+function onFileRowClick(row: ProjectTreeRow, event: MouseEvent): void {
+  if (suppressFileRowClick) {
+    suppressFileRowClick = false
+    return
+  }
+  if (event.detail === 0) return
+  openFromTree(row.path, 'preview')
+}
+
+// 双击 = 钉住(独占一格)。
+function onFileRowDblClick(row: ProjectTreeRow): void {
+  openFromTree(row.path, 'pinned')
+}
+
+// 键盘:焦点在文件行上按 Enter(或空格)= 钉住打开。
+function onFileRowKey(event: KeyboardEvent, row: ProjectTreeRow): void {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  suppressFileRowClick = true
+  openFromTree(row.path, 'pinned')
+}
+
+function selectFileTab(key: string): void {
+  if (activeFileKey.value === key) return
+  setFileWorkspace({ ...fileWorkspace.value, activeKey: key })
+}
+
+// 关闭一个文件 tab(≠ 删除):从栏上撤下,活动项落到相邻(优先右侧);一个不剩则收起面板。
+// 「最近打开」不动,故关掉的文件仍能在 ▾ 菜单里找到、点回。
+function closeFileTab(key: string): void {
+  const workspace = fileWorkspace.value
+  const index = workspace.tabs.findIndex((tab) => fileTabKey(tab) === key)
+  if (index < 0) return
+  const neighbor = workspace.tabs[index + 1] ?? workspace.tabs[index - 1] ?? null
+  const nextActive = workspace.activeKey === key ? (neighbor === null ? '' : fileTabKey(neighbor)) : workspace.activeKey
+  setFileWorkspace({ tabs: workspace.tabs.filter((tab) => fileTabKey(tab) !== key), activeKey: nextActive })
+}
+
+function reorderFileTabs(order: string[]): void {
+  const byKey = new Map(fileWorkspace.value.tabs.map((tab) => [fileTabKey(tab), tab]))
+  const tabs = order.flatMap((key) => {
+    const tab = byKey.get(key)
+    return tab === undefined ? [] : [tab]
+  })
+  setFileWorkspace({ ...fileWorkspace.value, tabs })
+}
+
+// 点「最近打开」里的条目:直接以**它自己的项目**打开 —— **不切换当前项目**(跨项目打开是
+// 阅读动作,不该带来意外的导航)。
+function openRecentFile(entry: RecentFile): void {
+  if (isBusy.value) return
+  openFile(entry.projectId, entry.projectName, entry.path, 'preview')
+}
+
+// 收起文件面板(Esc / 面板的关闭钮):文件留在栏上,焦点还给栏里那个 tab(键盘操作者不丢位置)。
+function closeFilePanel(): void {
+  const key = activeFileKey.value
+  if (key === '') return
+  const workspace = fileWorkspace.value
+  setFileWorkspace({ ...workspace, activeKey: '' })
+  void nextTick(() => {
+    const tab = document.querySelector<HTMLElement>(`.file-tab[data-file-key="${CSS.escape(key)}"]`)
+    tab?.focus()
+  })
+}
+
+function retryFile(): void {
+  const file = activeFile.value
+  if (file !== null) void loadFileContent(file)
 }
 
 // 清掉正在进行的生成(切会话 / 换项目 / 演示态切换时调用),避免旧流写进新的转录。
@@ -821,16 +993,19 @@ function onMotionChange(): void {
   }
 }
 
-// 悬浮输入框的高度跟随:把它写进面板上的 --composer-float-height,转录区的底部内边距
-// (= 该高度 + 一个间隙)与「回到底部」的纵向落点都由它派生。多行输入向上生长时,只有这段
-// 内边距变长(只延长可滚动范围、不移动当前滚动位置),流内的遥测条 / 提示行几何不受影响。
+// 悬浮输入框的高度跟随:把测量到的输入框高度写进 --composer-float-height,转录区的底部内边距
+// (= 它 + 输入框到坞顶的间隙 + 留白)与「回到底部」的纵向落点都由 --composer-inset 派生。
+// 文件栏的高度**不由这里量测**:它停靠在坞的文档流最底下(.file-bar-dock),坞因此变高、
+// 坞顶(转录区底边)随之被顶高,输入框锚在坞顶之上也一并上移 —— 量测它只会多此一举、
+// 且量测晚一帧时输入框还停在旧位置(实测过的竞态)。多行输入向上生长时,只有这段内边距变长
+// (只延长可滚动范围、不移动当前滚动位置),流内的遥测条几何不受影响。
 let composerObserver: ResizeObserver | undefined
 
-function syncComposerHeight(): void {
+function syncComposerMetrics(): void {
   const height = composerForm.value?.offsetHeight ?? 0
   conversationPanel.value?.style.setProperty('--composer-float-height', `${height}px`)
-  // 内缩随输入框长高而同步变大。若转录正贴底,把视图**重新贴到底** —— 否则刚长出的那一截
-  // 会盖住最后一条消息(用户输入多行时应当「无感」)。等新内边距生效(nextTick)后再贴。
+  // 内缩随输入框长高而同步变大(坞高变化时也一样)。若转录正贴底,把视图**重新贴到底** ——
+  // 否则刚长出的那一截(或刚出现的文件栏)会盖住最后一条消息(用户输入多行 / 打开文件时应当「无感」)。
   if (isPinned.value && transcript.value.status === 'ready') void stickToBottom()
 }
 
@@ -841,6 +1016,16 @@ function onSwitcherShortcut(event: KeyboardEvent): void {
   if (!event.metaKey && !event.ctrlKey) return
   event.preventDefault()
   isSwitcherOpen.value = true
+}
+
+// Esc 收起文件面板:面板是**非模态**的覆盖层,所以不圈定焦点,关闭后把焦点还给文件栏里那个
+// tab。抽屉开着时让位给抽屉 —— 一次 Escape 只关最上层:抽屉的处理器在它之前注册、且会
+// preventDefault 认领这次按键,故这里看到 defaultPrevented 就直接让过(否则会同时关掉两层)。
+// 文件栏的 ▾ 菜单自己处理 Esc 并阻止冒泡,故这里不必再判。
+function onFilePanelEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+  if (!isFilePanelOpen.value || isDrawerOpen.value) return
+  closeFilePanel()
 }
 
 // 演示态把「当前会话 / 侧栏 Agent / 项目」钉到与该状态一致的一组:waiting 直达写作助手
@@ -866,6 +1051,16 @@ watch(locale, () => {
   // 项目 / 条目的名称与路径都是技术标识,不随语言变化,故只重取会话(标题本地化)与遥测。
   void reloadWorkspace(false)
 })
+// 活动文件(含切会话 / 换项目带来的变化)决定面板内容 —— 取内容的唯一入口。
+watch(activeFile, (file) => {
+  if (file === null) {
+    // 收起面板:作废在途的文件读取,别让它的结果写回一个已被收起的空面板。
+    fileVersion += 1
+    fileContent.value = { status: 'loading' }
+    return
+  }
+  void loadFileContent(file)
+}, { immediate: true })
 watch(() => currentRoute.value.demoState, (demo) => {
   applyDemoState(demo)
   if (!isBusy.value) clearGeneration()
@@ -885,6 +1080,8 @@ watch([activeId, sessions], () => {
   seenSessions.value = next
 })
 
+// 文件栏常驻后不再有「出现 / 消失」这一事件,坞高恒定 —— 故这里不再需要额外重算。
+
 onMounted(() => {
   applyDemoState(currentRoute.value.demoState)
   void reloadWorkspace(false, true)
@@ -892,13 +1089,14 @@ onMounted(() => {
   motionMedia.addEventListener('change', onMotionChange)
   document.addEventListener('keydown', drawerKeyboard)
   document.addEventListener('keydown', onSwitcherShortcut)
+  document.addEventListener('keydown', onFilePanelEscape)
   // 指针抬起可能落在转录区之外(拖动滚动条时鼠标划出),故在 window 上收尾。
   window.addEventListener('pointerup', onLogPointerUp)
   window.addEventListener('pointercancel', onLogPointerUp)
-  // 悬浮输入框高度:首帧量一次(覆盖 CSS 默认值),之后由 ResizeObserver 跟随多行增长。
-  syncComposerHeight()
+  // 悬浮输入簇的量测:首帧量一次(覆盖 CSS 默认值),之后由 ResizeObserver 跟随多行增长。
+  syncComposerMetrics()
   if (composerForm.value !== null && typeof ResizeObserver !== 'undefined') {
-    composerObserver = new ResizeObserver(() => syncComposerHeight())
+    composerObserver = new ResizeObserver(() => syncComposerMetrics())
     composerObserver.observe(composerForm.value)
   }
 })
@@ -911,6 +1109,7 @@ onBeforeUnmount(() => {
   motionMedia.removeEventListener('change', onMotionChange)
   document.removeEventListener('keydown', drawerKeyboard)
   document.removeEventListener('keydown', onSwitcherShortcut)
+  document.removeEventListener('keydown', onFilePanelEscape)
   window.removeEventListener('pointerup', onLogPointerUp)
   window.removeEventListener('pointercancel', onLogPointerUp)
 })
@@ -987,11 +1186,19 @@ onBeforeUnmount(() => {
                         <span class="entry-name">{{ row.name }}</span>
                         <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
                       </button>
-                      <!-- 文件行:只读展示行 —— 非交互元素(span),不可聚焦、不可点、无悬停反馈。 -->
-                      <span v-else class="entry-row__static">
+                      <!-- 文件行:整行一个 button —— 单击**预览**(占临时槽、斜体),双击**钉住**
+                           (独占一格);键盘 Enter = 钉住。整行可点、悬停有反馈(与目录行同族的密集行,
+                           故仍走 28px 的密集档)。前导内边距补上 chevron 槽,标签与同级目录行同左缘。 -->
+                      <button
+                        v-else type="button" class="entry-row__button entry-row__button--file"
+                        :title="row.path"
+                        @click="onFileRowClick(row, $event)"
+                        @dblclick="onFileRowDblClick(row)"
+                        @keydown="onFileRowKey($event, row)"
+                      >
                         <span class="entry-name">{{ row.name }}</span>
                         <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
-                      </span>
+                      </button>
                       <!-- 导引线:该行每条祖先层级各一段,铺满行高 —— 一层的所有子项(含最后一项)都被贯穿。 -->
                       <span class="entry-guides" aria-hidden="true"><span v-for="guide in row.level - 1" :key="guide" class="entry-guide" /></span>
                     </li>
@@ -1038,6 +1245,9 @@ onBeforeUnmount(() => {
         <!-- tabpanel 与会话头**同级**:tablist 不能是 tabpanel 的后代,否则 tab 的语义不成立。
              转录保留自己的 role="log" 与 tabindex,放进 tabpanel 内(一个角色套一个角色不冲突)。 -->
         <div ref="conversationPanel" class="conversation-panel" id="conversation-panel-body" role="tabpanel" :aria-labelledby="activeId ? `conversation-tab-${activeId}` : undefined">
+          <!-- 转录区(与文件面板)单独包一层:文件面板要**精确**覆盖转录区(不含输入坞与流内区域),
+               故需要一个与转录区等大的定位基准(见 .transcript-area)。 -->
+          <div class="transcript-area">
           <div ref="log" class="transcript" role="log" aria-live="polite" :aria-label="t.workspace.transcript" tabindex="0" :data-state="transcript.status" @scroll="onScroll" @wheel.passive="onWheel" @keydown="onLogKey" @pointerdown="onLogPointerDown">
             <div class="transcript-inner">
               <div v-if="transcript.status === 'loading'" class="transcript-loading" :aria-label="t.workspace.loading" aria-busy="true"><p>{{ t.workspace.loading }}</p><NSkeleton text :repeat="3" :animated="false" /><NSkeleton text :repeat="5" :animated="false" /></div>
@@ -1075,6 +1285,22 @@ onBeforeUnmount(() => {
               </template>
             </div>
           </div>
+          <!-- 文件面板:覆盖在转录区之上(不是可拖拽的浮动窗口)。「已打开未显示」由文件栏的 tab
+               承担,故它只有显示 / 不显示两态;Esc 关闭(见 onFilePanelEscape)。 -->
+          <FilePanel
+            v-if="isFilePanelOpen && activeFile"
+            :state="fileContent"
+            :path="activeFile.path"
+            :project-name="activeFile.projectName"
+            :chip-state="entryStateOfTab(activeFile)"
+            :can-confirm="canConfirmActiveFile"
+            :confirmation="confirmation"
+            :confirmation-outcome="confirmationOutcome"
+            @close="closeFilePanel"
+            @retry="retryFile"
+            @resolve="resolveConfirmation"
+          />
+          </div>
           <!-- 输入区(本轮重构):坞不再有独立的面(去掉底面与上边界,与转录区同色)。
                流内只留遥测条与提示行(状态信息压在滚动内容上会不可读,故不跟着悬浮);
                输入框改为**悬浮组件**,绝对定位在流内区域之上,多行时向上生长、不挤占流内区域。 -->
@@ -1092,13 +1318,14 @@ onBeforeUnmount(() => {
             </Transition>
             <!-- 悬浮输入框:自身抬起(elevated 底 + 发丝描边 + md 阴影 + 既有圆角)。发送不再有
                  独立按钮 —— 动作由 Enter 承担(提示行是唯一的发送提示);生成中的「停止」仍在框内。 -->
-            <form ref="composerForm" class="composer-form" @submit.prevent="send">
+            <form ref="composerForm" class="composer-form" :title="t.workspace.inputHint" @submit.prevent="send">
               <div class="textarea-sizer" :data-value="(draft || t.workspace.placeholder) + ' '">
                 <textarea id="workspace-composer" name="workspace-composer" ref="composer" v-model="draft" rows="1" :aria-label="t.workspace.inputLabel" :placeholder="t.workspace.placeholder" :readonly="isBusy || transcript.status === 'loading' || transcript.status === 'error'" @keydown="inputKeyboard" />
               </div>
               <button v-if="isGenerating" class="workspace-button send-button stop-button" type="button" :aria-label="t.workspace.stop" @click="stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" /></svg></button>
             </form>
-            <!-- 流内区域(遥测条 + 提示行):留在文档流内、直接在面板底色上,几何不随输入高度变化。 -->
+            <!-- 流内区域(遥测条):留在文档流内、直接在面板底色上,几何不随输入高度变化。
+                 状态信息压在滚动内容上会不可读,故它不跟着悬浮。 -->
             <div class="composer-inner">
               <p v-if="hasSendError" class="send-error" role="alert">{{ t.workspace.sendError }}</p>
               <!-- 遥测条:输入框下方的单行运行时信息,与输入框同宽、同一水平轴。只有状态项是
@@ -1124,11 +1351,31 @@ onBeforeUnmount(() => {
                      条内只显示项目名;完整路径放进 title(悬停可见)。 -->
                 <span v-if="runtime" class="telemetry__item telemetry__item--workspace" :title="runtime.projectPath"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__ws-name">{{ runtime.projectName }}</span></span>
               </div>
-              <p class="composer-hint">{{ t.workspace.inputHint }}</p>
             </div>
           </div>
         </div>
       </section>
+      <!-- 文件栏(工作台级底栏·**常驻**):横跨侧栏左缘到对话面板右缘,纵向在两块面板之下 ——
+           外壳网格的第三行(grid-column: 1 / -1),面与圆角沿用外壳的浮动面板语言。
+           依据:Apple 的 Windows 规范把「横跨窗口宽度的底栏」当作状态栏的正当形态(Finder 即如此),
+           同时告诫**不要把关键信息 / 动作只放在底栏** —— 所以它是文件导航面,而每个文件也都能从
+           左侧项目树重新打开,不构成唯一入口。
+           它**总是渲染**(没有打开的文件时显示教学性空态),故工作台几何恒定:首次打开文件不引起
+           版面跳动,转录区几何与底部内缩都成为常量(内缩只算输入框那一段,底栏不在对话面板内)。 -->
+      <div class="file-bar-dock">
+        <FileBar
+          :tabs="fileTabs"
+          :active-key="activeFileKey"
+          :current-project-id="selectedProjectId"
+          :recent="recentForBar"
+          :state-of="entryStateOfTab"
+          :disabled="isBusy"
+          @select="selectFileTab"
+          @close="closeFileTab"
+          @reorder="reorderFileTabs"
+          @open-recent="openRecentFile"
+        />
+      </div>
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
   </main>
@@ -1158,6 +1405,34 @@ onBeforeUnmount(() => {
      否则正文会被二次压回 525px。对话栏拆成下拉面板后阅读列不再被常驻子列挤占,
      故 1280 起即可达到此上限。 */
   --workspace-column-max: 768px;
+  /* 横向 tab 条(会话头 / 文件底栏)共用的组件级自定属性。**定义在工作台根上**:文件底栏是
+     侧栏与对话栏的兄弟节点(外壳网格第三行),不再是 .conversation 的后代,故这些值必须在
+     三者的共同祖先上给出,两条栏才能共用同一套 tab 语言与紧凑档尺寸。
+     --workspace-tab-min / -max:tab 的可用宽度区间。min 取 160px(≈10 个汉字)—— 调研里
+       Firefox 的最小 tab 宽是 76px(英文 / 图标语境),中文标题取那个值会窄到不可读;max 取
+       240px(浏览器常见上限)。脚本按这两个值算「能放下几个 tab」与每个 tab 的等宽宽。
+     --workspace-tab-gap:tab 之间的一档间隙(圆角矩形之间要留缝,Chrome 的 tab 条同理)。
+     --workspace-tab-divider:相邻非活动 tab 之间那条轻量分隔线的高度 = tab 高的一半(上下内缩、
+       垂直居中),Material 3 的 inset divider 手法。
+     --workspace-tab-reserved:tab 右侧为关闭钮**恒常预留**的槽宽 = 关闭钮 24 + 右侧内缩 4 + 与标题的
+       间隙 4。恒常预留 → 悬停出现关闭钮时零重排。 */
+  --workspace-tab-min: 160px;
+  --workspace-tab-max: 240px;
+  --workspace-tab-gap: var(--dl-space-1);
+  --workspace-tab-divider: calc(var(--workspace-nav-control-size) / 2);
+  --workspace-tab-reserved: calc(var(--dl-icon-lg) + 2 * var(--dl-space-1));
+  /* 会话头 tab 条这一行的控件尺寸 = **紧凑导航行档**(32px),= 本仓设计语言的第三档触达尺寸:
+     密集导航行(横向 tab 条)内的行内控件同样适用「密集行」的收窄例外,判据沿用 WCAG 2.5.8 的
+     间距替代方案(相邻目标中心各画 24px 圆、两圆不相交)。横向排布下该判据天然成立:相邻 tab /
+     控件的中心距 = 各自一半宽之 + 间隙,远大于 24px。因此本档**任何宽度都保持 32px** ——
+     「≤1023 抽屉回到 44px」那条只针对**纵向密集行**(手指纵向落点精度低),横向 tab 条的目标
+     又宽又高(≥157×32),不适用。作为对比:独立的顶栏语言钮、页面按钮仍守 --dl-target-size(44px)。
+     取 32px 而非 44px 的依据:Chrome Compact Mode 正把 tab 条 / 工具栏压薄、Firefox 紧凑档 tab 条
+     36px、Chrome 常态约 40px;32px 落在该区间下沿。 */
+  --workspace-nav-control-size: 32px;
+  /* 面板上下两条 chrome(会话 tab 栏 / 文件栏)共用的横向内边距:≥1024 为 24px、≤1023 收一档
+     为 16px。定义在共同祖先上,两条栏因此**左右内容对齐**。 */
+  --conversation-heading-pad: var(--dl-space-6);
   /* 头像尺寸与它到内容块的间隙;两者之和即**侧向 gutter**。头像以负外边距凸入该 gutter,
      故正文列宽度不因头像而被挤压 —— gutter 只是把阅读列两侧原有的留白从「纯空白」变成
      「结构性留白」(头像 + 间隙)。≤1023px 断点下头像降到 24px、间隙收到 8px,且不再拉负边距
@@ -1182,7 +1457,9 @@ onBeforeUnmount(() => {
 }
 /* 浮动面板式外壳:两侧各内缩一档、面板之间也留同宽的缝,让侧栏与对话区成为浮在同一
    底色画布上的两块面板(先例:shadcn/ReUI 的 inset app shell、Linear、ChatGPT)。 */
-.workspace-layout { display: grid; grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr); height: 100%; padding: var(--workspace-shell-inset); gap: var(--workspace-shell-inset); }
+/* 外壳网格:两列(侧栏 / 对话)+ 两行(面板行 / 文件底栏行)。行间距与列间距、外壳内缩同值,
+   故底栏与上方两块面板之间也是一条同宽的缝。 */
+.workspace-layout { display: grid; grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100%; padding: var(--workspace-shell-inset); gap: var(--workspace-shell-inset); }
 /* 侧栏为一块独立圆角面板:四面发丝框 + xl 圆角,overflow 让内部滚动区与满宽分隔线
    被圆角裁切。横向 padding 由外壳 gutter(24)收到 16 —— 内缩 8 + 内边距 16 = 24,
    Agent 切换器与项目列表仍与顶栏品牌落在同一条 24px 竖线上。 */
@@ -1276,7 +1553,10 @@ onBeforeUnmount(() => {
 /* 文件行是**只读展示行**:非交互元素(span),不可聚焦、不可点、无悬停反馈。前导内边距等于
    目录行的「缩进 + chevron 槽」(图标 16 + 间隙 4 = --workspace-tree-caret-slot),于是同级
    「文件夹与文件」的标签左缘由同一公式给出、天然对齐 —— 不是靠给叶子补等宽空位。 */
-.entry-row__static { display: flex; align-items: center; gap: var(--dl-space-1); width: 100%; min-height: var(--workspace-tree-row-height); padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step) + var(--workspace-tree-caret-slot)); padding-inline-end: var(--dl-space-2); }
+/* 文件行是**整行 button**(本轮改动:双击 / Enter 打开该文件),左内边距在目录行的「缩进 +
+   chevron 槽」之上再加一份 chevron 槽 —— 文件行没有 chevron,靠这段等宽前导把标签推到与同级
+   目录行同一左缘(不是给叶子补空位,而是同一个公式)。 */
+.entry-row__button--file { padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step) + var(--workspace-tree-caret-slot)); }
 /* 树行的名称(目录与文件同档):12px / 400 —— 与项目行的 13px / 600 形成排印分级,
    让「项目是上下文、树行只是文件结构」一眼可辨。 */
 .entry-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--dl-font-size-xs); font-weight: 400; color: var(--dl-text-primary); }
@@ -1292,29 +1572,6 @@ onBeforeUnmount(() => {
    它的 :focus-visible 焦点环是用外阴影实现的、向元素外扩张 —— 面板一旦裁切,环的左右
    两条竖边会整条消失、只剩上下两条横线,即基线 ⑦ 明令禁止的「吞焦点样式」。 */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated);
-  /* 会话头与 tabpanel 共用的组件级自定属性(定义在共同祖先上,两边都能继承到):
-     --workspace-tab-min / -max:tab 的可用宽度区间。min 取 160px(≈10 个汉字)—— 调研里
-       Firefox 的最小 tab 宽是 76px(英文 / 图标语境),中文标题取那个值会窄到不可读;max 取
-       240px(浏览器常见上限)。脚本按这两个值算「能放下几个 tab」与每个 tab 的等宽宽。
-     --workspace-tab-gap:tab 之间的一档间隙(圆角矩形之间要留缝,Chrome 的 tab 条同理)。
-     --workspace-tab-divider:相邻非活动 tab 之间那条轻量分隔线的高度 = tab 高的一半(上下内缩、
-       垂直居中),Material 3 的 inset divider 手法。
-     --workspace-tab-reserved:tab 右侧为关闭钮**恒常预留**的槽宽 = 关闭钮 24 + 右侧内缩 4 + 与标题的
-       间隙 4。恒常预留 → 悬停出现关闭钮时零重排。 */
-  --workspace-tab-min: 160px;
-  --workspace-tab-max: 240px;
-  --workspace-tab-gap: var(--dl-space-1);
-  --workspace-tab-divider: calc(var(--workspace-nav-control-size) / 2);
-  --workspace-tab-reserved: calc(var(--dl-icon-lg) + 2 * var(--dl-space-1));
-  /* 会话头 tab 条这一行的控件尺寸 = **紧凑导航行档**(32px),= 本仓设计语言的第三档触达尺寸:
-     密集导航行(横向 tab 条)内的行内控件同样适用「密集行」的收窄例外,判据沿用 WCAG 2.5.8 的
-     间距替代方案(相邻目标中心各画 24px 圆、两圆不相交)。横向排布下该判据天然成立:相邻 tab /
-     控件的中心距 = 各自一半宽之 + 间隙,远大于 24px。因此本档**任何宽度都保持 32px** ——
-     「≤1023 抽屉回到 44px」那条只针对**纵向密集行**(手指纵向落点精度低),横向 tab 条的目标
-     又宽又高(≥157×32),不适用。作为对比:独立的顶栏语言钮、页面按钮仍守 --dl-target-size(44px)。
-     取 32px 而非 44px 的依据:Chrome Compact Mode 正把 tab 条 / 工具栏压薄、Firefox 紧凑档 tab 条
-     36px、Chrome 常态约 40px;32px 落在该区间下沿。 */
-  --workspace-nav-control-size: 32px;
 }
 /* tabpanel:转录 + composer 这一整块。
    这里定义**内缩基准值** `--composer-inset`,并派生出淡出带的位置。同一个值喂三处
@@ -1325,11 +1582,19 @@ onBeforeUnmount(() => {
         只给 ① 只能保证「滚到底」不被盖,滚动定位仍会落到输入框下 —— 两者必须成对给,
         依据是 W3C 的 WCAG 技术 C43「用 CSS scroll-padding 解除内容遮挡」;
      ③ 遮罩的**实心色标**(淡出带起点)。
-   `--composer-inset` = 转录区底边到输入框上缘的距离(输入框高度 + 它与坞顶的间隙)
-   + 留白 --composer-clearance。**不能只取输入框高度**:输入框并不贴着转录区底边
-   (其下方还有提示行 / 遥测条所在的区间),少算这段就会让最后一行贴得比预期近。
+   `--composer-inset` = 转录区底边到**悬浮输入框**顶缘的距离(输入框高度 + 它与坞顶的间隙)
+   + 留白。**不能只取输入框高度**:输入框并不贴着转录区底边(其下方还有遥测条 / 文件栏所在的
+   坞内区间),少算这段就会让最后一行贴得比预期近。
+   文件栏(常驻)的高度**不在这里再计一次** —— 它停靠在坞的文档流最底下(见 .file-bar-dock),
+   坞顶 = 转录区底边因此是**常量**;输入框锚在坞顶之上,也跟着恒定。若把坞内那一段再写进内缩,
+   等于重复计一次,会把最后一条消息多顶出一整个坞的高度。
    定义在共同祖先上(而非 .transcript 内),让三处引用的是同一个已解析值。 */
 .conversation-panel { --composer-inset: calc(var(--composer-float-height) + var(--composer-float-gap) + var(--composer-clearance)); --composer-bleed: var(--dl-space-1); flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* 转录区(与文件面板)的盒子:与转录区等大,作为文件面板**精确覆盖转录区**的定位基准
+   (不含输入坞与流内区域)。刻意不给它 overflow:hidden —— 转录区 :focus-visible 的焦点环是
+   向外画的 box-shadow,裁切会把环的左右两条竖边整条抹掉(见 .conversation 上不出 overflow 的注释)。
+   文件面板的尺寸由上下锚点算出、本就不越界,不依赖裁切兜底。 */
+.transcript-area { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
 /* 会话头 = [汉堡?][tab 条][＋][菜单钮],它自己也是 tablist 的容器行。align-items: center
    让 tab 与右端控件在同一水平轴上居中。
    高度 = 上内边距 4(--dl-space-1)+ 控件高 32(紧凑导航行档)+ 下内边距 8(--dl-space-2)= 44px。
@@ -1343,7 +1608,7 @@ onBeforeUnmount(() => {
    上内边距 4px 是**焦点环的下限**:tab 的 :focus-visible 环向外扩 3px,4 > 3 才完整可见。
    position: relative 是菜单浮层的定位基准。
    --conversation-heading-pad 驱动本行的横向内边距(窄屏收一档),也被浮层的定位复用。 */
-.conversation-heading { --conversation-heading-pad: var(--dl-space-6); position: relative; display: flex; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-1) var(--conversation-heading-pad) var(--dl-space-2); }
+.conversation-heading { position: relative; display: flex; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-1) var(--conversation-heading-pad) var(--dl-space-2); }
 .icon-button { padding: var(--dl-space-2); flex-shrink: 0; }
 .workspace-button svg { width: var(--dl-icon-md); height: var(--dl-icon-md); flex-shrink: 0; }
 .workspace-button svg path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
@@ -1363,7 +1628,7 @@ onBeforeUnmount(() => {
    以下保持不透明 —— 那一带本就被输入框盖住,且这样才能保住转录区向外的 :focus-visible 焦点环。
    遮罩盒比边框盒外扩 --composer-bleed 并 no-clip:否则 mask 会把焦点环整条抹掉(基线 ⑦ 禁止
    吞焦点样式)。已知副作用:mask 连滚动条一起淡出,淡出带很窄且落在输入框背后,故按原样保留。 */
-.transcript { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-end: var(--composer-inset); scroll-padding-block-end: var(--composer-inset); mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-bleed) - var(--composer-inset)), transparent calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance)), #000 calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance))); mask-repeat: no-repeat; mask-clip: no-clip; mask-size: calc(100% + 2 * var(--composer-bleed)) calc(100% + 2 * var(--composer-bleed)); mask-position: calc(-1 * var(--composer-bleed)) calc(-1 * var(--composer-bleed)); }
+.transcript { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-end: var(--composer-inset); scroll-padding-block-end: var(--composer-inset); mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-bleed) - var(--composer-inset)), transparent calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance)), #000 calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance))); mask-repeat: no-repeat; mask-clip: no-clip; mask-size: calc(100% + 2 * var(--composer-bleed)) calc(100% + 2 * var(--composer-bleed)); mask-position: calc(-1 * var(--composer-bleed)) calc(-1 * var(--composer-bleed)); }
 /* 阅读列的底部内缩改由**滚动容器** .transcript 承担(padding-block-end 与
    scroll-padding-block-end 成对在那一层);这里只保留上内边距与横向内边距,避免两层叠加。 */
 /* 阅读列的横向内边距 = 侧向 gutter(--workspace-gutter):正文列封顶 768、两侧各留一档
@@ -1461,6 +1726,23 @@ onBeforeUnmount(() => {
    inset-inline + margin-inline:auto + max-width 让它在坞内居中、并与阅读列同宽同轴
    (与 .transcript-inner / .composer-inner 的限宽列对齐)。 */
 .composer-form { position: absolute; inset-inline: var(--dl-space-6); inset-block-end: calc(100% + var(--composer-float-gap)); margin-inline: auto; max-width: var(--workspace-column-max); display: flex; align-items: flex-end; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
+/* 文件栏(停靠·整宽):坞的最后一个文档流子项 —— 于是它的底边**就是**面板内容盒的底边
+   (面板无内边距,坞是它的最后一个子项),即贴住面板描边内侧。
+   面:不新上填充色,取面板自身底色(--dl-bg-elevated)+ 顶边一条 --dl-border-base 发丝线
+   —— 与转录区上边界同一套层级语言。
+   底角同心:面板圆角 16 − 描边 1 = 15(与面板内缘同心,贴边时才不会露出直角)。
+   横向内边距取 --conversation-heading-pad,栏内内容因此与会话头内容**左右对齐**。 */
+/* 文件栏(工作台级底栏):外壳网格的第三行,横跨侧栏左缘到对话面板右缘 —— 面与圆角沿用外壳的
+   浮动面板语言(与两块面板同族的圆角 + 发丝线)。它**不在**对话面板内部,故转录区的底部内缩
+   也不再与它相干(内缩只算悬浮输入框那一段,见 .conversation-panel 的注释)。
+   横向内边距取一档间距(16):与侧栏的内容左缘对齐(侧栏自身的内边距也是 16)。 */
+.file-bar-dock {
+  grid-column: 1 / -1;
+  padding: var(--dl-space-2) var(--dl-space-4);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-xl);
+  background: var(--dl-bg-elevated);
+}
 .textarea-sizer { display: grid; flex: 1; min-width: 0; max-height: calc(5 * var(--dl-font-size-md) * var(--dl-line-body) + 2 * var(--dl-space-2)); overflow: hidden; }
 .textarea-sizer::after { content: attr(data-value); visibility: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .textarea-sizer::after, textarea { grid-area: 1 / 1; font: inherit; line-height: var(--dl-line-body); padding: var(--dl-space-2); min-height: var(--dl-target-size); min-width: 0; border: 0; }
@@ -1471,7 +1753,8 @@ textarea:read-only { color: var(--dl-text-secondary); }
 .send-button { flex-shrink: 0; padding: var(--dl-space-2); background: var(--dl-accent); color: var(--dl-text-on-accent); border-color: transparent; }
 .send-button:hover { background: var(--dl-accent-hover); }
 .stop-button svg { fill: currentColor; }
-.composer-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); margin-top: var(--dl-space-2); }
+/* 「Enter 发送 · Shift+Enter 换行」不再占一行:那句移到 .composer-form 的 title(悬停可得)
+   —— 删掉发送钮之后,这条提示是「Enter 能发送」的唯一线索,不能连同那行一起消失。 */
 /* 「回到底部」悬浮图标按钮:绝对定位、水平居中于阅读列,浮在**悬浮输入框之上**
    (底边 = 坞顶边 − 间隙 − 输入框高 − 8),故不覆盖输入框、两者不重叠。坞横跨面板宽、
    .composer-inner 限宽居中,两者中心重合,故 50% + translateX(-50%) 即对齐阅读列。
@@ -1520,12 +1803,14 @@ textarea:read-only { color: var(--dl-text-secondary); }
   .chat-message.assistant .message-avatar, .chat-message.user .message-avatar { margin-inline: 0 var(--workspace-avatar-gap); }
   .chat-message.user .message-avatar { margin-inline: var(--workspace-avatar-gap) 0; }
   /* 抽屉贴视口左缘(脱离外壳内缩),只圆朝内容一侧的两角:否则左侧两角悬在视口边缘
-     外、圆角显得莫名其妙。 */
-  .workspace-sidebar { position: fixed; inset: 0 auto 0 0; width: min(var(--workspace-sidebar-width), calc(100% - var(--dl-space-12))); z-index: var(--dl-z-overlay); border-radius: 0 var(--dl-radius-xl) var(--dl-radius-xl) 0; transform: translateX(-100%); visibility: hidden; transition: transform var(--dl-duration-base) var(--dl-ease-standard); }
+     外、圆角显得莫名其妙。
+     抽屉抬到 **modal** 档:浮动的文件面板在 overlay 档,抽屉必须在它之上 —— 否则打开抽屉时,
+     那块面板会飘在遮罩与抽屉的上面。 */
+  .workspace-sidebar { position: fixed; inset: 0 auto 0 0; width: min(var(--workspace-sidebar-width), calc(100% - var(--dl-space-12))); z-index: var(--dl-z-modal); border-radius: 0 var(--dl-radius-xl) var(--dl-radius-xl) 0; transform: translateX(-100%); visibility: hidden; transition: transform var(--dl-duration-base) var(--dl-ease-standard); }
   .workspace-sidebar.is-open { transform: translateX(0); visibility: visible; }
-  /* 窄屏:会话头横向内边距收到一档;对话切换器面板的定位(横向铺满 / 右对齐触发钮)随之
-     由这个变量驱动(见 conversation-switcher.vue 的 --conversation-heading-pad 用法)。 */
-  .conversation-heading { --conversation-heading-pad: var(--dl-space-4); }
+  /* 会话头的横向内边距收一档;对话切换器面板的定位(横向铺满 / 右对齐触发钮)也随之由这个
+     变量驱动(见 conversation-switcher.vue)。 */
+  .conversation { --conversation-heading-pad: var(--dl-space-4); }
   /* 窄屏内边距收到一档;底部内缩在 .transcript 上,与断点无关(不在这里覆盖)。 */
   .transcript-inner { padding: var(--dl-space-6) var(--workspace-gutter) 0; }
   .composer-inner { padding-inline: var(--dl-space-4); }

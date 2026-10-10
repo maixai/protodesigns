@@ -89,6 +89,8 @@ export const workspace = {
   emptyMessage: '请先输入消息',
   invalidAgent: '找不到这个 Agent',
   noConfirmation: '当前没有待确认的操作',
+  fileError: '读取文件时连接中断',
+  fileNotFound: '找不到这个文件',
   sessions: {
     weekly: '把项目周报整理成行动清单',
     roadmap: '梳理下季度路线图',
@@ -179,6 +181,65 @@ export const workspace = {
     // 第二个「等待交互」会话(quarterly)的确认请求文案,与它自己的受影响文件对齐。
     quarterlySummary: '用最新数据重写「release-plan.csv」',
     quarterlyDetail: '将把本周的实际进展回填进「release-plan.csv」的计划列，现有排期会被覆盖，且无法从项目目录恢复。',
+  },
+  // ---- 文件栏(输入框下方那条)与文件面板(双击文件树里的文件 → 在右侧渲染该文件)----
+  // 文件栏列出**当前会话**下已打开的文件,每个 tab 带上文件树里的状态芯片(新建 / 已修改 / 待确认)
+  // —— 于是这条栏不只是「打开了什么」,而是「Agent 动过哪些文件」的一览。
+  fileBar: {
+    label: '已打开的文件',
+    closeFile: '关闭 {name}',
+    // 溢出菜单钮(常驻)的可访问名 + 与 ▾ 上徽标配套的两段补充。
+    menu: '全部已打开的文件与最近打开',
+    hiddenCount: '{count} 个已收起',
+    recent: '最近打开',
+    // 最近打开的两个分组:先本项目、再其它项目(依据:VS Code 把「最近工作区 / 最近文件」分组)。
+    recentCurrent: '本项目',
+    recentOther: '其它项目',
+    // 常驻栏的空态:这一栏同时承担「把这个手势告诉用户」的职责,故文案要教学性。
+    empty: '双击左侧文件,即可在这里打开',
+    menuEmpty: '还没有打开过文件',
+    // tab 的 title(悬停可读):路径 + 打开方式。文件名是技术标识,两种语言共用同一写法。
+    previewTag: '预览(单击固定)',
+    pinnedTag: '已固定',
+  },
+  // 文件面板:默认呈现**整个文件 + 变更标记**(不是只看 diff 片段),可切到统一 / 并排 diff。
+  // 行级标记用形状而非仅颜色区分(新增 + / 删除 − / 修改 ~),词级高亮标出真正改动的字词。
+  filePanel: {
+    label: '文件面板',
+    close: '关闭文件面板',
+    viewLabel: '查看方式',
+    viewFile: '整个文件',
+    viewUnified: '统一 diff',
+    viewSide: '并排 diff',
+    sideUnavailable: '窗口太窄,并排 diff 已自动降级为统一 diff',
+    wrap: '自动换行',
+    // 标题栏(同时是拖拽手柄):可访问名 + 悬停提示。
+    headerLabel: '文件标题栏',
+    headerHint: '拖动标题栏移动窗口 · 双击标题栏复位',
+    moveHint: '方向键移动窗口',
+    // 缩放手柄(APG Window Splitter):四条边的可访问名 + 键盘提示。
+    resizeRight: '调整面板宽度(右缘)',
+    resizeLeft: '调整面板宽度(左缘)',
+    resizeBottom: '调整面板高度(下缘)',
+    resizeTop: '调整面板高度(上缘)',
+    resizeHint: '方向键调整 · Shift 大步长 · Home/End 到最小/最大',
+    // 并排 diff 的两列标题(左 = 改动前,右 = 改动后)。
+    oldLabel: '改动前',
+    newLabel: '改动后',
+    fold: '展开 {count} 行未变更的片段',
+    unchangedCount: '{count} 行未变更',
+    added: '新增的行',
+    removed: '删除的行',
+    modified: '修改的行',
+    unchanged: '未变更',
+    addedStat: '+{count}',
+    removedStat: '−{count}',
+    loading: '正在加载文件…',
+    errorTitle: '无法读取这个文件',
+    errorBody: '读取时连接中断。重试后即可继续查看。',
+    retry: '重试',
+    emptyTitle: '无法预览这个文件',
+    emptyBody: '这是一个二进制文件，工作台只预览文本内容。',
   },
   // 工作台里的 Agent 名称:会话头副行显示当前会话归属的 Agent。
   agents: {

@@ -11,4 +11,7 @@ export const nav = {
   language: 'Language',
   login: 'Sign in',
   currentLanguage: 'Current language',
+  // The site header's collapse control (workspace page only; the home page does not render it).
+  collapseHeader: 'Collapse the header',
+  expandHeader: 'Expand the header',
 }

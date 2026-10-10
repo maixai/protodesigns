@@ -2,11 +2,26 @@
 export const workspace = {
   title: 'Workspace',
   newChat: 'New conversation',
+
+  switcher: {
+    filterLabel: 'List scope',
+    filterConversations: 'Conversations',
+    filterFiles: 'Files',
+  },
   // Sidebar agent selector: the trigger's full name comes from the agents table; these two
   // strings only feed the popover's accessible name and the current-option marker. The selector
   // expresses "which agent you are working under" — it decides which projects the sidebar shows.
+  // (The selector itself now lives in the bottom agent bar; agentSelector is reused as that
+  // strip's tablist accessible name.)
   agentSelector: 'Switch agent',
   agentSelected: 'Selected',
+  // Agent bar (the workspace's bottom strip): a tab strip of the three agents plus an overflow
+  // menu when they do not fit. The tablist's accessible name reuses agentSelector; these two
+  // only name the overflow trigger and supplement it with the collapsed count.
+  agentBar: {
+    menu: 'All agents',
+    collapsed: '{count} collapsed',
+  },
   // Sidebar: the agent-workspace panel, with the projects section beneath it (projects + open
   // project), no longer a set of workspace files.
   workspacePanel: 'Agent workspace',
@@ -107,6 +122,7 @@ export const workspace = {
     research: 'User interviews: key findings',
     knowledge: 'Organize the team knowledge base',
     quarterly: 'Generate the quarterly review data',
+    release: 'Tidy the release note changes',
   },
   // Secondary line of a conversation list item (used by mocks): a quick scan of what it covers.
   previews: {
@@ -119,6 +135,7 @@ export const workspace = {
     research: 'Keep the “quote → observation → hypothesis” layers',
     knowledge: 'Start with the five most-asked questions of the last two weeks',
     quarterly: 'Back-fill the quarterly schedule from each track’s progress',
+    release: 'Group the changed entries into one checklist by module',
   },
   // State chips of a project entry. `none` renders no chip (unchanged, saves width); `pending`
   // appears only while waiting for input on an affected entry.
@@ -206,17 +223,16 @@ export const workspace = {
     closeFile: 'Close {name}',
     menu: 'All open files and recently opened',
     hiddenCount: '{count} collapsed',
-    recent: 'Recently opened',
-    // The two groups of recently opened files: this project first, then the others.
-    recentCurrent: 'This project',
-    recentOther: 'Other projects',
+    // The menu's two groups: "Open" lists **every** open file (including the ones already visible in
+    // the strip — mirroring the conversation menu, which lists all sessions and marks the current one),
+    // then "Recently closed" (closing is not deleting).
+    openGroup: 'Open · {count}',
+    recentClosed: 'Recently closed',
     // Empty state of the always-present strip: it also carries the job of teaching the gesture.
     empty: 'Double-click a file on the left to open it here',
     menuEmpty: 'Nothing opened yet',
     // A tab's title (mouse-readable): path plus how it was opened. File names are technical
     // identifiers, written the same way in every language.
-    previewTag: 'Preview (click to keep open)',
-    pinnedTag: 'Pinned',
   },
   // The file panel shows the whole file with change markers by default (not just diff fragments),
   // and can switch to unified / side-by-side diff. Line markers use shapes, not colour alone
@@ -285,6 +301,8 @@ export const workspace = {
     knowledgeAssistant: 'Start with the five questions people have asked most in the last two weeks.\n\nFind the relevant documents, add owners and review dates, and build a lightweight index without changing the original links. Do not move every file or design an elaborate taxonomy yet.\n\nObserve whether people find answers faster for one week, then decide whether to expand.',
     quarterlyUser: 'The quarter is almost over. Help me put together the review data for it.',
     quarterlyAssistant: 'Sure — let’s fix the data scope first.\n\nTime range\nUse the natural quarter (Jul–Sep) and note the cut-off date.\n\nBy track\nSummarize effort and output for product, growth, and platform separately rather than mixing them.\n\nTo confirm\nI need your sign-off on the scope before writing back into “release-plan.csv”; I will not treat assumptions as facts.',
+    releaseUser: 'The release note changes are a bit scattered. Help me group them by module.',
+    releaseAssistant: 'Grouped them into a checklist draft by module:\n\n• Added: notification entry point, task result page\n• Changed: how the composer sends\n• Fixed: fallback when a notification is not delivered\n\nEach entry records an owner and how to verify it. This is a draft and has not been written to any file.',
   },
   responses: {
     first: 'Let’s turn the goal into a draft you can actually use.\n\nStep 1: define the result\nWrite down what the task should produce and who will use it. Make it useful before polishing the format.\n\nStep 2: identify the smallest actions\nSeparate gathering inputs, drafting, and reviewing together. Give each action one clear output instead of combining several goals.\n\nStep 3: schedule a check\nLeave time to verify information, owners, and deadlines. Mark uncertainty rather than making unconfirmed decisions for the team.\n\nThis is a demo suggestion; no external action has been taken. Tell me which part you would like to develop next.',

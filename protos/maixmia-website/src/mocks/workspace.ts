@@ -2,6 +2,7 @@
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Agent } from '../contracts/generated/agent'
+import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
@@ -33,6 +34,10 @@ const sessionSeeds = [
   // 第二个「等待交互」会话,与 knowledge 同属 product-docs:演示「别的会话在等你」这枚徽标
   // 与菜单里置顶的「等待你」分组时,落地可见的 knowledge 已被视为打开过,靠这条未打开的会话才成立。
   { id: 'quarterly', title: 'quarterly', preview: 'quarterly', agent: 'writing', projectId: 'product-docs', updatedAt: '2026-10-07T02:15:00Z', status: 'idle' },
+  // 写作助手的第三个会话,**响应完成且未看过**:Agent 栏的 Badge 要能演示「两类信号并存时
+  // 取更紧急的一档」—— 只有同一 Agent 下既有一条未看过的「等待交互」(quarterly) 又有一条
+  // 未看过的「响应完成」(本条),「等待交互 > 响应完成」这条优先级才谈得上被验证。
+  { id: 'release', title: 'release', preview: 'release', agent: 'writing', projectId: 'product-docs', updatedAt: '2026-10-06T05:20:00Z', status: 'completed' },
 ] satisfies (ChatSession & {
   title: keyof Messages['workspace']['sessions']
   preview: keyof Messages['workspace']['previews']
@@ -77,6 +82,10 @@ const messageSeeds = {
     { id: 'quarterly-1', role: 'user', body: 'quarterlyUser', createdAt: '2026-10-07T02:14:00Z' },
     { id: 'quarterly-2', role: 'assistant', body: 'quarterlyAssistant', createdAt: '2026-10-07T02:15:00Z' },
   ],
+  release: [
+    { id: 'release-1', role: 'user', body: 'releaseUser', createdAt: '2026-10-06T05:19:00Z' },
+    { id: 'release-2', role: 'assistant', body: 'releaseAssistant', createdAt: '2026-10-06T05:20:00Z' },
+  ],
 } satisfies Record<string, (ChatMessage & { body: keyof Messages['workspace']['messages'] })[]>
 
 const responsePool: (keyof Messages['workspace']['responses'])[] = ['first', 'second', 'third']
@@ -100,6 +109,22 @@ export function mockSessions(demoState: AppRoute['demoState']): ChatSession[] {
       status: sessionStatusFor(session.id, session.status, demoState),
     })),
   ]
+}
+
+// Agent 级的「需要你处理」信号:每个 Agent 名下、**未看过**的「等待交互」与「响应完成」
+// 各有多少条。计数跨该 Agent 的**全部项目**(信号的粒度是 Agent,不是项目 —— 侧栏切项目
+// 不该让别的项目里等你的那条消失);已看过的会话由调用方传入的 id 集合排除。
+export function mockAgentSignals(demoState: AppRoute['demoState'], seenSessionIds: readonly string[]): AgentSignal[] {
+  const seen = new Set(seenSessionIds)
+  const sessions = mockSessions(demoState)
+  return AGENT_IDS.map((agentId) => {
+    const mine = sessions.filter((session) => session.agent === agentId && !seen.has(session.id))
+    return {
+      agentId,
+      awaiting: mine.filter((session) => session.status === 'awaiting').length,
+      completed: mine.filter((session) => session.status === 'completed').length,
+    }
+  })
 }
 
 export function mockTranscript(sessionId: string): ChatMessage[] {

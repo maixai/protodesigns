@@ -207,11 +207,12 @@ onBeforeUnmount(() => dialogRef.value?.close())
   border-color: var(--dl-border-strong);
 }
 
-/* 列表自身滚动:对话框有最大高度,候选目录可能很多。 */
+/* 列表自身滚动:对话框有最大高度,候选目录可能很多。滚动链同样隔离在工作台内。 */
 .picker__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   padding: var(--dl-space-1);

@@ -22,7 +22,7 @@ import { NSkeleton } from 'naive-ui'
 import type { FileLine } from '../contracts/generated/file-content'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
-import type { FileDisplayItem, FilePanelState } from '../data/open-files'
+import type { FileDisplayItem, FilePanelState, FileWindowRect } from '../data/open-files'
 import { buildDisplayItems } from '../data/open-files'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
@@ -38,12 +38,25 @@ const props = defineProps<{
   canConfirm: boolean
   confirmation: ConfirmationRequest | null
   confirmationOutcome: 'allowed' | 'rejected' | null
+  // 这个文件的窗口几何(由页面按 (Agent, 项目) 分域保存)。传 null = 该文件还没被摆过位置,
+  // 用默认几何。窗口状态**不属于组件**:切项目 / 切文件再回来要按原样恢复,故几何存在域里。
+  initialRect: FileWindowRect | null
+  // 层序:多个窗口并存时谁在上。聚焦置顶由页面决定,组件只如实呈现。
+  zIndex: number
+  // 本窗口是否当前聚焦(视觉上加一层强调描边,便于多窗口下认出焦点在哪)。
+  isFocused: boolean
+  // 级联序号:同时可见的窗口依次小偏移错开,避免完全重叠(窗口管理器的惯例)。
+  cascade: number
 }>()
 
 const emit = defineEmits<{
   close: []
   retry: []
   resolve: [allowed: boolean]
+  // 几何落定(拖动 / 缩放 / 方向键结束、双击复位)时上报;null = 已回到默认几何。
+  'rect-change': [rect: FileWindowRect | null]
+  // 在窗口内按下指针 / 聚焦它 → 页面据此置顶(「点谁谁在上」)。
+  focus: []
 }>()
 
 const { t } = useI18n()
@@ -185,6 +198,8 @@ const PANEL_KEY_STEP = 16
 const PANEL_KEY_STEP_LARGE = 64
 // 默认几何占视口高度的比例(与上一版「约 2/3」同源)。
 const PANEL_DEFAULT_HEIGHT_RATIO = 0.66
+// 级联步长(与页面里新窗口的偏移同值:28px)。
+const WINDOW_CASCADE_STEP = 28
 
 const panelRect = ref<PanelRect | null>(null)
 // 拖动 / 缩放进行中(只用于视觉与「不加过渡」的兜底)。
@@ -229,15 +244,19 @@ function defaultRect(): PanelRect {
   // 顶边:站点头之下、**且不压住对话面板的会话头(tab 条)** —— 浮动窗口盖住应用自己的导航行是硬伤。
   const heading = document.querySelector('.conversation-heading')
   const headingRect = heading instanceof HTMLElement ? heading.getBoundingClientRect() : null
-  const y = (headingRect === null ? margin + (resolveLength('--dl-header-height') || 60) : headingRect.bottom + margin)
+  const y = Math.max(topLimit(), headingRect === null ? margin + (resolveLength('--dl-header-height') || 60) : headingRect.bottom + margin)
   // 底边:停在**输入区**之上 —— 输入区不只是输入框,还有它上方那条悬浮的「回到底部」钮
   // (它只在用户上滚时才渲染,故这里**恒常预留**它的高度 + 间隙 + 一档外边距,不靠量它)。
   // 「浮动窗口长期遮住输入区」是业界明列的反模式,故默认就不遮。
-  const inputTop = composerRect === null ? box.height - margin : composerRect.top
-  const jumpReserve = (resolveLength('--dl-target-size') || 44) + 2 * (resolveLength('--dl-space-2') || 8)
-  const bottomLimit = inputTop - jumpReserve - margin
-  const h = Math.min(PANEL_DEFAULT_HEIGHT_RATIO * box.height, Math.max(PANEL_MIN_H, bottomLimit - y))
-  return clampRect({ x: center - w / 2, y, w, h })
+  // 默认几何:**不贴任何边界**(钳制已放开),但仍然「有礼貌」——默认不盖住输入区,且在下方留出
+  // 可见余量。注意这只是**默认值**:拖动 / 缩放的钳制里已经没有那条下界了,窗口可以随时被拖到
+  // 视口下缘(用户两次反馈的「下不去」正是因为默认值贴着下界 + 钳制也锁着 —— 两者都要改)。
+  const politeBottom = composerRect === null ? viewportFloor() : composerRect.top - jumpReserve.value - margin
+  const h = Math.min(PANEL_DEFAULT_HEIGHT_RATIO * box.height, Math.max(PANEL_MIN_H, Math.min(viewportFloor() - margin, politeBottom) - y))
+  // 级联:第 n 个同时可见的窗口向右下各挪 n 档 —— 不是「记住的几何」,而是**没摆过位置的窗口**
+  // 之间的相对错开(摆过的窗口走 initialRect 那条路,原样恢复)。
+  const cascadeOffset = WINDOW_CASCADE_STEP * Math.max(0, props.cascade)
+  return clampRect({ x: center - w / 2 + cascadeOffset, y: y + cascadeOffset, w, h })
 }
 
 // 有效几何:显式几何优先,否则用默认几何。
@@ -247,7 +266,9 @@ const effectiveRect = computed<PanelRect>(() => panelRect.value ?? defaultRect()
 // 在连续调整时丢掉某一条(实测过)。面板固定在视口坐标系里。
 const panelStyle = computed<string>(() => {
   const rect = effectiveRect.value
-  return [`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`].join(';')
+  // 层序**叠加在浮层档之上**(--dl-z-overlay = 200):窗口之间的高低只需在浮层档内部区分,
+  // 直接写 1/2/3 会把窗口压到顶栏(< 100)之下 —— 实测拖到页面顶部就点不动了。
+  return [`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`, `z-index:calc(var(--dl-z-overlay) + ${props.zIndex})`].join(';')
 })
 
 // 当前几何 = 有效几何(权威来源,不回读 DOM —— DOM 更新是异步的,连续按键回读会丢步)。
@@ -255,22 +276,89 @@ function currentRect(): PanelRect {
   return effectiveRect.value
 }
 
-function clampRect(rect: PanelRect): PanelRect {
+// 窗口的**纵向允许范围**:上边界 = 顶部行(会话头 / 标签条)的下沿,下边界 = 视口下缘。
+// **不再有「输入区之上」那条下界** —— 用户两次要求「可拖到整个页面范围内的任意位置」,而下界会让
+// 窗口在底部附近完全下不去(默认几何又恰好贴在那条线上,于是「只能往上拖」)。
+// 输入区不被挡这件事**不再由层序保证**:输入坞已并入对话面板、回到第 1 层(应用外壳),
+// 窗体(第 2 层,--dl-z-overlay + n)因此可以盖住它 —— 这正是用户要的「输入框与整个对话框
+// 做在一起、能被文件窗体覆盖」。窗体的默认几何仍是「有礼貌」的(见 defaultRect 的 politeBottom),
+// 但拖动 / 缩放的钳制里没有「输入区之上」那条下界,窗口可被拖到输入区那一带并盖住它。
+//
+// 「回到底部」钮的预留高度(恒常预留,不靠量它 —— 它只在用户上滚时才渲染)。
+// **必须缓存**:resolveLength 会向页面插入探针元素并强制重排,而钳制在拖拽 / 缩放的每一帧都会调它 ——
+// 每帧插一次 DOM 不只是慢,webkit 上还会让指针事件在拖拽中途丢失(实测:长位移只走到 1/10)。
+// 长度常量只在挂载与视口变化时重算。
+const jumpReserve = ref(60)
+
+// 窗口的**上界** = 视口顶 + 一档外边距 —— 与其它三边同口径,**没有任何额外约束**
+// (用户两次明确:允许区域是整个页面区域,含顶部)。窗体会滑到顶部 chrome 之下,这是可接受的后果。
+//
+// 手柄被 chrome 遮住之后靠**非鼠标通路**保证仍能抓回来(三条,都有断言):
+//   ① F6 在可见窗口间循环聚焦 → 聚焦的那个可用方向键移动(见 file-panel 的标题栏方向键);
+//   ② Esc 隐藏当前聚焦窗口;
+//   ③ 条上 / 下拉「文件」页里该文件的切换按钮可再次显示它。
+function topLimit(): number {
+  return viewportMargin.value
+}
+
+function measureJumpReserve(): void {
+  jumpReserve.value = (resolveLength('--dl-target-size') || 44) + 2 * (resolveLength('--dl-space-2') || 8)
+}
+
+// 视口下缘(留一档外边距)—— 窗体的下界,没有任何额外约束。
+function viewportFloor(): number {
+  const box = viewportBox()
+  return box.height - viewportMargin.value
+}
+
+// ⚠️ 两条路径的钳制**必须分开写**:拖动只许平移(尺寸是不变量),只有缩放才改尺寸。
+// 早先把两者合成一个「rect 归一化」函数,结果是「往下拖」时下边界被取 min、顶边继续下移 ⇒
+// **窗口高度被压小**(用户报的缺陷)。「钳制矩形」这个说法只描述边界,**不代表要压缩盒子**。
+//
+// 拖动 = 纯平移:整体移动 (x, y),宽高逐值不变;触边时**整个窗口停在边界上**(把 y 夹住),
+// 而不是把盒子压小。往回拖能回到原值,不会累积缩小。
+function clampRectForMove(rect: PanelRect): PanelRect {
+  const box = viewportBox()
+  const margin = viewportMargin.value
+  const top = Math.min(topLimit(), Math.max(margin, viewportFloor() - rect.h))
+  const x = Math.min(Math.max(rect.x, margin), Math.max(margin, box.width - rect.w - margin))
+  const maxY = Math.max(top, viewportFloor() - rect.h)
+  const y = Math.min(Math.max(rect.y, top), maxY)
+  return { x, y, w: rect.w, h: rect.h }
+}
+
+// 缩放才改尺寸:尺寸按 min/max 与可用宽高约束(**压小在这里是合法的**),位置随之钳进视口。
+function clampRectForResize(rect: PanelRect): PanelRect {
   const box = viewportBox()
   const margin = viewportMargin.value
   const maxW = Math.max(PANEL_MIN_W, box.width - 2 * margin)
+  // 高度上限 = 视口高减去上下各一档外边距(**不再与输入区挂钩**)。
   const maxH = Math.max(PANEL_MIN_H, box.height - 2 * margin)
   const minW = Math.min(PANEL_MIN_W, maxW)
   const minH = Math.min(PANEL_MIN_H, maxH)
   const w = Math.min(Math.max(rect.w, minW), maxW)
   const h = Math.min(Math.max(rect.h, minH), maxH)
   const x = Math.min(Math.max(rect.x, margin), Math.max(margin, box.width - w - margin))
-  const y = Math.min(Math.max(rect.y, margin), Math.max(margin, box.height - h - margin))
+  const minY = Math.min(topLimit(), Math.max(margin, viewportFloor() - h))
+  const maxY = Math.max(minY, viewportFloor() - h)
+  const y = Math.min(Math.max(rect.y, minY), maxY)
   return { x, y, w, h }
+}
+
+// 兼容旧调用点的别名:默认几何 / 视口变化后的重钳用**缩放语义**(尺寸可以被约束)。
+function clampRect(rect: PanelRect): PanelRect {
+  return clampRectForResize(rect)
 }
 
 function resetPanelGeometry(): void {
   panelRect.value = null
+  emitRect()
+}
+
+// 把当前几何上报给页面(由页面按分域保存)—— 只在**落定时**上报,不在拖动 / 缩放的每一帧上报。
+function emitRect(): void {
+  const rect = panelRect.value
+  emit('rect-change', rect === null ? null : { x: rect.x, y: rect.y, width: rect.w, height: rect.h })
 }
 
 // ---- 拖动(只认标题栏作手柄)----
@@ -310,7 +398,8 @@ function onHeaderPointerMove(event: PointerEvent): void {
     isPanelDragging.value = true
     headerRef.value?.setPointerCapture(event.pointerId)
   }
-  panelRect.value = clampRect({ ...dragBase, x: dragBase.x + dx, y: dragBase.y + dy })
+  // 拖动 = 纯平移:宽高取自 dragBase(拖拽开始时的那一份),全程不参与钳制的计算。
+  panelRect.value = clampRectForMove({ ...dragBase, x: dragBase.x + dx, y: dragBase.y + dy })
 }
 
 function endHeaderDrag(event: PointerEvent): void {
@@ -320,12 +409,12 @@ function endHeaderDrag(event: PointerEvent): void {
   isPanelDragging.value = false
   dragBase = null
   dragPointerId = -1
+  emitRect()
 }
 
 // 拖动期间只走 transform / 直接改几何(不加任何过渡 —— 本仓设计语言的可动效白名单只有
 // transform / opacity,布局属性本就不许过渡,故这里是「跟手」的);`is-moving` 再显式关掉过渡兜底。
 function onHeaderKeydown(event: KeyboardEvent): void {
-  console.log('[debug-header-key]', event.key, event.shiftKey, 'rect=', JSON.stringify(panelRect.value))
   const step = event.shiftKey ? PANEL_KEY_STEP_LARGE : PANEL_KEY_STEP
   let dx = 0
   let dy = 0
@@ -337,8 +426,10 @@ function onHeaderKeydown(event: KeyboardEvent): void {
   event.preventDefault()
   const rect = currentRect()
   if (rect === null) return
-  panelRect.value = clampRect({ ...rect, x: rect.x + dx, y: rect.y + dy })
-  console.log('[debug-header-key] after set', JSON.stringify(panelRect.value), 'style=', rootRef.value?.style.cssText)
+  // 标题栏的方向键也是**平移**:同样只改位置、不改尺寸。
+  const moved = clampRectForMove({ ...rect, x: rect.x + dx, y: rect.y + dy })
+  panelRect.value = moved
+  emitRect()
 }
 
 function onHeaderDoubleClick(event: MouseEvent): void {
@@ -426,6 +517,7 @@ function endResize(event: PointerEvent): void {
   resizeBase = null
   resizePointerId = -1
   isPanelResizing.value = false
+  emitRect()
 }
 
 function onResizeKeydown(event: KeyboardEvent, handle: ResizeHandle): void {
@@ -453,6 +545,7 @@ function onResizeKeydown(event: KeyboardEvent, handle: ResizeHandle): void {
   }
   event.preventDefault()
   panelRect.value = clampRect(next)
+  emitRect()
 }
 
 // 内容区尺寸:显式几何优先,否则用「默认几何下的实测量值」。它喂给分隔条的 aria-valuenow ——
@@ -480,6 +573,7 @@ function ariaMax(vertical: boolean): number {
 // 视口尺寸变化:刷新度量并**重新钳一次**(浮动窗口最经典的缺陷就是「视口变小后窗口留在界外」)。
 function onViewportResize(): void {
   viewportMargin.value = resolveLength('--dl-space-6') || 24
+  measureJumpReserve()
   viewportNonce.value += 1
   if (panelRect.value !== null) panelRect.value = clampRect(panelRect.value)
   measureWidth()
@@ -487,8 +581,12 @@ function onViewportResize(): void {
 
 onMounted(() => {
   viewportMargin.value = resolveLength('--dl-space-6') || 24
+  measureJumpReserve()
   // 挂载后再重算一次默认几何:首帧求值时页面样式可能尚未就绪,自定属性会解析成 0。
   viewportNonce.value += 1
+  // 该文件在本分域里被摆过位置 → 按原样恢复(切项目 / 切文件回来是同一个位置)。
+  const stored = props.initialRect
+  if (stored !== null) panelRect.value = clampRect({ x: stored.x, y: stored.y, w: stored.width, h: stored.height })
   measureWidth()
   if (rootRef.value !== null && typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(() => measureWidth())
@@ -514,7 +612,16 @@ onBeforeUnmount(() => {
     :data-view="effectiveView"
     :data-default-geometry="panelRect === null ? 'true' : 'false'"
     :style="panelStyle"
+    :data-focused="isFocused ? 'true' : 'false'"
+    :data-file-path="path"
+    @pointerdown="emit('focus')"
   >
+    <!-- 「面」这一层:底色 / 描边 / 圆角 / 阴影,并负责**吃掉滚轮** ——
+         overflow: hidden + overscroll-behavior: contain 一并给出。规范细节:overscroll-behavior 只在
+         滚动容器上生效,而内容不足一屏时(老引擎)没有溢出就不触发;Chrome 144 起对「不可滚动的
+         滚动容器」(如 overflow: hidden)也生效,故这一层加上 contain 才能真正兜住「内容不满一屏时
+         滚轮穿透到背后页面」。缩放手柄是它的**兄弟**、留在这一层之外,因此不受裁剪影响。 -->
+    <div class="file-panel__surface">
     <!-- 标题栏 = 薄头 + **拖拽手柄**:整块可拖(阈值 4px、指针捕获、跟手无过渡),
          双击复位默认几何;表头的按钮不算手柄。方向键按步长移动窗口(键盘替代通路)。 -->
     <header
@@ -645,6 +752,7 @@ onBeforeUnmount(() => {
         </template>
       </div>
     </div>
+    </div>
 
     <!-- 缩放手柄(APG Window Splitter)。四边是**可聚焦的分隔条**:aria-orientation 表达轴向、
          aria-valuenow/min/max 表达被调整尺寸的当前值与边界、aria-controls 指向被调整的内容区;
@@ -694,10 +802,21 @@ onBeforeUnmount(() => {
    仍按 gutter 内缩,与消息正文左右对齐(仍是阅读列宽)。 */
 /* 浮动文件窗口:**固定定位在视口坐标系**里(几何由 JS 写 left/top/width/height),可在浏览器
    可显示区域任意位置拖动 —— 不再局限于对话面板内部。层序:浮在两块面板之上、模态 / 抽屉之下
-   (抽屉在窄屏抬到 modal 档,见 workspace-page)。 */
+   (抽屉在窄屏抬到 modal 档,见 workspace-page)。这一层只做定位与容器查询,「面」在下一层。 */
 .file-panel {
   position: fixed;
+  /* 层序由 props.zIndex 逐窗口给出(见 panelStyle)—— 多窗口时「谁在上」是状态,不是常量。 */
   z-index: var(--dl-z-overlay);
+  /* 头部按**自身宽度**(容器查询)决定紧凑程度:面板窄时收成图标分段 + 去掉芯片与统计,
+     于是「头部内部元素不换行」在任何宽度都成立。 */
+  container-type: inline-size;
+}
+
+/* 「面」:底色 / 描边 / 圆角 / 阴影,以及**滚轮隔离**。
+   滚动链是 Web 应用最常见的 UX bug 之一(MDN);横向还必须单独设 -x,否则某些浏览器会把横向
+   过度滚动当成前进 / 后退手势 —— 故这里 `overscroll-behavior: contain` 一次设两轴。 */
+.file-panel__surface {
+  block-size: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -705,9 +824,8 @@ onBeforeUnmount(() => {
   border: var(--dl-border-width) solid var(--dl-border-base);
   border-radius: var(--dl-radius-xl);
   box-shadow: var(--dl-shadow-lg);
-  /* 头部按**自身宽度**(容器查询)决定紧凑程度:面板窄时收成图标分段 + 去掉芯片与统计,
-     于是「头部内部元素不换行」在任何宽度都成立。 */
-  container-type: inline-size;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 /* 拖动 / 缩放期间**不加过渡**(跟手)。本仓设计语言的可动效白名单只有 transform / opacity,
@@ -983,11 +1101,14 @@ onBeforeUnmount(() => {
   color: var(--dl-error);
 }
 
-/* 内容区:纵向滚动;不换行时长行横向滚动。 */
+/* 内容区:**始终是一个真正的滚动容器**(overflow: auto),并在**两个轴**上都隔离滚动链 ——
+   横向在「换行关闭 / 并排窄降级」之外也可能需要横向滚动,同样不该把滚动传给背后的页面。
+   滚动条**不隐藏**:横向可滚动区域必须保留可见的滚动条作为「这里能横向滚」的提示(a11y)。 */
 .file-panel__body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding-block: var(--dl-space-2);
 }
 

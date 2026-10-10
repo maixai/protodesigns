@@ -111,6 +111,10 @@
   /* 布局常量:内容容器、吸顶栏高度 */
   --dl-container-max: 1520px;
   --dl-header-height: 60px;
+  /* 顶栏**当场**的高度:默认 = --dl-header-height;工作台页把整站顶栏折叠起来时,
+     由 site-header.vue 把它改写成 0px,页面据此把腾出的高度交还给下方内容。
+     单独一个 token 而不是直接改 --dl-header-height —— 后者是「设计常量」,还有别处按它算间距。 */
+  --dl-header-height-current: var(--dl-header-height);
 
   /* 外壳 gutter:顶栏与应用框架只共享 .dl-container 的视口内边距,
      不共享它的 1520px 上限 —— 品牌/账号因此能贴到视口两侧,
@@ -150,6 +154,9 @@
      (bg 用本 token、字用 --dl-warning)。取值同 design-language 展示页的 --dl-warning-50,
      以保证在警告色文字下达到正文级对比度。 */
   --dl-warning-subtle: #fbf4e8;
+  /* 成功色的浅底:与上面成对,给「输出完成」徽标用(bg 本 token、字 --dl-success)。
+     本文件此前只备了警告那一对,这里按 design-language 展示页的同名取值补齐,不新造色。 */
+  --dl-success-subtle: #f0f5f1;
   --dl-error: #9c4038;
   --dl-info: #3d5a70;
   --dl-shadow-xs: 0 1px 2px rgba(52, 43, 33, 0.05);
@@ -214,6 +221,7 @@
   /* 警告色浅底的深色取值:同展示页 --dl-warning-50 的深色档,配合提亮后的 --dl-warning
      仍满足正文级对比度。 */
   --dl-warning-subtle: #2c2418;
+  --dl-success-subtle: #1e2a22;
   --dl-error: #d98a80;
   --dl-info: #8fb0c9;
   /* 深色下阴影不承担层级,取值进一步减弱 */
@@ -260,6 +268,27 @@
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+}
+
+/* ==========================================================================
+   横滑后退防护(only works on the **root scrolling container**)
+   --------------------------------------------------------------------------
+   macOS 上单指横滑(Magic Mouse / 触控板)会触发浏览器的「滑动导航」后退 —— 工作台里有大量
+   横向交互(文件内容区可横向滚动、会话 tab 条),用户很容易在毫无意图的情况下被弹回登录页。
+
+   页面侧的标准解法是在**根滚动容器**上写 `overscroll-behavior: none`(两个轴):该属性正是
+   规范里「禁止由过度滚动触发非滚动动作(如导航)」的提示位,React Flow / Figma 等有横向交互的
+   应用都以此处置。**只写在局部元素上无效** —— 滑动导航的判定发生在文档级滚动链的末端。
+
+   挂在 html 上而非无条件生效:类由工作台页在挂载时加、卸载时移除,首页(营销页)保持浏览器
+   默认的滚动行为,不缩小它的可滚动语义。
+
+   html 与 body **都设**:各引擎判定「过度滚动归属哪个元素」的口径不完全一致(Chromium 认
+   html,Safari 的传播链上 body 也参与),两个都写最稳。
+   ========================================================================== */
+html.is-workspace,
+html.is-workspace body {
+  overscroll-behavior: none;
 }
 
 body {

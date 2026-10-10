@@ -1,10 +1,12 @@
 // 类型化内存 API：演示延迟与业务失败均遵循 Result 约定。
 import type { AgentId, ChatSession } from '../contracts/generated/chat-session'
+
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
+import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { FileContent } from '../contracts/generated/file-content'
@@ -14,6 +16,7 @@ import { delay } from '../mocks/delay'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentRuntime,
+  mockAgentSignals,
   mockAgents,
   mockCloseProject,
   mockConfirmationRequest,
@@ -120,6 +123,17 @@ export async function closeProject(projectId: string): Promise<Result<string>> {
     return { ok: false, error: new Error(t.value.workspace.invalidProject) }
   }
   return { ok: true, value: projectId }
+}
+
+// 列出 Agent 级的「需要你处理」信号:每个 Agent 名下、尚未被点开看过的「等待交互」与
+// 「响应完成」会话各有多少条 —— Agent 栏据此在标签上挂 Badge(两类并存取更紧急的等待交互)。
+// seenSessionIds 是调用方持有的**视图状态**(哪几段对话已经在它等待 / 完成期间被打开过);
+// 它是客户端才知道的事实,故由调用方传入、在此从计数里排除 —— 与 tab 上的状态 Badge 共用
+// 同一份「已看过」集合,两处不会各说各话。
+export async function listAgentSignals(seenSessionIds: readonly string[]): Promise<Result<AgentSignal[]>> {
+  const demoState = currentRoute.value.demoState
+  await delay()
+  return { ok: true, value: mockAgentSignals(demoState, seenSessionIds) }
 }
 
 // 取某个 Agent 在**当前项目**下的运行遥测(状态 / 状态详情键 / 模型 / context 用量 / 时长 /

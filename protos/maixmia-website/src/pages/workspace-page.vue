@@ -7,18 +7,19 @@ import type { TranscriptState } from '../contracts/generated/transcript-state'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry, ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
+import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { ProjectTreeRow } from '../data/project-tree'
-import type { FileTab, FileWorkspace, FilePanelState, RecentFile } from '../data/open-files'
+import type { FileDomain, FileTab, FileWindow, FileWindowRect, FileWorkspace, FilePanelState } from '../data/open-files'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
-import { emptyFileWorkspace, fileTabKey, rememberRecent } from '../data/open-files'
-import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
+import { emptyFileWorkspace, fileDomainKey, fileDomainOf, rememberRecent, withFileDomain } from '../data/open-files'
+import { closeProject as closeProjectRequest, createSession,  getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
-import AgentSelector from '../components/agent-selector.vue'
+import AgentBar from '../components/agent-bar.vue'
 import ConfirmationCard from '../components/confirmation-card.vue'
 import ConversationSwitcher from '../components/conversation-switcher.vue'
 import DliIcon from '../components/dl-icon.vue'
@@ -47,6 +48,12 @@ const isNarrow = ref(window.matchMedia('(max-width: 1023px)').matches)
 // (否则同一个演示态看一次后提示就不再出现,演示与断言都不可重复)。
 const isSwitcherOpen = ref(false)
 const seenSessions = ref<Set<string>>(new Set())
+// Agent 栏的「需要你处理」信号(Agent 级聚合):每个 Agent 名下、**未看过**的等待交互 / 响应完成
+// 各有多少条。它由 listAgentSignals 按当前的「已看过」集合算出 —— 与 tab 上的状态 Badge 共用
+// 同一份 seenSessions,两处不会各说各话(打开一段对话,tab 的 Badge 与 Agent 的 Badge 一起清)。
+const agentSignals = ref<AgentSignal[]>([])
+// 信号的加载代次:随机延迟会让「切 Agent 的旧请求」晚于新请求返回,旧结果不得覆盖新结果。
+let agentSignalVersion = 0
 // 「打开集」是**视图状态**(不进契约):关闭只是把会话从 tab 条撤下,会话本身仍在当前项目的会话列表里
 // (▾ 面板照旧列出全部,含已关闭的)。用「关闭集」表示 —— 默认空 = 全部打开(不改变现有观感),
 // ＋ 新建的会话不在关闭集里 → 自动打开。刷新即重置,与原型约定一致(浏览器同构:关标签页不删网页)。
@@ -58,9 +65,7 @@ const previousScroll = ref(0)
 let isPointerScrolling = false
 const log = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
-// 悬浮输入框本体(绝对定位,多行时向上生长)与对话面板(承载 --composer-float-height 的容器)。
-const composerForm = ref<HTMLElement | null>(null)
-const conversationPanel = ref<HTMLElement | null>(null)
+const pageRoot = ref<HTMLElement | null>(null)
 const drawer = ref<HTMLElement | null>(null)
 const sidebarTrigger = ref<HTMLButtonElement | null>(null)
 const fullResponse = ref<ChatMessage | null>(null)
@@ -70,11 +75,16 @@ const isAlive = ref(true)
 const narrowMedia = window.matchMedia('(max-width: 1023px)')
 const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
 const BOTTOM_THRESHOLD = 100
-const STREAM_INTERVAL = 32
-const STREAM_CHUNK = 8
+// 流式节奏:6 字 / 80ms ≈ 75 字每秒。上一版是 8 字 / 32ms(≈250 字每秒)—— 一段 230 字的中文回答
+// 不到 1 秒就吐完,既不像真实模型输出(实测约 20–60 字每秒),也让「思考中 → 输出中 → 停止生成」
+// 这条交互链几乎没有可观察的窗口。放缓后演示可看,也与真实流式的时间尺度一致。
+const STREAM_INTERVAL = 80
+const STREAM_CHUNK = 6
 // 新会话的归属项目由侧栏决定;它的 Agent 由项目反推(项目挂在 Agent 上),故页面只持有
 // 「当前 Agent」与「当前项目」两个选择,不存在两处对不上的可能。
 const DEFAULT_AGENT_ID = 'planning' satisfies ChatSession['agent']
+// 三个 Agent 的固定顺序(与契约 AgentId 的取值集合一致)—— 顺序的单一来源在本页,传给 Agent 栏。
+const AGENT_ORDER = ['planning', 'research', 'writing'] satisfies ChatSession['agent'][]
 const selectedAgent = ref<ChatSession['agent']>(DEFAULT_AGENT_ID)
 const searchQuery = ref('')
 const searchHits = ref<ConversationSearchHit[]>([])
@@ -108,14 +118,19 @@ const projectTrees = ref<Record<string, ProjectEntry[]>>({})
 const treeStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const isPickerOpen = ref(false)
 // ---- 文件栏与文件面板(双击文件树里的文件 → 在右侧渲染该文件)----
-// 打开集 / 活动文件 / 最近打开都是**视图状态**(不进契约),且是**全局**的:跨项目、跨会话共享,
-// 换项目 / 换会话都不清空。每个 tab 自带所属项目(栏里可能混装多个项目的文件),故 tab 上要
-// 自己声明出处。刷新即重置。关闭 ≠ 删除 —— 关掉的文件仍在「最近打开」里,可再打开。
+// 打开集 / 活动文件 / 最近打开 / 窗口几何都是**视图状态**(不进契约),且**按 (Agent, 项目) 分域**:
+// tab 表示的对话或文件只能属于被选中的 Agent 与被选中的项目,条上不会混装两个项目的东西。
+// 切 Agent / 切项目时旧域只是不被呈现(打开集、几何、最近打开原样留着),切回来即恢复 ——
+// 不销毁、不清空(与「关闭 ≠ 删除」同源,也是 VS Code / IntelliJ「编辑器标签按项目保存与恢复」
+// 的既有行为)。刷新即重置。
 const fileWorkspace = ref<FileWorkspace>(emptyFileWorkspace())
-const recentFiles = ref<RecentFile[]>([])
-const fileContent = ref<FilePanelState>({ status: 'loading' })
-// 文件内容加载的版本号:快速换文件时,乱序返回的旧内容不得覆盖新文件。
-let fileVersion = 0
+// 当前分域:由「当前 Agent + 当前项目」唯一决定。
+const fileDomainK = computed(() => fileDomainKey(selectedAgent.value, selectedProjectId.value))
+const domain = computed<FileDomain>(() => fileDomainOf(fileWorkspace.value, fileDomainK.value))
+// 文件内容**按路径各存一份**:多窗口下每个窗口显示的文件不同,一份全局内容会互相覆盖。
+const fileContents = ref<Record<string, FilePanelState>>({})
+// 每个文件各自的加载版本号:乱序返回的旧内容不得覆盖同一路径的新请求。
+const fileVersions = new Map<string, number>()
 // 键盘在文件行上按 Enter = 钉住打开;native button 的 keydown 会再派发一次 click,
 // 用这个标记把那次 click(单击语义)吞掉,避免「钉住」被随后的「预览」降级。
 let suppressFileRowClick = false
@@ -286,83 +301,97 @@ function toggleDirectory(projectId: string, path: string): void {
   expandedDirs.value = next
 }
 
-// ---- 文件栏与文件面板:打开 / 关闭 / 排序 / 取内容 / 跨项目 -
+// ---- 文件栏与文件面板:打开 / 关闭 / 排序 / 取内容(全部在**当前分域**内进行)----
 
-const fileTabs = computed<FileTab[]>(() => fileWorkspace.value.tabs)
-const activeFileKey = computed(() => fileWorkspace.value.activeKey)
-// 活动文件(= 打开集里那个 tab)—— 面板的内容与出处都由它决定,与「当前项目」**解耦**。
-const activeFile = computed<FileTab | null>(() => fileTabs.value.find((item) => fileTabKey(item) === activeFileKey.value) ?? null)
-// 面板显示 ⟺ 有活动文件。关闭面板 = 收起活动标记(文件仍在栏上,这正是「关闭 ≠ 删除」)。
-const isFilePanelOpen = computed(() => activeFile.value !== null)
-// 「允许 / 拒绝」只在文件属于**当前会话的**待确认请求时出现 —— 跨项目不提供写动作。
-const canConfirmActiveFile = computed(() => activeFile.value !== null && activeFile.value.projectId === selectedProjectId.value)
-// ▾ 菜单的「最近打开」:跨项目;**仍然打开着**的那些不重复列(它们已在栏上)。
-const recentForBar = computed<RecentFile[]>(() => recentFiles.value.filter((entry) => !fileTabs.value.some((tab) => tab.projectId === entry.projectId && tab.path === entry.path)))
+const fileTabs = computed<FileTab[]>(() => domain.value.tabs)
+// 可见的窗口(条上那个切换按钮的 aria-pressed 与它们一一对应)。按 z 升序渲染,故后画的在上。
+const visibleWindows = computed(() => Object.entries(domain.value.windows)
+  .filter(([, win]) => win.visible)
+  .map(([path, win]) => ({ path, ...win }))
+  .sort((a, b) => a.z - b.z))
+// 可见窗口的路径集合:条上 / 下拉里每个切换按钮的 aria-pressed 都由它决定(多窗口下可同时按下多个)。
+const visibleFilePaths = computed<readonly string[]>(() => visibleWindows.value.map((win) => win.path))
+// 当前聚焦的窗口路径;没有可见窗口时为空(F6 / Esc 的落点)。
+const focusedWindowPath = computed(() => (domain.value.windows[domain.value.focus]?.visible === true ? domain.value.focus : (visibleWindows.value.at(-1)?.path ?? '')))
+// 只要有窗口可见,面板就在(「关掉窗口」只把 visible 置假,标签仍在条上)。
+const isFilePanelOpen = computed(() => visibleWindows.value.length > 0)
+// ▾ 菜单的「最近关闭」:域内,且**仍然打开着**的不重复列(它们已在栏上)。
+const recentForBar = computed<readonly string[]>(() => domain.value.recent.filter((path) => !fileTabs.value.some((tab) => tab.path === path)))
 
-// 当前项目的展示名:从项目树打开文件时作为该 tab 的出处。
+// 当前项目的展示名:文件窗口的元信息条要写全出处,而分域本身不带项目名。
 const currentProjectName = computed(() => projects.value.find((project) => project.id === selectedProjectId.value)?.name ?? '')
 
-// tab 的状态芯片:按该 tab **自己的项目**回查条目(别的项目的树没加载时为 none → 不渲染芯片)。
+// tab 的状态芯片:按**当前项目**的树回查条目(分域之后只可能是这一个项目)。
 function entryStateOfTab(tab: FileTab): ProjectEntryStateId {
-  const entry = projectTrees.value[tab.projectId]?.find((item) => item.path === tab.path)
-  const base = entry?.state ?? 'none'
-  // 「待确认 → 允许后变已改」这条联动只属于**当前会话**(确认请求挂在当前项目的那条会话上);
-  // 其它项目的 tab 拿不到那层的上下文,只报基础状态。
-  return tab.projectId === selectedProjectId.value ? resolveEntryState(base, tab.path) : base
+  const entry = projectTrees.value[selectedProjectId.value]?.find((item) => item.path === tab.path)
+  return resolveEntryState(entry?.state ?? 'none', tab.path)
 }
 
-function setFileWorkspace(next: FileWorkspace): void {
-  fileWorkspace.value = next
+// 当前分域上的不可变更新(其余分域原样保留)。
+function patchDomain(next: (current: FileDomain) => FileDomain): void {
+  fileWorkspace.value = withFileDomain(fileWorkspace.value, fileDomainK.value, next(domain.value))
 }
 
 // 取一份文件内容。版本号挡住乱序返回:快速换文件时,旧文件的响应不得盖住新文件。
-// 出处由**活动文件自己**给出(跨项目),不再取「当前项目」。
-async function loadFileContent(file: { projectId: string; path: string }): Promise<void> {
-  fileVersion += 1
-  const version = fileVersion
+async function loadFileContent(file: FileTab): Promise<void> {
+  const version = (fileVersions.get(file.path) ?? 0) + 1
+  fileVersions.set(file.path, version)
+  const projectId = selectedProjectId.value
   const sessionId = activeId.value
-  fileContent.value = { status: 'loading' }
-  const result = await getFileContent(file.projectId, file.path, sessionId)
-  if (!isAlive.value || version !== fileVersion) return
-  // 用户可能已经切走 / 关掉了这个文件(活动文件变了就不再写)。
-  const current = activeFile.value
-  if (current === null || current.projectId !== file.projectId || current.path !== file.path) return
-  if (!result.ok) {
-    fileContent.value = { status: 'error' }
-    return
-  }
-  // 空行数组 = 二进制 / 无可预览的文本 → 走「空态」。
-  fileContent.value = result.value.lines.length === 0 ? { status: 'empty' } : { status: 'ready', content: result.value }
+  fileContents.value = { ...fileContents.value, [file.path]: { status: 'loading' } }
+  const result = await getFileContent(projectId, file.path, sessionId)
+  if (!isAlive.value || version !== (fileVersions.get(file.path) ?? 0)) return
+  // 用户可能已经关掉了这个文件的窗口 / 换了项目 —— 那就不写回。
+  if (projectId !== selectedProjectId.value) return
+  if (!domain.value.tabs.some((tab) => tab.path === file.path)) return
+  const next: FilePanelState = !result.ok
+    ? { status: 'error' }
+    // 空行数组 = 二进制 / 无可预览的文本 → 走「空态」。
+    : (result.value.lines.length === 0 ? { status: 'empty' } : { status: 'ready', content: result.value })
+  fileContents.value = { ...fileContents.value, [file.path]: next }
+}
+
+// 某个文件的窗口内容(还没有请求过时先给 loading,与旧的单窗口行为一致)。
+function contentOf(path: string): FilePanelState {
+  return fileContents.value[path] ?? { status: 'loading' }
 }
 
 // 打开文件:kind 为 preview(单击,占临时槽,顶掉旧预览)或 pinned(双击 / Enter,独占一格)。
-// 出处 = 传进来的项目(从项目树打开时是当前项目;从「最近打开」点开时是那条自己的项目)。
 // 已在栏上时:预览提升为固定(原地转正,不新增 tab);已固定的只切为活动。
-function openFile(projectId: string, projectName: string, path: string, kind: FileTab['kind']): void {
-  const workspace = fileWorkspace.value
-  const key = fileTabKey({ projectId, path })
-  const existing = workspace.tabs.find((tab) => fileTabKey(tab) === key)
-  let tabs = workspace.tabs
-  if (existing === undefined) {
-    const fresh: FileTab = { path, projectId, projectName, kind }
-    if (kind === 'preview') {
-      const previewIndex = workspace.tabs.findIndex((tab) => tab.kind === 'preview')
-      tabs = previewIndex >= 0 ? workspace.tabs.map((tab, index) => (index === previewIndex ? fresh : tab)) : [...workspace.tabs, fresh]
-    } else {
-      tabs = [...workspace.tabs, fresh]
-    }
-  } else if (kind === 'pinned' && existing.kind === 'preview') {
-    tabs = workspace.tabs.map((tab) => (fileTabKey(tab) === key ? { ...tab, kind } : tab))
-  }
-  setFileWorkspace({ tabs, activeKey: key })
-  recentFiles.value = rememberRecent(recentFiles.value, { agentId: selectedAgent.value, projectId, projectName, path })
-  // 内容由 watch(activeFile) 统一取。
+// 新窗口的级联偏移:每多一个同时可见的窗口,右下各挪一档,避免完全重叠(窗口管理器的惯例)。
+const WINDOW_CASCADE_STEP = 28
+
+// 打开一个文件:**每个文件独占一个 tab**。已在条上 → 只激活(不新增、不重复建窗口)。
+// 单击 / 双击 / Enter 三条路径都走这里,行为一致 —— 没有「预览槽」这回事。
+function openFile(path: string): void {
+  const current = domain.value
+  const existing = current.tabs.find((tab) => tab.path === path)
+  const tabs = existing === undefined ? [...current.tabs, { path } satisfies FileTab] : current.tabs
+  const openCount = Object.values(current.windows).filter((win) => win.visible).length
+  const previous = current.windows[path]
+  // 已经有窗口状态(以前开过)→ **按原样恢复**,只置为可见并置顶;从没有过 → 级联偏移量的默认几何。
+  const win: FileWindow = previous === undefined
+    ? { rect: { x: WINDOW_CASCADE_STEP * openCount, y: WINDOW_CASCADE_STEP * openCount, width: 0, height: 0 }, visible: true, z: nextZ(current) }
+    : { rect: previous.rect, visible: true, z: nextZ(current) }
+  patchDomain((item) => ({
+    ...item,
+    tabs,
+    activeKey: path,
+    recent: rememberRecent(item.recent, path),
+    windows: { ...item.windows, [path]: win },
+    focus: path,
+  }))
 }
 
-// 从项目树打开:出处取**当前项目**。
-function openFromTree(path: string, kind: FileTab['kind']): void {
+// 层序取「当前最大值 + 1」。加 1 而不是长度,保证反复置顶也不会撞号。
+function nextZ(current: FileDomain): number {
+  return Math.max(0, ...Object.values(current.windows).map((win) => win.z)) + 1
+}
+
+// 从项目树打开(域内路径)。
+function openFromTree(path: string): void {
   if (selectedProjectId.value === '') return
-  openFile(selectedProjectId.value, currentProjectName.value, path, kind)
+  openFile(path)
 }
 
 // 文件树里的文件行:单击 = 预览(键盘派生的 click 不计,由 keydown 处理)。
@@ -372,12 +401,12 @@ function onFileRowClick(row: ProjectTreeRow, event: MouseEvent): void {
     return
   }
   if (event.detail === 0) return
-  openFromTree(row.path, 'preview')
+  openFromTree(row.path)
 }
 
 // 双击 = 钉住(独占一格)。
 function onFileRowDblClick(row: ProjectTreeRow): void {
-  openFromTree(row.path, 'pinned')
+  openFromTree(row.path)
 }
 
 // 键盘:焦点在文件行上按 Enter(或空格)= 钉住打开。
@@ -385,56 +414,124 @@ function onFileRowKey(event: KeyboardEvent, row: ProjectTreeRow): void {
   if (event.key !== 'Enter' && event.key !== ' ') return
   event.preventDefault()
   suppressFileRowClick = true
-  openFromTree(row.path, 'pinned')
+  openFromTree(row.path)
 }
 
+// 条上的文件项 = **切换按钮**:按下 = 其窗口可见。点它即显示 / 隐藏该窗口(④ 定的语义),
+// 显示时同时聚焦置顶 —— 「点一下就看见」这件事不该还要再点一次窗口。
 function selectFileTab(key: string): void {
-  if (activeFileKey.value === key) return
-  setFileWorkspace({ ...fileWorkspace.value, activeKey: key })
+  const current = domain.value
+  const win = current.windows[key]
+  if (win === undefined || win.visible === false) {
+    patchDomain((item) => betterVisible(item, key))
+    return
+  }
+  if (item_focusedOn(current, key)) return
+  patchDomain((item) => ({ ...item, focus: key, windows: raise(item.windows, key, item) }))
 }
 
-// 关闭一个文件 tab(≠ 删除):从栏上撤下,活动项落到相邻(优先右侧);一个不剩则收起面板。
-// 「最近打开」不动,故关掉的文件仍能在 ▾ 菜单里找到、点回。
+// 该窗口已可见且已聚焦 → 无需变更(避免无谓的 patch 触发重渲染)。
+function item_focusedOn(current: FileDomain, key: string): boolean {
+  return current.focus === key && current.windows[key]?.visible === true
+}
+
+// 让某个窗口可见并置顶(必要时补一份默认几何:以前从没开过的文件在这里补上)。
+function betterVisible(current: FileDomain, key: string): FileDomain {
+  const previous = current.windows[key]
+  const openCount = Object.values(current.windows).filter((win) => win.visible).length
+  const win: FileWindow = previous === undefined
+    ? { rect: { x: WINDOW_CASCADE_STEP * openCount, y: WINDOW_CASCADE_STEP * openCount, width: 0, height: 0 }, visible: true, z: nextZ(current) }
+    : { ...previous, visible: true, z: nextZ(current) }
+  return { ...current, activeKey: key, windows: { ...current.windows, [key]: win }, focus: key }
+}
+
+// 把某个窗口抬到最上层。
+function raise(windows: Record<string, FileWindow>, key: string, current: FileDomain): Record<string, FileWindow> {
+  const win = windows[key]
+  if (win === undefined) return windows
+  return { ...windows, [key]: { ...win, z: nextZ(current) } }
+}
+
+// 关闭一个文件 tab(≠ 删除):从条上撤下并**隐藏其窗口**;窗口状态(几何 / 层序)留着,
+// 故从下拉的「文件」页再点回来是原样。
 function closeFileTab(key: string): void {
-  const workspace = fileWorkspace.value
-  const index = workspace.tabs.findIndex((tab) => fileTabKey(tab) === key)
+  const current = domain.value
+  const index = current.tabs.findIndex((tab) => tab.path === key)
   if (index < 0) return
-  const neighbor = workspace.tabs[index + 1] ?? workspace.tabs[index - 1] ?? null
-  const nextActive = workspace.activeKey === key ? (neighbor === null ? '' : fileTabKey(neighbor)) : workspace.activeKey
-  setFileWorkspace({ tabs: workspace.tabs.filter((tab) => fileTabKey(tab) !== key), activeKey: nextActive })
+  const neighbor = current.tabs[index + 1] ?? current.tabs[index - 1] ?? null
+  const nextActive = current.activeKey === key ? (neighbor === null ? '' : neighbor.path) : current.activeKey
+  const win = current.windows[key]
+  patchDomain((item) => ({
+    ...item,
+    tabs: item.tabs.filter((tab) => tab.path !== key),
+    activeKey: nextActive,
+    windows: win === undefined ? item.windows : { ...item.windows, [key]: { ...win, visible: false } },
+    focus: item.focus === key ? '' : item.focus,
+  }))
 }
 
 function reorderFileTabs(order: string[]): void {
-  const byKey = new Map(fileWorkspace.value.tabs.map((tab) => [fileTabKey(tab), tab]))
+  const byKey = new Map(domain.value.tabs.map((tab) => [tab.path, tab]))
   const tabs = order.flatMap((key) => {
     const tab = byKey.get(key)
     return tab === undefined ? [] : [tab]
   })
-  setFileWorkspace({ ...fileWorkspace.value, tabs })
+  patchDomain((item) => ({ ...item, tabs }))
 }
 
-// 点「最近打开」里的条目:直接以**它自己的项目**打开 —— **不切换当前项目**(跨项目打开是
-// 阅读动作,不该带来意外的导航)。
-function openRecentFile(entry: RecentFile): void {
+// 点「最近关闭」里的条目:在当前分域里重新打开(它就是本项目的文件)。
+function openRecentFile(path: string): void {
   if (isBusy.value) return
-  openFile(entry.projectId, entry.projectName, entry.path, 'preview')
+  openFile(path)
 }
 
-// 收起文件面板(Esc / 面板的关闭钮):文件留在栏上,焦点还给栏里那个 tab(键盘操作者不丢位置)。
-function closeFilePanel(): void {
-  const key = activeFileKey.value
-  if (key === '') return
-  const workspace = fileWorkspace.value
-  setFileWorkspace({ ...workspace, activeKey: '' })
+// 聚焦一个窗口(点它 / 在它里面交互都会来这):置顶 —— 与桌面窗口管理器的「点谁谁在上」一致。
+function focusFileWindow(path: string): void {
+  const current = domain.value
+  if (current.focus === path && current.windows[path]?.z === nextZ(current) - 1) return
+  patchDomain((item) => ({ ...item, focus: path, activeKey: path, windows: raise(item.windows, path, item) }))
+}
+
+// 关掉一个**窗口**(Esc / 窗口的关闭钮):不同于关标签 —— 标签留在条上,再点一次即恢复显示。
+function closeFileWindow(path: string): void {
+  const win = domain.value.windows[path]
+  if (win === undefined) return
+  patchDomain((item) => ({
+    ...item,
+    windows: { ...item.windows, [path]: { ...win, visible: false } },
+    focus: item.focus === path ? '' : item.focus,
+  }))
+  // 焦点还给条上那个切换按钮(键盘操作者不丢位置)。
   void nextTick(() => {
-    const tab = document.querySelector<HTMLElement>(`.file-tab[data-file-key="${CSS.escape(key)}"]`)
+    const tab = document.querySelector<HTMLElement>(`.file-tab[data-file-key="${CSS.escape(path)}"]`)
     tab?.focus()
   })
 }
 
-function retryFile(): void {
-  const file = activeFile.value
-  if (file !== null) void loadFileContent(file)
+// 焦点在当前可见的窗口之间循环(F6,APG Window Splitter 里列出的标准键)。
+function cycleFileWindow(): void {
+  const list = visibleWindows.value
+  if (list.length < 2) return
+  const currentIndex = list.findIndex((win) => win.path === focusedWindowPath.value)
+  const next = list[(currentIndex + 1) % list.length]
+  if (next !== undefined) focusFileWindow(next.path)
+}
+
+// 某个窗口的几何落定 → 记进**当前分域**(关窗口 / 切分域都不清几何)。
+function onFileRectChange(path: string, rect: FileWindowRect | null): void {
+  const win = domain.value.windows[path]
+  if (win === undefined) return
+  patchDomain((item) => ({
+    ...item,
+    windows: rect === null
+      ? { ...item.windows, [path]: { ...win, rect: { x: 0, y: 0, width: 0, height: 0 } } }
+      : { ...item.windows, [path]: { ...win, rect } },
+  }))
+}
+
+function retryFile(path: string): void {
+  const file = fileTabs.value.find((tab) => tab.path === path)
+  if (file !== undefined) void loadFileContent(file)
 }
 
 // 清掉正在进行的生成(切会话 / 换项目 / 演示态切换时调用),避免旧流写进新的转录。
@@ -510,6 +607,16 @@ function startTelemetryClock(): void {
   telemetryTimer.value = undefined
   elapsed.value = runtime.value?.elapsedSeconds ?? 0
   telemetryTimer.value = setInterval(() => { elapsed.value += 1 }, 1000)
+}
+
+// 取 Agent 级的「需要你处理」信号(未看过的等待交互 / 响应完成)。入参是**视图状态**里的
+// 「已看过」集合:聚合的粒度是 Agent(跨它的全部项目),而「看过没有」只有客户端知道。
+async function loadAgentSignals(): Promise<void> {
+  agentSignalVersion += 1
+  const version = agentSignalVersion
+  const result = await listAgentSignals([...seenSessions.value])
+  if (!isAlive.value || version !== agentSignalVersion) return
+  agentSignals.value = result.ok ? result.value : []
 }
 
 // 取当前 Agent 在**当前项目**下的运行遥测(状态 / 模型 / context / 时长 / 项目名与路径),
@@ -799,7 +906,9 @@ async function newConversation(): Promise<void> {
 }
 
 // 选择器只写入自己的值;换 Agent 即换项目列表,故一并重装工作台(落到新 Agent 首个项目的首条会话)。
+// 生成 / 保存中锁定切换(与会话 tab 同一守卫):切换会重取项目 / 会话 / 转录,不该与进行中的生成争用。
 async function onSelectAgent(agent: ChatSession['agent']): Promise<void> {
+  if (isBusy.value) return
   if (selectedAgent.value === agent) return
   isSwitcherOpen.value = false
   selectedAgent.value = agent
@@ -993,22 +1102,6 @@ function onMotionChange(): void {
   }
 }
 
-// 悬浮输入框的高度跟随:把测量到的输入框高度写进 --composer-float-height,转录区的底部内边距
-// (= 它 + 输入框到坞顶的间隙 + 留白)与「回到底部」的纵向落点都由 --composer-inset 派生。
-// 文件栏的高度**不由这里量测**:它停靠在坞的文档流最底下(.file-bar-dock),坞因此变高、
-// 坞顶(转录区底边)随之被顶高,输入框锚在坞顶之上也一并上移 —— 量测它只会多此一举、
-// 且量测晚一帧时输入框还停在旧位置(实测过的竞态)。多行输入向上生长时,只有这段内边距变长
-// (只延长可滚动范围、不移动当前滚动位置),流内的遥测条几何不受影响。
-let composerObserver: ResizeObserver | undefined
-
-function syncComposerMetrics(): void {
-  const height = composerForm.value?.offsetHeight ?? 0
-  conversationPanel.value?.style.setProperty('--composer-float-height', `${height}px`)
-  // 内缩随输入框长高而同步变大(坞高变化时也一样)。若转录正贴底,把视图**重新贴到底** ——
-  // 否则刚长出的那一截(或刚出现的文件栏)会盖住最后一条消息(用户输入多行 / 打开文件时应当「无感」)。
-  if (isPinned.value && transcript.value.status === 'ready') void stickToBottom()
-}
-
 // ⌘/Ctrl+K:全局快捷键,打开对话切换器(面板打开后由其自动聚焦搜索框)。
 // 面板打开时的 Escape 由切换器自己处理(stopPropagation),不会走到抽屉的 Escape。
 function onSwitcherShortcut(event: KeyboardEvent): void {
@@ -1025,7 +1118,91 @@ function onSwitcherShortcut(event: KeyboardEvent): void {
 function onFilePanelEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || event.defaultPrevented) return
   if (!isFilePanelOpen.value || isDrawerOpen.value) return
-  closeFilePanel()
+  const target = focusedWindowPath.value
+  if (target !== '') closeFileWindow(target)
+}
+
+// F6:在多个可见窗口之间循环焦点(APG Window Splitter 列出的标准键,由页面级处理器承担 ——
+// 焦点可能在窗口之外,窗口自己收不到这个键)。
+function onFileWindowCycle(event: KeyboardEvent): void {
+  if (event.key !== 'F6' || event.defaultPrevented) return
+  if (visibleWindows.value.length < 2) return
+  event.preventDefault()
+  cycleFileWindow()
+}
+
+// ---- 横滑后退的第二层防护 ----
+// 第一层是 CSS(style.css 里 `html.is-workspace { overscroll-behavior: none }`)—— 那才是标准
+// 解法,且**只有写在根滚动容器上才有效**。本守卫是给「不认这句」或对过度滚动归属判定不同的
+// 引擎兜的一层;两层合起来才是页面侧能做的完整覆盖。
+//
+// 拦截规则(务必严格,否则会误伤合法滚动):
+//   ① 只有**横向意图**才考虑拦 —— |deltaX| > |deltaY|;
+//   ② 必须先沿 event.target 向上走一遍祖先链,只要有一个祖先**横向还能继续滚**(该方向尚未到
+//      边缘),就绝不 preventDefault。没有这条,文件内容区在「关闭换行 / 并排降级」时本应有的
+//      横向滚动会被一并干掉 —— 那是把 bug 换成了一个更明显的 bug。
+// 两条都不构成「合法横向滚动」时,才吞掉这次横滑,换来「向右滑不再后退」。
+//
+// 监听器必须**非 passive**:被动监听器里 preventDefault 无效,故显式声明,且挂在工作台根元素上 ——
+// 它随页面卸载一起摘掉,首页(营销页)的滚动行为不受影响。
+function guardHorizontalSwipe(event: WheelEvent): void {
+  if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+  let node: Element | null = event.target instanceof Element ? event.target : null
+  while (node !== null) {
+    if (node.scrollWidth > node.clientWidth) {
+      const overflowX = getComputedStyle(node).overflowX
+      if (overflowX === 'auto' || overflowX === 'scroll') {
+        const atStart = node.scrollLeft <= 0
+        const atEnd = node.scrollLeft + node.clientWidth >= node.scrollWidth - 1
+        // deltaX > 0 = 内容向左走(正在看右边的内容);只要该方向还有余量就让行。
+        const hasRoom = event.deltaX > 0 ? !atEnd : !atStart
+        if (hasRoom) return
+      }
+    }
+    node = node.parentElement
+  }
+  event.preventDefault()
+}
+
+// 守卫**只在需要它的地方挂着** —— 由指针位置决定;这条不是优化,是必需的:
+// 非 passive 的 wheel 监听会让**整棵子树**退化成主线程滚动。转录区在流式输出时主线程本就繁忙,
+// 再叠上主线程滚动,滚轮要等主线程空出来才落地:用户觉得发涩,而且会和页面自己的「贴底 / 解贴」
+// 抢跑 —— 上滑没能及时落笔,随后被贴底逻辑拉回底部。校准里的「真实动效路径」正是这样被拖红的。
+//
+// 而转录区 / 侧栏 / 文件内容区这些滚动容器**本来**就带 `overscroll-behavior: contain`,横向过度
+// 滚动在它们内部就被截住,压根不需要守卫。于是按指针位置收放:
+//   指针落在带 contain 的滚动容器里 → 摘掉守卫,保住合成器滚动;
+//   落在没有 contain 的区域(工作台空白、面板标题栏、文件栏坞……) → 挂上守卫 ——
+//   这些没有自家滚动容器的区域,才是横滑会一路冒到文档级、触发后退的地方。
+// 状态同时写到 data-swipe-guard 上:收放是位置相关的,不写出来就看不见(校准也据此断言)。
+const SWIPE_GUARD_ATTR = 'swipeGuard'
+
+function insideContainingScroller(target: EventTarget | null): boolean {
+  let node: Element | null = target instanceof Element ? target : null
+  while (node !== null && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    const scrollable = style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowY === 'auto' || style.overflowY === 'scroll'
+    const contained = style.overscrollBehaviorX === 'contain' || style.overscrollBehaviorX === 'none'
+      || style.overscrollBehaviorY === 'contain' || style.overscrollBehaviorY === 'none'
+    if (scrollable && contained) return true
+    node = node.parentElement
+  }
+  return false
+}
+
+let isSwipeGuardArmed = false
+
+function armSwipeGuard(armed: boolean): void {
+  if (armed === isSwipeGuardArmed) return
+  isSwipeGuardArmed = armed
+  if (armed) pageRoot.value?.addEventListener('wheel', guardHorizontalSwipe, { passive: false })
+  else pageRoot.value?.removeEventListener('wheel', guardHorizontalSwipe)
+  if (pageRoot.value !== null) pageRoot.value.dataset[SWIPE_GUARD_ATTR] = armed ? 'armed' : 'idle'
+}
+
+// 指针每进入一个新元素就重算一次收放(pointerover 只在跨元素边界时触发,不随移动逐帧触发)。
+function syncSwipeGuard(event: Event): void {
+  armSwipeGuard(!insideContainingScroller(event.target))
 }
 
 // 演示态把「当前会话 / 侧栏 Agent / 项目」钉到与该状态一致的一组:waiting 直达写作助手
@@ -1051,15 +1228,20 @@ watch(locale, () => {
   // 项目 / 条目的名称与路径都是技术标识,不随语言变化,故只重取会话(标题本地化)与遥测。
   void reloadWorkspace(false)
 })
-// 活动文件(含切会话 / 换项目带来的变化)决定面板内容 —— 取内容的唯一入口。
-watch(activeFile, (file) => {
-  if (file === null) {
-    // 收起面板:作废在途的文件读取,别让它的结果写回一个已被收起的空面板。
-    fileVersion += 1
-    fileContent.value = { status: 'loading' }
-    return
+// 每个打开的文件各取一份内容(多窗口下互不干扰)。tab 集合变化即补齐缺的那些;
+// 已被关闭的 tab 顺带清掉它的内容与版本号,避免状态里堆着不再用的条目。
+watch(() => domain.value.tabs.map((tab) => tab.path).join('\n'), () => {
+  const paths = new Set(domain.value.tabs.map((tab) => tab.path))
+  for (const path of Object.keys(fileContents.value)) {
+    if (paths.has(path)) continue
+    const next = { ...fileContents.value }
+    delete next[path]
+    fileContents.value = next
+    fileVersions.delete(path)
   }
-  void loadFileContent(file)
+  for (const tab of domain.value.tabs) {
+    if (fileContents.value[tab.path] === undefined) void loadFileContent(tab)
+  }
 }, { immediate: true })
 watch(() => currentRoute.value.demoState, (demo) => {
   applyDemoState(demo)
@@ -1079,6 +1261,9 @@ watch([activeId, sessions], () => {
   next.add(current.id)
   seenSessions.value = next
 })
+// Agent 栏的信号在两个来源变化时重取:会话列表(换 Agent / 换项目 / 换演示态 → 哪些会话在等待 /
+// 已完成变了)与「已看过」集合(打开一段对话)。两者都要监听 —— 只监听列表就漏掉「点开后清掉」。
+watch([sessions, seenSessions], () => { void loadAgentSignals() })
 
 // 文件栏常驻后不再有「出现 / 消失」这一事件,坞高恒定 —— 故这里不再需要额外重算。
 
@@ -1090,33 +1275,35 @@ onMounted(() => {
   document.addEventListener('keydown', drawerKeyboard)
   document.addEventListener('keydown', onSwitcherShortcut)
   document.addEventListener('keydown', onFilePanelEscape)
+  document.addEventListener('keydown', onFileWindowCycle)
+  // 横滑后退防护:根滚动容器加类(CSS 那层)+ 本页非 passive 的 wheel 守卫(兜底那层)。
+  document.documentElement.classList.add('is-workspace')
+  armSwipeGuard(true)
+  pageRoot.value?.addEventListener('pointerover', syncSwipeGuard)
   // 指针抬起可能落在转录区之外(拖动滚动条时鼠标划出),故在 window 上收尾。
   window.addEventListener('pointerup', onLogPointerUp)
   window.addEventListener('pointercancel', onLogPointerUp)
-  // 悬浮输入簇的量测:首帧量一次(覆盖 CSS 默认值),之后由 ResizeObserver 跟随多行增长。
-  syncComposerMetrics()
-  if (composerForm.value !== null && typeof ResizeObserver !== 'undefined') {
-    composerObserver = new ResizeObserver(() => syncComposerMetrics())
-    composerObserver.observe(composerForm.value)
-  }
 })
 onBeforeUnmount(() => {
   isAlive.value = false
   clearInterval(interval.value)
   clearInterval(telemetryTimer.value)
-  composerObserver?.disconnect()
   narrowMedia.removeEventListener('change', onViewportChange)
   motionMedia.removeEventListener('change', onMotionChange)
   document.removeEventListener('keydown', drawerKeyboard)
   document.removeEventListener('keydown', onSwitcherShortcut)
   document.removeEventListener('keydown', onFilePanelEscape)
+  document.removeEventListener('keydown', onFileWindowCycle)
+  document.documentElement.classList.remove('is-workspace')
+  pageRoot.value?.removeEventListener('pointerover', syncSwipeGuard)
+  armSwipeGuard(false)
   window.removeEventListener('pointerup', onLogPointerUp)
   window.removeEventListener('pointercancel', onLogPointerUp)
 })
 </script>
 
 <template>
-  <main id="main" class="workspace-page dl-scope dl-scope--dark">
+  <main id="main" ref="pageRoot" class="workspace-page dl-scope dl-scope--dark">
     <div class="workspace-layout">
       <div v-if="isDrawerOpen && isNarrow" class="workspace-backdrop" aria-hidden="true" @click="closeDrawer" />
       <aside
@@ -1124,11 +1311,8 @@ onBeforeUnmount(() => {
         :inert="isNarrow && !isDrawerOpen" :role="isNarrow && isDrawerOpen ? 'dialog' : undefined"
         :aria-modal="isNarrow && isDrawerOpen ? true : undefined" :aria-label="t.workspace.workspacePanel"
       >
-        <div class="sidebar-actions">
-          <!-- Agent 切换器:表达「当前在哪个 Agent 下工作」,其下项目区随之切换;新建对话的
-               归属项目也由它决定(项目挂在 Agent 上)。 -->
-          <AgentSelector :value="selectedAgent" :disabled="isBusy" @select="onSelectAgent" />
-          <button v-if="isNarrow" class="workspace-button icon-button" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
+        <div v-if="isNarrow" class="sidebar-actions">
+          <button class="workspace-button icon-button" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
         </div>
         <section class="workspace-projects">
           <h2 class="sidebar-label" aria-hidden="true">{{ t.workspace.projects }}</h2>
@@ -1233,6 +1417,11 @@ onBeforeUnmount(() => {
             :format-time="formatTime"
             :active-title="activeTitle"
             :disabled="isBusy"
+            :files="fileTabs"
+            :active-file-path="focusedWindowPath"
+            :visible-file-paths="visibleFilePaths"
+            :file-state-of="entryStateOfTab"
+            :recent-files="recentForBar"
             @select="selectSession"
             @select-hit="openHit"
             @search-input="onSearchInput"
@@ -1240,11 +1429,28 @@ onBeforeUnmount(() => {
             @reset-search="resetSearch"
             @new-chat="newConversation"
             @close="closeTab"
-          />
+            @select-file="selectFileTab"
+            @close-file="closeFileTab"
+            @open-recent-file="openRecentFile"
+          >
+            <!-- 文件那一组:与对话同条(**先对话、后文件**),但**不是 tablist** —— 同一时刻可以有多个
+                 文件窗口,不存在「一个 tab 对一个 panel」,故它是 toolbar + aria-pressed 切换按钮。
+                 它进了顶部行,底栏因此空出来(不再有独立的文件区域)。 -->
+            <FileBar
+              :tabs="fileTabs"
+              :active-key="focusedWindowPath"
+              :visible-paths="visibleFilePaths"
+              :state-of="entryStateOfTab"
+              :disabled="isBusy"
+              @select="selectFileTab"
+              @close="closeFileTab"
+              @reorder="reorderFileTabs"
+            />
+          </ConversationSwitcher>
         </header>
         <!-- tabpanel 与会话头**同级**:tablist 不能是 tabpanel 的后代,否则 tab 的语义不成立。
              转录保留自己的 role="log" 与 tabindex,放进 tabpanel 内(一个角色套一个角色不冲突)。 -->
-        <div ref="conversationPanel" class="conversation-panel" id="conversation-panel-body" role="tabpanel" :aria-labelledby="activeId ? `conversation-tab-${activeId}` : undefined">
+        <div class="conversation-panel" id="conversation-panel-body" role="tabpanel" :aria-labelledby="activeId ? `conversation-tab-${activeId}` : undefined">
           <!-- 转录区(与文件面板)单独包一层:文件面板要**精确**覆盖转录区(不含输入坞与流内区域),
                故需要一个与转录区等大的定位基准(见 .transcript-area)。 -->
           <div class="transcript-area">
@@ -1285,29 +1491,39 @@ onBeforeUnmount(() => {
               </template>
             </div>
           </div>
-          <!-- 文件面板:覆盖在转录区之上(不是可拖拽的浮动窗口)。「已打开未显示」由文件栏的 tab
-               承担,故它只有显示 / 不显示两态;Esc 关闭(见 onFilePanelEscape)。 -->
+          <!-- 文件窗口:**每个打开的文件一份**,各自独立的几何 / 可见性 / 层序(见 data/open-files 的
+               FileWindow)。条上那个切换按钮的 aria-pressed 就是这里的 visible;Esc 关掉**当前聚焦**的
+               那一个(见 onFilePanelEscape),关掉窗口 ≠ 关掉标签。 -->
           <FilePanel
-            v-if="isFilePanelOpen && activeFile"
-            :state="fileContent"
-            :path="activeFile.path"
-            :project-name="activeFile.projectName"
-            :chip-state="entryStateOfTab(activeFile)"
-            :can-confirm="canConfirmActiveFile"
+            v-for="win in visibleWindows"
+            :key="win.path"
+            :state="contentOf(win.path)"
+            :path="win.path"
+            :project-name="currentProjectName"
+            :chip-state="entryStateOfTab({ path: win.path })"
+            :can-confirm="true"
+            :z-index="win.z"
+            :is-focused="win.path === focusedWindowPath"
+            :cascade="fileTabs.findIndex((tab) => tab.path === win.path)"
             :confirmation="confirmation"
             :confirmation-outcome="confirmationOutcome"
-            @close="closeFilePanel"
-            @retry="retryFile"
+            :initial-rect="win.rect.width > 0 ? win.rect : null"
+            @close="closeFileWindow(win.path)"
+            @focus="focusFileWindow(win.path)"
+            @retry="retryFile(win.path)"
             @resolve="resolveConfirmation"
+            @rect-change="onFileRectChange(win.path, $event)"
           />
           </div>
-          <!-- 输入区(本轮重构):坞不再有独立的面(去掉底面与上边界,与转录区同色)。
-               流内只留遥测条与提示行(状态信息压在滚动内容上会不可读,故不跟着悬浮);
-               输入框改为**悬浮组件**,绝对定位在流内区域之上,多行时向上生长、不挤占流内区域。 -->
+          <!-- 输入坞:本轮并入对话面板,成为面板内的**流内**元素(不再是浮在最上的浮层)。
+               面板内的排布因此是「转录区 → 输入坞(输入框 + 遥测条)」,坞不再有独立的面
+               (与转录区同色,继承面板底色)。层序也随之回到第 1 层:文件窗体(第 2 层)
+               可以覆盖它 —— 用户要的「输入框与整个对话框做在一起、能被文件窗体覆盖」。
+               只有「回到底部」钮仍是绝对定位的悬浮件(锚在坞顶之上,浮在转录区那一带上)。 -->
           <div class="composer-dock">
-            <!-- 「回到底部」= **悬浮图标按钮**:绝对定位、水平居中于阅读列,浮在悬浮输入框**之上**
-                 (两者不重叠,也不覆盖输入框 —— 业界把「遮住输入区」列为该模式的反例)。
-                 它是独立控件,守 44×44;进 / 出只用 opacity + transform(动效白名单)。 -->
+            <!-- 「回到底部」= **悬浮图标按钮**:绝对定位、水平居中于阅读列,浮在坞顶**之上**
+               (不覆盖坞 —— 业界把「遮住输入区」列为该模式的反例)。
+               它是独立控件,守 44×44;进 / 出只用 opacity + transform(动效白名单)。 -->
             <Transition name="scroll-to-bottom-pop">
               <button
                 v-if="!isPinned && transcript.status === 'ready'"
@@ -1316,9 +1532,9 @@ onBeforeUnmount(() => {
                 <DliIcon name="arrowDown" />
               </button>
             </Transition>
-            <!-- 悬浮输入框:自身抬起(elevated 底 + 发丝描边 + md 阴影 + 既有圆角)。发送不再有
-                 独立按钮 —— 动作由 Enter 承担(提示行是唯一的发送提示);生成中的「停止」仍在框内。 -->
-            <form ref="composerForm" class="composer-form" :title="t.workspace.inputHint" @submit.prevent="send">
+            <!-- 输入框:坞内的**流内**首位元素(发送不再有独立按钮 —— 动作由 Enter 承担,
+                 提示行是唯一的发送提示;生成中的「停止」仍在框内)。 -->
+            <form class="composer-form" :title="t.workspace.inputHint" @submit.prevent="send">
               <div class="textarea-sizer" :data-value="(draft || t.workspace.placeholder) + ' '">
                 <textarea id="workspace-composer" name="workspace-composer" ref="composer" v-model="draft" rows="1" :aria-label="t.workspace.inputLabel" :placeholder="t.workspace.placeholder" :readonly="isBusy || transcript.status === 'loading' || transcript.status === 'error'" @keydown="inputKeyboard" />
               </div>
@@ -1355,26 +1571,14 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </section>
-      <!-- 文件栏(工作台级底栏·**常驻**):横跨侧栏左缘到对话面板右缘,纵向在两块面板之下 ——
-           外壳网格的第三行(grid-column: 1 / -1),面与圆角沿用外壳的浮动面板语言。
-           依据:Apple 的 Windows 规范把「横跨窗口宽度的底栏」当作状态栏的正当形态(Finder 即如此),
-           同时告诫**不要把关键信息 / 动作只放在底栏** —— 所以它是文件导航面,而每个文件也都能从
-           左侧项目树重新打开,不构成唯一入口。
-           它**总是渲染**(没有打开的文件时显示教学性空态),故工作台几何恒定:首次打开文件不引起
-           版面跳动,转录区几何与底部内缩都成为常量(内缩只算输入框那一段,底栏不在对话面板内)。 -->
-      <div class="file-bar-dock">
-        <FileBar
-          :tabs="fileTabs"
-          :active-key="activeFileKey"
-          :current-project-id="selectedProjectId"
-          :recent="recentForBar"
-          :state-of="entryStateOfTab"
-          :disabled="isBusy"
-          @select="selectFileTab"
-          @close="closeFileTab"
-          @reorder="reorderFileTabs"
-          @open-recent="openRecentFile"
-        />
+      <!-- Agent 栏(工作台级底栏·**常驻**):外壳网格第三行,横跨侧栏左缘到对话面板右缘。
+           它表达「当前在哪个 Agent 下工作」—— 这是**应用级的上下文开关**(决定侧栏的项目列表、
+           顶部标签条上的对话与文件、新会话的归属),故从侧栏搬到这条整宽底栏,与侧栏解耦。
+           面与圆角沿用外壳的浮动面板语言(与两块面板同族);横向内边距与会话头 / 侧栏内容对齐。
+           层序属**第 1 层**(不设 z-index):浮动的文件窗体(第 2 层)可以覆盖它 —— 这是用户
+           明确要的「窗体可覆盖应用外壳」,不为「保护」底栏而抬高它。 -->
+      <div class="agent-bar-dock">
+        <AgentBar :value="selectedAgent" :agents="AGENT_ORDER" :signals="agentSignals" @select="onSelectAgent" />
       </div>
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
@@ -1440,19 +1644,13 @@ onBeforeUnmount(() => {
   --workspace-avatar-size: 28px;
   --workspace-avatar-gap: var(--dl-space-3);
   --workspace-gutter: calc(var(--workspace-avatar-size) + var(--workspace-avatar-gap));
-  /* 悬浮输入框:它与流内区域(遥测条 + 提示行)之间的间隙;高度默认取一档控件高,
-     挂载后由 ResizeObserver 按实测覆盖。 */
-  --composer-float-gap: var(--dl-space-4);
-  --composer-float-height: var(--dl-target-size);
-  /* 最后一条消息与悬浮输入框上缘之间的**留白**:用户要的「刚刚好的距离」——让文字亮度正常
-     (见 .transcript 的淡出带起点 = 贴底静止位置)。取一档间距,可整体调大。 */
-  --composer-clearance: var(--dl-space-3);
   /* 应用外壳内缩:面板从视口边缘退开 8px,16px 的面板圆角才看得见(贴边时靠视口
      的那两角等于直角,圆角无从体现)。取一档间距 token、不新增取值,左右各让出 8px。
      侧栏内边距随之由 24 收到 16:内缩 8 + 内边距 16 = 24 = --dl-chrome-gutter,
      侧栏内容(Agent 切换器、项目列表)因此仍与顶栏品牌落在同一条 24px 竖线上。 */
   --workspace-shell-inset: var(--dl-space-2);
-  height: calc(100dvh - var(--dl-header-height) - var(--dl-border-width));
+  /* 高度按顶栏的**当前**高度算:顶栏在工作台页可被折叠(见 site-header.vue),折叠后这里自动长高。 */
+  height: calc(100dvh - var(--dl-header-height-current) - var(--dl-border-width));
   min-height: 0;
 }
 /* 浮动面板式外壳:两侧各内缩一档、面板之间也留同宽的缝,让侧栏与对话区成为浮在同一
@@ -1460,6 +1658,18 @@ onBeforeUnmount(() => {
 /* 外壳网格:两列(侧栏 / 对话)+ 两行(面板行 / 文件底栏行)。行间距与列间距、外壳内缩同值,
    故底栏与上方两块面板之间也是一条同宽的缝。 */
 .workspace-layout { display: grid; grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100%; padding: var(--workspace-shell-inset); gap: var(--workspace-shell-inset); }
+/* Agent 栏(工作台级底栏):外壳网格的第三行,横跨侧栏左缘到对话面板右缘 —— 面与圆角沿用外壳的
+   浮动面板语言(与两块面板同族的圆角 + 发丝线)。横向内边距取一档间距(16):与侧栏内容左缘对齐
+   (侧栏自身的内边距也是 16,加上外壳内缩 8 即与顶栏品牌同落在 24px 竖线上)。
+   只设一层高度:内容高 32(--workspace-nav-control-size)+ 上下内边距各 8 + 上下描边各 1 = 50,
+   与上一版文件底栏同一实测高度,故面板行的高度没变。 */
+.agent-bar-dock {
+  grid-column: 1 / -1;
+  padding: var(--dl-space-2) var(--dl-space-4);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-xl);
+  background: var(--dl-bg-elevated);
+}
 /* 侧栏为一块独立圆角面板:四面发丝框 + xl 圆角,overflow 让内部滚动区与满宽分隔线
    被圆角裁切。横向 padding 由外壳 gutter(24)收到 16 —— 内缩 8 + 内边距 16 = 24,
    Agent 切换器与项目列表仍与顶栏品牌落在同一条 24px 竖线上。 */
@@ -1469,10 +1679,9 @@ onBeforeUnmount(() => {
 .workspace-button:active, .suggestion-card:active { transform: translateY(var(--dl-lift-press)); }
 .workspace-button:focus-visible, .suggestion-card:focus-visible, textarea:focus-visible, .transcript:focus-visible { box-shadow: var(--dl-focus-ring); }
 .workspace-button:disabled, .workspace-button[aria-disabled='true'] { cursor: not-allowed; color: var(--dl-text-disabled); background: var(--dl-bg-sunken); transform: none; }
-/* position: relative 是 AgentSelector 弹层的定位基准:弹层横向贴齐本行、纵向落在其下方。
-   以整行为基准是为了让弹层始终落在侧栏面板的 overflow: hidden 边界之内 —— 触发钮的具体
-   位置会随窄屏关闭按钮的有无而变化,以它为基准会把英文弹层推出面板。 */
-.sidebar-actions { display: flex; gap: var(--dl-space-2); position: relative; }
+/* 窄屏抽屉的关闭钮所在行(宽屏没有这一行 —— 侧栏只剩项目区,Agent 选择已移到底部的 Agent 栏)。
+   关闭钮靠右,与抽屉右缘对齐。 */
+.sidebar-actions { display: flex; justify-content: flex-end; }
 /* 区块标题:文案居中,左右各一条 1px 虚线。**虚线是本设计语言里新引入的视觉装置,且是用户
    指定的区块分隔装置** —— 原语言以实线发丝分层级,此处按用户要求引入 dashed,只用于这一处
    区块标题,不扩散到别处。两侧用 ::before / ::after 作等分填充:文案长短变化时虚线自动伸缩;
@@ -1484,7 +1693,7 @@ onBeforeUnmount(() => {
 /* 项目区:占满侧栏剩余高度,项目列表自身滚动,底部「打开项目」常驻。
    gap 由 12 收到 8:区块标题与首个项目之间的留白是「非行高」留白,按 4/8 档收紧。 */
 .workspace-projects { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
-.project-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.project-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .project-list { display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
 /* 项目行:单控件行的外壳 —— 前导记号 + 名称 + ⋯ 槽位 + chevron 合成**一个**按钮,右侧 ⋯ 是
    独立控件(不能嵌进按钮,否则是嵌套 button 的非法结构),绝对定位覆盖在按钮预留的槽位上。
@@ -1573,23 +1782,14 @@ onBeforeUnmount(() => {
    两条竖边会整条消失、只剩上下两条横线,即基线 ⑦ 明令禁止的「吞焦点样式」。 */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated);
 }
-/* tabpanel:转录 + composer 这一整块。
-   这里定义**内缩基准值** `--composer-inset`,并派生出淡出带的位置。同一个值喂三处
-   (都落在 .transcript 上):
-     ① padding-block-end —— 滚到底时最后一条消息落在输入框之上的**留白处**;
-     ② scroll-padding-block-end —— 浏览器自身的**滚动定位**(键盘聚焦 / scrollIntoView /
-        以及本项目「搜索正文命中 → 跳到该轮并高亮」)也不把目标落到输入框底下。
-        只给 ① 只能保证「滚到底」不被盖,滚动定位仍会落到输入框下 —— 两者必须成对给,
-        依据是 W3C 的 WCAG 技术 C43「用 CSS scroll-padding 解除内容遮挡」;
-     ③ 遮罩的**实心色标**(淡出带起点)。
-   `--composer-inset` = 转录区底边到**悬浮输入框**顶缘的距离(输入框高度 + 它与坞顶的间隙)
-   + 留白。**不能只取输入框高度**:输入框并不贴着转录区底边(其下方还有遥测条 / 文件栏所在的
-   坞内区间),少算这段就会让最后一行贴得比预期近。
-   文件栏(常驻)的高度**不在这里再计一次** —— 它停靠在坞的文档流最底下(见 .file-bar-dock),
-   坞顶 = 转录区底边因此是**常量**;输入框锚在坞顶之上,也跟着恒定。若把坞内那一段再写进内缩,
-   等于重复计一次,会把最后一条消息多顶出一整个坞的高度。
-   定义在共同祖先上(而非 .transcript 内),让三处引用的是同一个已解析值。 */
-.conversation-panel { --composer-inset: calc(var(--composer-float-height) + var(--composer-float-gap) + var(--composer-clearance)); --composer-bleed: var(--dl-space-1); flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* tabpanel:转录 + 输入坞这一整块,纵向堆叠 —— 上为转录区(flex:1)、下为输入坞(flex-shrink:0)。
+   坞与转录区**同处面板的文档流**:坞底边即面板内容盒底边,坞顶边即转录区底边,两者**相邻不重叠**。
+   转录区因此只留一条**静态**的底部内缩(--dl-space-4):它只是「最后一条消息与坞顶之间那道留白」,
+   不再随输入框高度变化 —— 输入框长高由浏览器按流内布局自然把坞顶推高(转录区随之收缩),
+   不需要任何脚本量测,也就没有量测晚一帧的竞态。
+   内缩成对给 padding-block-end 与 scroll-padding-block-end:前者管「滚到底」,后者管浏览器自身的
+   滚动定位(键盘聚焦 / scrollIntoView / 「搜索正文命中 → 跳到该轮」)—— 依据是 WCAG 技术 C43。 */
+.conversation-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* 转录区(与文件面板)的盒子:与转录区等大,作为文件面板**精确覆盖转录区**的定位基准
    (不含输入坞与流内区域)。刻意不给它 overflow:hidden —— 转录区 :focus-visible 的焦点环是
    向外画的 box-shadow,裁切会把环的左右两条竖边整条抹掉(见 .conversation 上不出 overflow 的注释)。
@@ -1608,6 +1808,9 @@ onBeforeUnmount(() => {
    上内边距 4px 是**焦点环的下限**:tab 的 :focus-visible 环向外扩 3px,4 > 3 才完整可见。
    position: relative 是菜单浮层的定位基准。
    --conversation-heading-pad 驱动本行的横向内边距(窄屏收一档),也被浮层的定位复用。 */
+/* 顶部行与应用外壳同属**第 1 层**(不设 z-index,即 auto):浮动文件窗体(第 2 层,
+   --dl-z-overlay + n)可以盖住它 —— 窗口拖到顶部行那一带时,tab 条会被压住。
+   这是用户要的「窗体可覆盖应用外壳」;被压住后靠**非鼠标通路**把窗口抓回来(见 file-panel.vue)。 */
 .conversation-heading { position: relative; display: flex; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-1) var(--conversation-heading-pad) var(--dl-space-2); }
 .icon-button { padding: var(--dl-space-2); flex-shrink: 0; }
 .workspace-button svg { width: var(--dl-icon-md); height: var(--dl-icon-md); flex-shrink: 0; }
@@ -1616,19 +1819,13 @@ onBeforeUnmount(() => {
    tab 列表与其内容面板关联起来),于是头部只需留出间隔、不再画贴边的横线。
    刻意**不给转录区加下沉底色或圆角面板**:本仓踩过「面板 overflow: hidden 裁掉后代焦点环」的坑
    (见 conversation 容器上关于不出 overflow 的注释),面与面的区分留白 + 一条分界线已足够。
-   底部内缩与滚动内缩成对给(见 .conversation-panel 的注释):滚到底不被悬浮输入框遮住,
-   且浏览器自身的滚动定位(键盘 / scrollIntoView / 搜索命中跳转)也落在输入框之上。
-   内容淡出用 mask-image(而非半透明遮罩层):它真的淡出内容本身、让背景自然透出,且不干扰
-   文字选择与指针事件(Chrome 团队现代 Web 指引;shadcn/ui 2026-06 的聊天组件亦带 scroll-aware
-   边缘淡出)。**淡出必须「先实心、后淡出」**:第一个色标是实心的(在 `100% - 内缩值` 处,
-   = 最后一条消息贴底时的静止位置),淡出只发生在该点之后。若写成两色标(直接 #000 → transparent),
-   压暗会铺满整个下半区、把可读正文逐级压暗 —— 正是用户报的「最后一行被光晕遮暗」。
-   不变量:淡出带起点 == 贴底静止位置 → 最后一行静止时透明度 1.0(亮度正常),淡出只作用于
-   已在输入框背后 / 即将进入的内容。淡出**收到输入框上缘为止**(而非到容器底边):输入框上缘
-   以下保持不透明 —— 那一带本就被输入框盖住,且这样才能保住转录区向外的 :focus-visible 焦点环。
-   遮罩盒比边框盒外扩 --composer-bleed 并 no-clip:否则 mask 会把焦点环整条抹掉(基线 ⑦ 禁止
-   吞焦点样式)。已知副作用:mask 连滚动条一起淡出,淡出带很窄且落在输入框背后,故按原样保留。 */
-.transcript { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-end: var(--composer-inset); scroll-padding-block-end: var(--composer-inset); mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-bleed) - var(--composer-inset)), transparent calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance)), #000 calc(100% - var(--composer-bleed) - var(--composer-inset) + var(--composer-clearance))); mask-repeat: no-repeat; mask-clip: no-clip; mask-size: calc(100% + 2 * var(--composer-bleed)) calc(100% + 2 * var(--composer-bleed)); mask-position: calc(-1 * var(--composer-bleed)) calc(-1 * var(--composer-bleed)); }
+   底部内缩与滚动内缩成对给(见 .conversation-panel 的注释):静态一档留白,既保证「滚到底」时
+   最后一条消息不与坞顶相交,也让浏览器自身的滚动定位(键盘 / scrollIntoView / 搜索命中跳转)
+   落在坞之上(WCAG C43)。
+   **不再有边缘淡出遮罩**:上一版用 mask-image 在转录区下缘做淡出,副作用是连滚动条一起淡出、
+   且大转录区上多一层合成开销;坞并入面板流内之后,坞顶不再是「压在内容上的浮层」,淡出所要
+   解决的问题已不存在(用户要的是「输入框与对话框做在一起」,而不是遮住内容)。故整条删去。 */
+.transcript { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-end: var(--dl-space-4); scroll-padding-block-end: var(--dl-space-4); }
 /* 阅读列的底部内缩改由**滚动容器** .transcript 承担(padding-block-end 与
    scroll-padding-block-end 成对在那一层);这里只保留上内边距与横向内边距,避免两层叠加。 */
 /* 阅读列的横向内边距 = 侧向 gutter(--workspace-gutter):正文列封顶 768、两侧各留一档
@@ -1675,13 +1872,22 @@ onBeforeUnmount(() => {
 .suggestion-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--dl-space-2); text-align: left; padding: var(--dl-space-4); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); min-height: var(--dl-target-size); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .suggestion-card strong { font-size: var(--dl-font-size-md); font-weight: 500; }
 .suggestion-card > span:first-of-type { grid-row: 2; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
-/* 输入坞(本轮重构):**不再有独立的面** —— 去掉底面与上边界,与转录区同色(继承面板底色),
-   即用户所说的「删掉这个区域」。它现在只是流内区域(遥测条 + 提示行)的容器 + 悬浮件的定位基准。
-   提示行与遥测条留在文档流内:状态信息若压在滚动内容上会不可读,故不跟着悬浮。 */
-.composer-dock { position: relative; flex-shrink: 0; }
-/* 流内区域:限宽居中;上内边距为 0,让遥测条紧贴坞顶,悬浮输入框与它之间的间隔由
-   --composer-float-gap 单独给出(见 .composer-form 的 inset-block-end)。 */
-.composer-inner { max-width: calc(var(--workspace-column-max) + 2 * var(--dl-space-6)); margin-inline: auto; padding: 0 var(--dl-space-6) var(--dl-space-4); }
+/* 输入坞(本轮并入对话面板):坞**不再是浮在最上的浮层**,而是面板内的**流内**元素 ——
+   面板内的排布是「转录区 → 坞(输入框 → 遥测条)」。坞**没有独立的面**(与转录区同色,
+   继承面板底色),横向内缩统一由本容器给出,坞内的输入框与遥测条因此共用同一条阅读列。
+   ============================================================================
+   三层 z 模型(本轮更新):
+     第 1 层(最底)  应用外壳:站点顶栏 / 左侧栏 / 右侧对话面板(**含输入坞**)/ 底部 Agent 栏
+                      —— 一律不设 z-index(即 auto)
+     第 2 层          **文件窗体**(可覆盖上述全部)→ calc(var(--dl-z-overlay) + n),逐窗递增
+     模态(项目选择对话框 / 二次确认对话框 / ≤1023 的侧栏抽屉)→ var(--dl-z-modal) 及以上,
+     压住一切。所有取值一律自 --dl-z-* 阶梯派生,不裸写数值。
+   于是:窗体可以盖住侧栏、标签条**与输入坞**(用户要的「输入框与整个对话框做在一起、能被文件
+   窗体覆盖」);模态又压住窗体与坞。坞已不在 z 阶梯上,故这里不写 z-index。 */
+.composer-dock { position: relative; flex-shrink: 0; padding-inline: var(--dl-space-6); }
+/* 坞内的流内区块(遥测条所在):限宽居中,与输入框同一条阅读列(768);底部留一档内边距,
+   让遥测条不贴坞底。上内边距为 0,遥测条与输入框之间的间隔由 .telemetry 的 margin-top 给出。 */
+.composer-inner { max-width: var(--workspace-column-max); margin-inline: auto; padding-block-end: var(--dl-space-4); }
 /* 遥测条:输入框下方的单行运行时信息(状态 · 模型 · Context · 时长 · 项目)。与输入框同宽
    同轴(同在 .composer-inner 的限宽列内);高度守在 28–32px,取 --dl-space-8(32px)。
    降级按遥测条「自身可用宽度」决定(容器查询),而非视口宽度 —— 遥测条住在阅读列内,可用宽
@@ -1721,32 +1927,26 @@ onBeforeUnmount(() => {
 @container (max-width: 486px) { .telemetry__item--model { display: none; } }
 @container (max-width: 359px) { .telemetry__item--workspace { display: none; } }
 .send-error { color: var(--dl-error); margin-bottom: var(--dl-space-2); font-size: var(--dl-font-size-sm); }
-/* 悬浮输入框(本轮重构):绝对定位在流内区域**之上**,自身抬起(elevated 底 + 发丝描边 +
-   md 阴影 + lg 圆角),多行时向上生长 —— 它不占流内布局,故遥测条 / 提示行的几何不随输入高度变化。
-   inset-inline + margin-inline:auto + max-width 让它在坞内居中、并与阅读列同宽同轴
-   (与 .transcript-inner / .composer-inner 的限宽列对齐)。 */
-.composer-form { position: absolute; inset-inline: var(--dl-space-6); inset-block-end: calc(100% + var(--composer-float-gap)); margin-inline: auto; max-width: var(--workspace-column-max); display: flex; align-items: flex-end; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
+/* 输入框(本轮并入面板):坞内的**流内首位元素**,自身仍抬起(elevated 底 + 发丝描边 +
+   md 阴影 + lg 圆角)。margin-inline:auto + max-width 让它在坞内居中、与阅读列同宽同轴
+   (与 .transcript-inner / .composer-inner 的限宽列对齐)。
+   多行时它向下长高、把坞顶推高(坞锚在面板底),转录区随之收缩 —— 纯流内布局,无需脚本量测;
+   坞内的遥测条是坞的**最后一个**子项,故其纵向位置由坞底推出、不随输入高度变化。 */
+.composer-form { margin-inline: auto; max-width: var(--workspace-column-max); display: flex; align-items: flex-end; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
 /* 文件栏(停靠·整宽):坞的最后一个文档流子项 —— 于是它的底边**就是**面板内容盒的底边
    (面板无内边距,坞是它的最后一个子项),即贴住面板描边内侧。
    面:不新上填充色,取面板自身底色(--dl-bg-elevated)+ 顶边一条 --dl-border-base 发丝线
    —— 与转录区上边界同一套层级语言。
    底角同心:面板圆角 16 − 描边 1 = 15(与面板内缘同心,贴边时才不会露出直角)。
    横向内边距取 --conversation-heading-pad,栏内内容因此与会话头内容**左右对齐**。 */
-/* 文件栏(工作台级底栏):外壳网格的第三行,横跨侧栏左缘到对话面板右缘 —— 面与圆角沿用外壳的
-   浮动面板语言(与两块面板同族的圆角 + 发丝线)。它**不在**对话面板内部,故转录区的底部内缩
-   也不再与它相干(内缩只算悬浮输入框那一段,见 .conversation-panel 的注释)。
-   横向内边距取一档间距(16):与侧栏的内容左缘对齐(侧栏自身的内边距也是 16)。 */
-.file-bar-dock {
-  grid-column: 1 / -1;
-  padding: var(--dl-space-2) var(--dl-space-4);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-xl);
-  background: var(--dl-bg-elevated);
-}
+/* 文件那一组在**顶部行内**:不再有独立的面(它已是会话头里的一段),故没有底色 / 描边 / 圆角。
+   flex: 0 1 auto + min-width: 0 —— 让它与对话 tablist **共享同一行的宽度**:两边都可以收缩,
+   各自按自己量到的可用宽决定显示几个(脚本按自己的 clientWidth 算,不抢不占)。
+   高度与对话 tab 同档(32),故顶部行不会因为它变高。 */
 .textarea-sizer { display: grid; flex: 1; min-width: 0; max-height: calc(5 * var(--dl-font-size-md) * var(--dl-line-body) + 2 * var(--dl-space-2)); overflow: hidden; }
 .textarea-sizer::after { content: attr(data-value); visibility: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .textarea-sizer::after, textarea { grid-area: 1 / 1; font: inherit; line-height: var(--dl-line-body); padding: var(--dl-space-2); min-height: var(--dl-target-size); min-width: 0; border: 0; }
-textarea { width: 100%; height: 100%; max-height: inherit; resize: none; color: var(--dl-text-primary); background: transparent; overflow-y: auto; border-radius: var(--dl-radius-sm); }
+textarea { width: 100%; height: 100%; max-height: inherit; resize: none; color: var(--dl-text-primary); background: transparent; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--dl-radius-sm); }
 textarea::placeholder { color: var(--dl-text-secondary); }
 textarea:hover:not(:read-only) { background: var(--dl-bg-hover); }
 textarea:read-only { color: var(--dl-text-secondary); }
@@ -1755,15 +1955,15 @@ textarea:read-only { color: var(--dl-text-secondary); }
 .stop-button svg { fill: currentColor; }
 /* 「Enter 发送 · Shift+Enter 换行」不再占一行:那句移到 .composer-form 的 title(悬停可得)
    —— 删掉发送钮之后,这条提示是「Enter 能发送」的唯一线索,不能连同那行一起消失。 */
-/* 「回到底部」悬浮图标按钮:绝对定位、水平居中于阅读列,浮在**悬浮输入框之上**
-   (底边 = 坞顶边 − 间隙 − 输入框高 − 8),故不覆盖输入框、两者不重叠。坞横跨面板宽、
-   .composer-inner 限宽居中,两者中心重合,故 50% + translateX(-50%) 即对齐阅读列。
+/* 「回到底部」悬浮图标按钮:坞并入面板流内之后,坞内**唯一**仍绝对定位的悬浮件 ——
+   它锚在坞顶之上(底边 = 坞顶边 − 一档间隙),浮在转录区下缘那一带上,**不覆盖坞**。
+   坞横跨面板宽、坞内限宽列居中,两者中心重合,故 50% + translateX(-50%) 即对齐阅读列。
    它是独立控件,取 44×44(pill 圆形),不落入紧凑导航行档。
    transform 基值承担居中(translateX(-50%)),按压 / 进出场在同一 transform 上叠加纵向位移
    (translate 属性会与 transform 分离,但白名单只认 transform,故统一写在 transform 上)。 */
 .scroll-to-bottom {
   position: absolute;
-  inset-block-end: calc(100% + var(--composer-inset) + var(--dl-space-2));
+  inset-block-end: calc(100% + var(--dl-space-2));
   inset-inline-start: 50%;
   z-index: var(--dl-z-sticky);
   display: inline-flex;
@@ -1813,9 +2013,8 @@ textarea:read-only { color: var(--dl-text-secondary); }
   .conversation { --conversation-heading-pad: var(--dl-space-4); }
   /* 窄屏内边距收到一档;底部内缩在 .transcript 上,与断点无关(不在这里覆盖)。 */
   .transcript-inner { padding: var(--dl-space-6) var(--workspace-gutter) 0; }
-  .composer-inner { padding-inline: var(--dl-space-4); }
-  /* 悬浮输入框的横向内缩同取一档,与流内区域对齐。 */
-  .composer-form { inset-inline: var(--dl-space-4); }
+  /* 坞的横向内缩同取一档:坞内输入框与遥测条共用这条阅读列,故统一在坞上收。 */
+  .composer-dock { padding-inline: var(--dl-space-4); }
 }
 @media (prefers-reduced-motion: reduce) {
   .workspace-button:active, .suggestion-card:active { transform: none; }

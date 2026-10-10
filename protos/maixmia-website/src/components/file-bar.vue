@@ -9,24 +9,22 @@
 //   ③ 没有 ＋(文件不是「新建」出来的),菜单里多了「最近打开」区(关闭 ≠ 删除)。
 //
 // 组件是**受控的**:tabs / activePath / recent 由页面持有,组件只读并通过事件请求变更。
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { FileTab, RecentFile } from '../data/open-files'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { FileTab } from '../data/open-files'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
-import { fileBaseName, fileDirName, fileTabKey } from '../data/open-files'
+import { fileBaseName, fileTabKey } from '../data/open-files'
 import { useI18n } from '../i18n'
+import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
   tabs: FileTab[]
-  // 活动 tab 的键(项目 + 路径)—— 打开集跨项目,单靠路径不再唯一。
+  // 当前**聚焦**的文件(条上的高亮 / roving tabindex 的落点)。
   activeKey: string
-  // 当前**正在看的**项目 id:只用于把「最近打开」分组呈现(本项目 / 其它项目),
-  // 不再是这条栏的作用域(打开集本身跨项目共享)。
-  currentProjectId: string
-  // 最近打开过、当前**未**打开的条目(跨项目,新的在前)—— ▾ 菜单按项目分组呈现。
-  recent: RecentFile[]
+  // 窗口**可见**的文件集合 —— 切换按钮的 aria-pressed 就是它(多窗口期可有多个同时按下)。
+  visiblePaths: readonly string[]
   // 文件的状态芯片(新建 / 已改 / 待确认)。由页面按与文件树**同一条**规则派生后传入,
   // 于是芯片在「允许确认」后即时由 pending 变 modified,不必重取列表。
-  // 入参是**整个 tab**(打开集跨项目,状态要按 tab 自己的项目去查),不再是单个路径。
+  // 入参是**整个 tab**(与栏上其它信息同源),不再是单个路径。
   stateOf: (tab: FileTab) => ProjectEntryStateId
   disabled?: boolean
 }>()
@@ -35,7 +33,7 @@ const emit = defineEmits<{
   select: [key: string]
   close: [key: string]
   reorder: [order: string[]]
-  'open-recent': [entry: RecentFile]
+  'open-recent': [path: string]
 }>()
 
 const { t } = useI18n()
@@ -53,23 +51,11 @@ function chipLabel(tab: FileTab): string | null {
   return t.value.workspace.entryStates[state]
 }
 
-// tab 的 title(悬停可读):项目 · 路径 · 打开方式。打开集跨项目,故项目名必须进 title。
+// tab 的 title(悬停可读):文件名 · 域内路径。
+// 分域之后整条只属一个项目,再标一次项目名就是重复信息(项目由侧栏当前项目给出),
+// 故 title 只写域内的完整路径。**不再有打开方式** —— 打开即独占,没有预览 / 固定的区分。
 function tabTitle(tab: FileTab): string {
-  const how = tab.kind === 'preview' ? t.value.workspace.fileBar.previewTag : t.value.workspace.fileBar.pinnedTag
-  return `${tab.projectName} · ${tab.path} · ${how}`
-}
-
-// ---- ▾ 菜单:最近打开按项目分组(先「本项目」再「其它项目」)----
-// 依据:VS Code 把「最近工作区」与「最近文件」分组呈现,条目用 label + description 两段表达
-// (名字 + 所属上下文);同一项目内的条目省掉重复的项目前缀,只留路径。
-const currentProjectRecent = computed(() => props.recent.filter((entry) => entry.projectId === props.currentProjectId))
-const otherProjectRecent = computed(() => props.recent.filter((entry) => entry.projectId !== props.currentProjectId))
-
-// 次行(description)一律「项目 › 目录路径」—— 打开集跨项目,出处在每一行都要写清楚;
-// 根目录下的文件省略目录段,只留项目名。
-function recentDescription(entry: RecentFile): string {
-  const dir = fileDirName(entry.path)
-  return `${entry.projectName} › ${dir === '' ? '/' : dir}`
+  return `${fileBaseName(tab.path)} · ${tab.path}`
 }
 
 // 关闭钮的可访问名 = 「关闭 + 文件名」,多个关闭钮因此唯一可辨别(与会话 tab 同规则)。
@@ -90,10 +76,17 @@ function measureStrip(): void {
   const rootStyle = rootRef.value === null ? null : getComputedStyle(rootRef.value)
   tabMin.value = Number.parseFloat(rootStyle?.getPropertyValue('--file-tab-min') ?? '') || 140
   tabMax.value = Number.parseFloat(rootStyle?.getPropertyValue('--file-tab-max') ?? '') || 220
-  // 预留:菜单钮(紧凑导航行档)+ 两段间隙。本组件是**裸条**(内边距由外面那条底栏给),
-  // 故它自己的 clientWidth 已是可用内容宽。
-  const control = Number.parseFloat(rootStyle?.getPropertyValue('--workspace-nav-control-size') ?? '') || 32
-  stripWidth.value = Math.max(0, (rootRef.value?.clientWidth ?? 0) - control - tabGap.value * 2)
+  // 本组的可用宽**由会话栏单向给出**:顶部行里两组共享宽度,互相读对方的实占宽会互追
+  // (实测 375px 下互相挤成 0 再回弹,浏览器还报 ResizeObserver loop)。会话栏手里有行的度量,
+  // 由它一次算出本组的允许宽并写进 --file-strip-width;本组只读,不反向影响它。
+  const heading = rootRef.value?.closest('.conversation-heading') ?? null
+  const allowance = heading instanceof HTMLElement ? Number.parseFloat(getComputedStyle(heading).getPropertyValue('--file-strip-width')) : Number.NaN
+  if (Number.isFinite(allowance)) {
+    stripWidth.value = Math.max(0, allowance)
+    return
+  }
+  // 兜底:还没被会话栏算过(首帧)时给 0,随后由挂载后的几帧重试探到真值(见 onMounted)。
+  stripWidth.value = 0
 }
 
 const visibleCount = computed(() => {
@@ -122,9 +115,6 @@ const visibleTabs = computed(() => {
   return [...window.slice(0, count - 1), active]
 })
 
-const visibleKeys = computed(() => new Set(visibleTabs.value.map((tab) => fileTabKey(tab))))
-const hiddenTabs = computed(() => props.tabs.filter((tab) => !visibleKeys.value.has(fileTabKey(tab))))
-const menuBadge = computed(() => (hiddenTabs.value.length > 0 ? String(hiddenTabs.value.length) : null))
 
 // ---- roving tabindex ----
 const focusedKey = ref('')
@@ -325,33 +315,6 @@ function closeMenu(restoreFocus: boolean): void {
   if (restoreFocus) menuTriggerRef.value?.focus()
 }
 
-function onMenuKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    if (!isMenuOpen.value) return
-    event.preventDefault()
-    event.stopPropagation()
-    closeMenu(true)
-    return
-  }
-  const rows = rowElements()
-  if (rows.length === 0) return
-  const index = rows.findIndex((row) => row === document.activeElement)
-  if (event.key === 'ArrowDown') {
-    event.preventDefault()
-    if (index === -1) rows[0]?.focus()
-    else rows[Math.min(index + 1, rows.length - 1)]?.focus()
-  } else if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    if (index <= 0) menuTriggerRef.value?.focus()
-    else rows[index - 1]?.focus()
-  } else if (event.key === 'Home') {
-    event.preventDefault()
-    rows[0]?.focus()
-  } else if (event.key === 'End') {
-    event.preventDefault()
-    rows.at(-1)?.focus()
-  }
-}
 
 function onFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget
@@ -365,17 +328,18 @@ function onDocumentPointerDown(event: PointerEvent): void {
   closeMenu(false)
 }
 
-// 被溢出收起的 tab(属于本项目)与其目录路径。
-function hiddenDir(path: string): string {
-  const dir = fileDirName(path)
-  return dir === '' ? '/' : dir
-}
-
-function onSelectRow(key: string, entry: RecentFile | null): void {
-  closeMenu(false)
-  if (entry === null) emit('select', key)
-  else emit('open-recent', entry)
-}
+// 菜单行点击:openTab 为空 = 「已打开」组(选中该 tab);否则是「最近关闭」组(按路径重新打开)。
+// 菜单打开后把焦点交给首行:键盘 / 读屏用户随即能操作,Esc 也才有落点(与会话切换器打开即聚焦
+// 搜索框同一套做法 —— 否则焦点留在触发钮上,面板收不到 Esc)。
+watch(isMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  // 菜单打开后把焦点交给首行:键盘 / 读屏用户随即能操作,Esc 也才有落点(与会话切换器打开即聚焦
+  // 搜索框同一套做法)。没有行时(真空态提示)交给面板本身 —— 它是 tabindex=-1 的可编程聚焦区。
+  const first = rowElements()[0]
+  if (first === undefined) panelRef.value?.focus()
+  else first.focus()
+})
 
 let observer: ResizeObserver | undefined
 
@@ -383,9 +347,21 @@ onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDragKeydown)
   measureStrip()
-  if (rootRef.value !== null && typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver(() => measureStrip())
-    observer.observe(rootRef.value)
+  if (typeof ResizeObserver !== 'undefined') {
+    // 同会话栏:隔一帧再量,避免两组互为对方宽度时的同帧循环。
+    observer = new ResizeObserver(() => { requestAnimationFrame(() => measureStrip()) })
+    // 观察**顶部行**而不是本组件:可用宽取决于「行宽 − 对话那一组的实占宽」,对话组变宽变窄
+    // 时本组件自身的盒子可能不变,只观察自己会漏掉这一半的信号。
+    const heading = rootRef.value?.closest('.conversation-heading') ?? rootRef.value
+    if (heading !== null) observer.observe(heading)
+    // 也观察**自己**(允许宽变化时自己的盒子会变)与**对话那一条**(允许宽变大时,会话栏把
+    // 自己让窄,它的宽度变化是本组重算的可靠触发 —— 单看自己不够:本组的盒子被 tabMax 顶住时
+    // 不再变化,就会一直用着过时的允许宽)。
+    if (rootRef.value !== null) observer.observe(rootRef.value)
+    const siblings = rootRef.value?.closest('.conversation-heading')?.querySelector('.conversation-tabs')
+    if (siblings instanceof HTMLElement) observer.observe(siblings)
+    // 首帧时会话栏可能还没写出允许宽(两个组件挂载次序不定),故挂载后连续补量几帧。
+    for (let frame = 0; frame < 3; frame += 1) requestAnimationFrame(() => measureStrip())
   }
   window.addEventListener('resize', measureStrip)
 })
@@ -402,7 +378,10 @@ onBeforeUnmount(() => {
   <div ref="rootRef" class="file-bar" @focusout="onFocusOut">
     <!-- 打开集**跨项目**共享,栏里会同时混装多个项目的文件 —— 故出处由**每个 tab 自己**声明
          (文件名之后那枚小号、弱化的项目名),不再有「栏首标一次」的前提。 -->
-    <div ref="tabsRef" class="file-tabs" role="tablist" :aria-label="t.workspace.fileBar.label" @keydown="onTabsKeydown">      <!-- 槽位与 tab 平级:HTML 不允许 button 套 button,关闭钮用 tab 的 aria-actions 关联。
+    <!-- 文件那一组是 **toolbar** 而不是 tablist:同一时刻可以有多个文件窗口,不存在
+         「一个 tab 对应一个 tabpanel」的关系,故每项是 **aria-pressed 的切换按钮**(按下 = 其窗口可见),
+         不是 tab。tab 语义留给对话那一组(它才是一对一的)。 -->
+    <div ref="tabsRef" class="file-tabs" role="toolbar" :aria-label="t.workspace.fileBar.label" @keydown="onTabsKeydown">      <!-- 槽位与 tab 平级:HTML 不允许 button 套 button,关闭钮用 tab 的 aria-actions 关联。
            槽位同时是关闭钮的定位上下文(恒定预留,出现时零重排)。 -->
       <div
         v-for="(tab, index) in visibleTabs"
@@ -421,21 +400,19 @@ onBeforeUnmount(() => {
           :id="`file-tab-${fileTabKey(tab)}`"
           :data-file-key="fileTabKey(tab)"
           :data-file-path="tab.path"
-          :data-file-project="tab.projectId"
-          role="tab"
           class="file-tab"
-          :class="{ 'is-preview': tab.kind === 'preview' }"
-          :aria-selected="fileTabKey(tab) === activeKey"
+
+          :aria-pressed="visiblePaths.includes(fileTabKey(tab))"
           :tabindex="fileTabKey(tab) === tabStopKey ? 0 : -1"
-          :aria-controls="activeKey ? 'file-panel-body' : undefined"
           :aria-actions="`file-close-${fileTabKey(tab)}`"
           :title="tabTitle(tab)"
           @click="onTabClick(fileTabKey(tab))"
           @focus="focusedKey = fileTabKey(tab)"
         >
+          <!-- 主标签 = **文件名**。分域之后整条只属一个项目,故**不再标项目** ——
+               再标一次是重复信息(项目由侧栏当前项目给出),同名跨项目混排的歧义也随之消失。 -->
+          <DliIcon class="file-tab__icon" name="fileText" size="sm" />
           <span class="file-tab__label">{{ fileBaseName(tab.path) }}</span>
-          <!-- 出处:项目名小号、弱化地跟在文件名之后(打开集跨项目,tab 必须自己声明出处)。 -->
-          <span class="file-tab__project">{{ tab.projectName }}</span>
           <span v-if="chipLabel(tab)" class="file-tab__chip" :data-state="stateOf(tab)">{{ chipLabel(tab) }}</span>
         </button>
         <button
@@ -450,64 +427,16 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <!-- 空态:这条栏**常驻**(不再「无文件就不渲染」),空的时候正好承担「把这个手势告诉用户」
-         的职责。它占的纵向高度与一行 tab 相同(32),故栏高在空 / 非空两态**完全一致** ——
-         这也是常驻带来的实质好处:首次打开文件不会引起转录区几何跳动。 -->
-    <p v-if="tabs.length === 0" class="file-bar__empty">{{ t.workspace.fileBar.empty }}</p>
-    <!-- ▾ 常驻菜单钮:溢出项的入口 + 「最近打开」的入口(不因当前无溢出 / 无 tab 而消失,
-         否则入口会跳位;它也是常驻之后「关掉全部文件仍能找回历史」的通道)。 -->
-    <button
-      ref="menuTriggerRef"
-      type="button"
-      class="file-bar__trigger"
-      :aria-expanded="isMenuOpen"
-      aria-controls="file-bar-panel"
-      :aria-label="t.workspace.fileBar.menu"
-      :disabled="disabled"
-      @click="isMenuOpen = !isMenuOpen"
-    >
-      <svg class="file-bar__caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
-      <span v-if="menuBadge" class="file-bar__count" aria-hidden="true">{{ menuBadge }}</span>
-    </button>
-    <Transition name="file-menu-pop">
-      <div v-if="isMenuOpen" id="file-bar-panel" ref="panelRef" class="file-bar__panel" role="dialog" :aria-label="t.workspace.fileBar.menu" @keydown="onMenuKeydown">
-        <p v-if="hiddenTabs.length === 0 && recent.length === 0" class="file-bar__hint">{{ t.workspace.fileBar.menuEmpty }}</p>
-        <!-- 被溢出收起的 tab:次行一律「项目 › 目录路径」(打开集跨项目,出处在每行都要写清)。 -->
-        <section v-if="hiddenTabs.length > 0" class="file-bar__group">
-          <h2 class="file-bar__group-title">{{ t.workspace.fileBar.hiddenCount.replace('{count}', String(hiddenTabs.length)) }}</h2>
-          <button v-for="tab in hiddenTabs" :key="fileTabKey(tab)" type="button" class="file-bar__row" data-file-option :aria-current="fileTabKey(tab) === activeKey ? 'true' : undefined" @click="onSelectRow(fileTabKey(tab), null)">
-            <span class="file-bar__row-main">
-              <span class="file-bar__row-name">{{ fileBaseName(tab.path) }}</span>
-              <span v-if="chipLabel(tab)" class="file-tab__chip" :data-state="stateOf(tab)">{{ chipLabel(tab) }}</span>
-            </span>
-            <span class="file-bar__row-path">{{ tab.projectName }} › {{ hiddenDir(tab.path) }}</span>
-          </button>
-        </section>
-        <!-- 最近打开:先「本项目」再「其它项目」(依据:VS Code 的最近工作区 / 最近文件分组)。
-             行一律**两段式**(label + description):主行 = 文件名,次行 = 「项目 › 目录路径」。 -->
-        <section v-if="currentProjectRecent.length > 0" class="file-bar__group">
-          <h2 class="file-bar__group-title">{{ t.workspace.fileBar.recentCurrent }}</h2>
-          <button v-for="entry in currentProjectRecent" :key="`${entry.projectId}-${entry.path}`" type="button" class="file-bar__row" data-file-option @click="onSelectRow(entry.path, entry)">
-            <span class="file-bar__row-main"><span class="file-bar__row-name">{{ fileBaseName(entry.path) }}</span></span>
-            <span class="file-bar__row-path">{{ recentDescription(entry) }}</span>
-          </button>
-        </section>
-        <section v-if="otherProjectRecent.length > 0" class="file-bar__group">
-          <h2 class="file-bar__group-title">{{ t.workspace.fileBar.recentOther }}</h2>
-          <button v-for="entry in otherProjectRecent" :key="`${entry.projectId}-${entry.path}`" type="button" class="file-bar__row" data-file-option @click="onSelectRow(entry.path, entry)">
-            <span class="file-bar__row-main"><span class="file-bar__row-name">{{ fileBaseName(entry.path) }}</span></span>
-            <span class="file-bar__row-path">{{ recentDescription(entry) }}</span>
-          </button>
-        </section>
-      </div>
-    </Transition>
+    <!-- 没有打开文件时**不占位**:顶部行是与对话 tablist 共享的窄空间,一段教学文案会把整行挤到
+         溢出(实测 375px 下挤掉 63px、还让会话 tab 溢出自己的条)。「双击文件即可打开」这条提示
+         改由下拉的「文件」页承担(那里空间充裕,且是「找回文件」的天然落点)。 -->
   </div>
 </template>
 
 <style scoped>
 /* 本组件是**裸条**:只负责 [tab 条][▾ 菜单钮] 的排布,不做任何「面」——它被页面放进
-   .file-bar-dock(面板底部那条整宽、贴底的停靠栏),栏的底色 / 顶边发丝线 / 底角同心圆角 /
-   横向内边距都由那一层给。position: relative 是 ▾ 菜单浮层的定位基准。 */
+   顶部行里的一个 flex 项(宽度由会话栏单向定额,见 measureStrip),自身不再有「面」。
+   position: relative 仍留给焦点环与内部定位。 */
 .file-bar {
   position: relative;
   display: flex;
@@ -517,6 +446,12 @@ onBeforeUnmount(() => {
      脚本按本元素(裸条)的 clientWidth 算可用宽 —— 它已经是栏内容宽(左右内边距已让出)。 */
   --file-tab-min: 140px;
   --file-tab-max: 220px;
+}
+
+/* 文件图标:区分「这是文件」而不是对话(项目标识已随分域删除 —— 那个区分的是项目,不是类型)。 */
+.file-tab__icon {
+  flex: none;
+  color: var(--dl-text-tertiary);
 }
 
 .file-tabs {
@@ -561,25 +496,12 @@ onBeforeUnmount(() => {
   transition: transform var(--dl-duration-fast) var(--dl-ease-standard), background-color var(--dl-duration-fast) var(--dl-ease-standard);
 }
 
-/* tab 上的**出处**:项目名小号、弱化地跟在文件名之后。打开集跨项目,栏里会混装多个项目的
-   文件,故每个 tab 必须自己声明出处(它同时进 tab 的 title,悬停可见完整「项目 · 路径」)。 */
-.file-tab__project {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--dl-font-mono);
-  font-size: var(--dl-font-size-xs);
-  /* 二级文字色而非三级:三级色压在**活动 tab 的浅强调底**上只有 3.93:1(校准装置实测),
-     不到正文级 4.5:1;二级色在两种 tab 底色上都富余。 */
-  color: var(--dl-text-secondary);
-}
+/* tab 上的**出处标识**:项目名首字,16px 圆角方块(与会话头 / Agent 切换器同族)。
+   打开集跨项目,栏里会混装多个项目的文件,故每个 tab 都要一枚标识;完整出处(文件名 · 项目 › 路径)
+   放在 tab 的 title 里,悬停一次看全。颜色走二级文字色 —— 三级色压在活动 tab 的浅强调底上只有
+   3.93:1(校准装置实测),不够正文级 4.5:1。 */
 
 /* 预览槽:斜体表达「临时的」—— 三款编辑器(VS Code / Zed / JetBrains)一致的既有语义。 */
-.file-tab.is-preview .file-tab__label {
-  font-style: italic;
-}
 
 .file-tab__label {
   flex: 1;
@@ -614,7 +536,7 @@ onBeforeUnmount(() => {
   background: var(--dl-accent-soft);
 }
 
-.file-tab:hover:not([aria-selected='true']) {
+.file-tab:hover:not([aria-pressed='true']) {
   background: var(--dl-bg-hover);
 }
 
@@ -631,7 +553,7 @@ onBeforeUnmount(() => {
 }
 
 /* 活动 tab:青瓷浅底 + 文字提到一级 + 字重 500(两个非颜色线索:填充 + 字重)。 */
-.file-tab[aria-selected='true'] {
+.file-tab[aria-pressed='true'] {
   background: var(--dl-accent-soft);
   color: var(--dl-text-primary);
   font-weight: 500;
@@ -766,6 +688,7 @@ onBeforeUnmount(() => {
   width: min(360px, 92vw);
   max-height: min(50vh, 360px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: var(--dl-space-3);

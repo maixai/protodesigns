@@ -18,6 +18,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NSkeleton } from 'naive-ui'
 import type { ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
+import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
+import { fileBaseName, fileDirName, fileTabKey } from '../data/open-files'
+import type { FileTab } from '../data/open-files'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 
@@ -47,6 +50,18 @@ const props = defineProps<{
   activeTitle: string
   open: boolean
   disabled?: boolean
+  // ---- 文件(与对话同条:先对话、后文件) ----
+  // 文件那一组不是 tablist 而是 toolbar(同一时刻可有多个文件窗口,不存在「一个 tab 对一个 panel」),
+  // 故这里只收「本域(Agent + 项目)已打开的文件」与它们的状态,渲染由本组件的下拉统一承担。
+  files: FileTab[]
+  // 当前聚焦的文件(下拉里那一行的 aria-current)。
+  activeFilePath: string
+  // 窗口**可见**的文件集合 —— 列表里那一行的 aria-pressed 就是它(多窗口期可有多个)。
+  visibleFilePaths: readonly string[]
+  // 文件状态芯片(与文件树 / 文件栏同源同值)。
+  fileStateOf: (tab: FileTab) => ProjectEntryStateId
+  // 本域里关掉过、仍可从下拉重新打开的路径(新在前)。
+  recentFiles: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -58,9 +73,46 @@ const emit = defineEmits<{
   'new-chat': []
   close: [id: string]
   'update:open': [open: boolean]
+  'select-file': [path: string]
+  'close-file': [path: string]
+  'open-recent-file': [path: string]
 }>()
 
 const { t } = useI18n()
+
+// 文件个数变化要重算行的分配(单向定额按「文件数 × 单品上限」给宽)。
+watch(() => props.files.length, () => { measureStrip() })
+
+// ---- 下拉的分类过滤(两个 aria-pressed 切换钮,**不是** tab:它们不切换面板,只过滤同一个列表)----
+type MenuFilter = 'conversations' | 'files'
+const menuFilter = ref<MenuFilter>('conversations')
+
+// 文件行:主行文件名、次行域内目录路径(分域之后不必再写项目名);根目录下的文件用 '/' 占位。
+function fileRowPath(path: string): string {
+  const dir = fileDirName(path)
+  return dir === '' ? '/' : dir
+}
+
+// 下拉里的文件行 = 显示该文件的窗口(单窗口期即切换活动文件);关掉过的行 = 重新打开。
+function onSelectFileRow(path: string): void {
+  emit('select-file', path)
+  close(false)
+}
+
+function onOpenRecentRow(path: string): void {
+  emit('open-recent-file', path)
+  close(false)
+}
+
+// 本域里**关掉过**(可重新打开)的路径;仍打开着的不重复列(它们已在下拉的「已打开」段)。
+const closedFilePaths = computed(() => props.recentFiles.filter((path) => !props.files.some((tab) => tab.path === path)))
+
+// 文件的状态芯片文案(与文件树 / 文件栏同一套词条)。
+function fileChipLabel(tab: FileTab): string | null {
+  const state = props.fileStateOf(tab)
+  if (state === 'none') return null
+  return t.value.workspace.entryStates[state]
+}
 
 const rootRef = ref<HTMLElement | null>(null)
 const tabsRef = ref<HTMLElement | null>(null)
@@ -99,21 +151,15 @@ function isAwaitingUnseen(session: ChatSession): boolean {
   return session.status === 'awaiting' && !props.seenSessions.has(session.id)
 }
 
-// ---- tab 状态图标 ----
-// 五个状态各一种**形状**(绝不只靠颜色 —— WCAG 1.4.1 的官方反例正是「红 / 黄 / 绿圆点表示状态」;
-// 通过版本是「符号 + 颜色作辅助」):
-//   new       sparkles 图形;streaming 实心圆点(CSS);awaiting  choiceCard 图形;
-//   completed check 图形;   idle      空心圆环(CSS)。
-// 实心点 / 空心环是「活动 / 静默」同族的两极,三个图形(sparkles / choiceCard / check)互不相似,
-// 灰度下也能区分。颜色只作加固,且每个都 ≥3:1(WCAG 1.4.11 非文字对比,见断言)。
-type TabIcon = 'sparkles' | 'dot' | 'choiceCard' | 'check' | 'ring'
-const STATUS_ICON: Record<SessionStatus, TabIcon> = {
-  new: 'sparkles',
-  streaming: 'dot',
-  awaiting: 'choiceCard',
-  completed: 'check',
-  idle: 'ring',
-}
+// ---- tab 状态指示:只留「呼吸灯」+ 两种文字 Badge ----
+// 上一版给五个状态各画了一种形状,信息量过载:tab 条上真正值得一眼看出的只有「这条正在产出」
+// 与「这条要你介入 / 刚出结果」。故收敛成三条规则:
+//   ① 「思考中 / 输出中」(有效状态 streaming)→ 前导槽里的**呼吸圆点**,是唯一的图形指示;
+//   ② 「等待交互」→ 警告色文字 Badge,「输出完成」→ 成功色文字 Badge。文字自带语义,
+//      不必再借形状来区分(WCAG 1.4.1 要的是「不靠颜色也能分辨」,文字本身就满足);
+//   ③ 「新会话」与「等待对话」→ **不再有任何指示** —— 它们没有需要用户立刻知道的信息。
+// 前导槽恒定占位(空槽或圆点),故状态出现 / 消失都不会让标签横向位移。
+type TabBadge = { level: 'warning' | 'success'; text: string }
 
 // 有效状态:活动会话若正被实时生成覆盖则用覆盖值,否则取会话自身的 status。
 function effectiveStatus(session: ChatSession): SessionStatus {
@@ -121,12 +167,19 @@ function effectiveStatus(session: ChatSession): SessionStatus {
   return session.status
 }
 
-// awaiting / completed 是「需要你知道」的两态:看过之后图标不再显示(与菜单「等待你」组同一套
-// 「已看过」判定);活动会话本身即在被看,故一律视为已看过。其余三态恒定显示。
-function tabIcon(session: ChatSession): TabIcon | null {
+// 「正在产出」= 唯一的呼吸灯条件(排队与流式在 tab 这一层都报 streaming)。
+function isProducing(session: ChatSession): boolean {
+  return effectiveStatus(session) === 'streaming'
+}
+
+// awaiting / completed 是「需要你知道」的两态:看过之后 Badge 不再显示(与菜单「等待你」组同一套
+// 「已看过」判定);活动会话本身即在被看,故一律视为已看过。
+function tabBadge(session: ChatSession): TabBadge | null {
+  if (session.id === props.activeId || props.seenSessions.has(session.id)) return null
   const status = effectiveStatus(session)
-  if ((status === 'awaiting' || status === 'completed') && (session.id === props.activeId || props.seenSessions.has(session.id))) return null
-  return STATUS_ICON[status]
+  if (status === 'awaiting') return { level: 'warning', text: t.value.workspace.sessionStatus.awaiting }
+  if (status === 'completed') return { level: 'success', text: t.value.workspace.sessionStatus.completed }
+  return null
 }
 
 // tab 的 title(鼠标悬停可读)= 标题 + 状态词。状态信息另由遥测条的 live region 与 ▾ 面板的文字
@@ -167,9 +220,21 @@ function measureStrip(): void {
   tabGap.value = stripStyle === null ? 4 : Number.parseFloat(stripStyle.columnGap) || 0
   const isNarrow = window.matchMedia('(max-width: 1023px)').matches
   // 预留:＋ 与菜单钮(各一个紧凑档尺寸)+ 两段间隙;窄屏还有汉堡钮与它的那段间隙。
-  const reserved = target * 2 + gap * 2 + (isNarrow ? target + gap : 0)
+  // 条尾控件(＋ / ▾)+ 行内的 gap 段数。文件那一组插在 tablist 与 ＋ 之间,故行里比原先多一段 gap
+  // (tablist↔file 这一段):宽屏共 3 段、窄屏再加汉堡钮那一段。
+  const reserved = target * 2 + gap * 3 + (isNarrow ? target + gap : 0)
   const contentWidth = heading.clientWidth - padStart - padEnd
-  stripWidth.value = Math.max(0, contentWidth - reserved)
+  // ---- 与文件那一组**共享同一行** ----
+  // 谁也不能去读对方**渲染后**的宽:两组互为对方宽度会互相追着变(实测 375px 下先互相挤成 0、
+  // 再一起回弹,浏览器还报 ResizeObserver loop)。故改为**单向定额**:由本组件(手里有顶部行的
+  // 度量)一次算出文件组的允许宽,写进 --file-strip-width;文件组只读这个值,永不反过来影响本组。
+  // 定额 = min(文件数 × 单个文件 item 上限, 行内容宽的 40%)—— 文件通常少,给足;但不许挤走对话。
+  const fileGroupStyle = heading.querySelector('.file-bar') instanceof HTMLElement ? getComputedStyle(heading.querySelector('.file-bar') as HTMLElement) : null
+  const fileTabMax = Number.parseFloat(fileGroupStyle?.getPropertyValue('--file-tab-max') ?? '') || 220
+  const fileCount = props.files.length
+  const fileAllowance = fileCount === 0 ? 0 : Math.min(fileCount * fileTabMax, contentWidth * 0.4)
+  heading.style.setProperty('--file-strip-width', `${Math.round(fileAllowance)}px`)
+  stripWidth.value = Math.max(0, contentWidth - reserved - (fileAllowance > 0 ? fileAllowance + gap : 0))
 }
 
 const visibleCount = computed(() => {
@@ -564,8 +629,18 @@ onMounted(() => {
   measureStrip()
   const heading = tabsRef.value?.closest('.conversation-heading')
   if (heading instanceof HTMLElement && typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver(() => measureStrip())
+    // 回调**推迟到下一帧**:两组的可用宽互为对方实占宽,同步回调会在同一帧内互相触发,
+    // 浏览器随之报「ResizeObserver loop completed with undelivered notifications」(实测)。
+    // 隔一帧再量,布局已经落定,既不再报错也能收敛。
+    observer = new ResizeObserver(() => { requestAnimationFrame(() => measureStrip()) })
     observer.observe(heading)
+    // 也观察**文件那一组**:它与本组共享行宽,而两组的可用宽互为对方实占宽 —— 只观察顶部行
+    // 会在「行宽不变、对方变宽」时漏信号(对方变宽不会改变行宽),于是本组留着过时的可用宽、
+    // 两组加起来超出行宽(实测 375px 下溢出 29px)。观察对方即补上这一半的信号。
+    // 也观察文件组:它变宽 / 变窄会改变本组该让出多少 —— 但本组只**读**它的个数(见 measureStrip
+    // 里的单向定额),不读它的实占宽,故不会形成互追。
+    const fileGroup = heading.querySelector('.file-bar')
+    if (fileGroup instanceof HTMLElement) observer.observe(fileGroup)
   }
   window.addEventListener('resize', measureStrip)
 })
@@ -613,16 +688,15 @@ onBeforeUnmount(() => {
           @click="onTabClick(tab)"
           @focus="focusedTabId = tab.id"
         >
-          <!-- 前导状态槽:固定 16px,未活动 / 活动 tab 都有。槽宽恒定,故「已看过」后隐藏图形时
-               标签不位移。状态形状见脚本里 STATUS_ICON 的注释。 -->
-          <span class="tab-status" :data-status="effectiveStatus(tab)" :data-icon="tabIcon(tab) ?? 'none'" aria-hidden="true">
-            <DliIcon v-if="tabIcon(tab) === 'sparkles'" class="tab-status__glyph" name="sparkles" size="sm" />
-            <DliIcon v-else-if="tabIcon(tab) === 'choiceCard'" class="tab-status__glyph" name="choiceCard" size="sm" />
-            <DliIcon v-else-if="tabIcon(tab) === 'check'" class="tab-status__glyph" name="check" size="sm" />
-            <span v-else-if="tabIcon(tab) === 'dot'" class="tab-status__dot" />
-            <span v-else-if="tabIcon(tab) === 'ring'" class="tab-status__ring" />
+          <!-- 前导状态槽:恒定 16px 占位,槽宽不随状态变化 —— 呼吸灯出现 / 消失时标签不位移。
+               除了「正在产出」的呼吸圆点,这里不再画任何图形(其余状态见脚本里的规则注释)。 -->
+          <span class="tab-status" :data-status="effectiveStatus(tab)" :data-icon="isProducing(tab) ? 'dot' : 'none'" aria-hidden="true">
+            <span v-if="isProducing(tab)" class="tab-status__dot" />
           </span>
           <span class="conversation-tab__label">{{ tab.title }}</span>
+          <!-- 需要你介入 / 刚出结果的文字 Badge。用文字而不是图形:语义不依赖颜色(WCAG 1.4.1),
+               两个档位只用来分出紧迫度。 -->
+          <span v-if="tabBadge(tab)" class="tab-badge" :data-level="tabBadge(tab)?.level">{{ tabBadge(tab)?.text }}</span>
         </button>
         <!-- 关闭钮:很小很轻(24×24),不进 Tab 顺序(tabindex=-1),但仍是可访问的
              (aria-actions 由 tab 指向它 + 自有 aria-label)。只剩一个打开项时不渲染。 -->
@@ -639,6 +713,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+    <!-- 文件那一组(toolbar + aria-pressed 切换按钮)由页面经默认插槽交进来,位置固定在
+         对话 tablist 之后、＋ 之前 —— 「先对话、后文件」的分组次序因此是结构决定的,不靠 CSS 调序。 -->
+    <slot />
     <button class="conversation-icon-button" :disabled="disabled" :aria-label="t.workspace.newChat" @click="emit('new-chat')"><span aria-hidden="true">＋</span></button>
     <button
       ref="menuTriggerRef"
@@ -683,7 +760,39 @@ onBeforeUnmount(() => {
           <button v-if="searchQuery" type="button" class="conversation-search__clear" :aria-label="t.workspace.clearSearch" @click="emit('clear-search')">×</button>
           <kbd v-else class="conversation-search__hint" aria-hidden="true">{{ shortcutHint }}</kbd>
         </div>
-        <div class="conversation-list">
+        <!-- 分类过滤:**两个 aria-pressed 的切换钮**,不是 tab —— 它们不切换面板,只是过滤同一个列表
+             (tab 语义留给「选项↔面板」的一对一关系)。 -->
+        <div class="conversation-filter" role="group" :aria-label="t.workspace.switcher.filterLabel">
+          <button type="button" class="conversation-filter__option" :aria-pressed="menuFilter === 'conversations'" @click="menuFilter = 'conversations'">{{ t.workspace.switcher.filterConversations }}</button>
+          <button type="button" class="conversation-filter__option" :aria-pressed="menuFilter === 'files'" @click="menuFilter = 'files'">{{ t.workspace.switcher.filterFiles }}</button>
+        </div>
+        <div v-if="menuFilter === 'files'" class="conversation-list">
+          <p v-if="props.files.length === 0 && closedFilePaths.length === 0" class="conversation-hint">{{ t.workspace.fileBar.menuEmpty }}</p>
+          <section v-if="props.files.length > 0" class="conversation-group">
+            <h2 class="conversation-group__title">{{ t.workspace.fileBar.openGroup.replace('{count}', String(props.files.length)) }}</h2>
+            <button
+              v-for="tab in props.files" :key="fileTabKey(tab)"
+              type="button" class="conversation-row" data-file-option
+              :aria-current="fileTabKey(tab) === activeFilePath ? 'true' : undefined"
+              :aria-pressed="visibleFilePaths.includes(fileTabKey(tab))"
+              @click="onSelectFileRow(fileTabKey(tab))"
+            >
+              <span class="conversation-row__main">
+                <span class="conversation-row__name">{{ fileBaseName(tab.path) }}</span>
+                <span v-if="fileChipLabel(tab)" class="entry-state" :data-state="fileStateOf(tab)">{{ fileChipLabel(tab) }}</span>
+              </span>
+              <span class="conversation-row__path">{{ fileRowPath(tab.path) }}</span>
+            </button>
+          </section>
+          <section v-if="closedFilePaths.length > 0" class="conversation-group">
+            <h2 class="conversation-group__title">{{ t.workspace.fileBar.recentClosed }}</h2>
+            <button v-for="path in closedFilePaths" :key="path" type="button" class="conversation-row" data-file-option @click="onOpenRecentRow(path)">
+              <span class="conversation-row__main"><span class="conversation-row__name">{{ fileBaseName(path) }}</span></span>
+              <span class="conversation-row__path">{{ fileRowPath(path) }}</span>
+            </button>
+          </section>
+        </div>
+        <div v-else class="conversation-list">
           <template v-if="isSearchActive">
             <div v-if="isSearching" class="conversation-loading" :aria-label="t.workspace.loading"><NSkeleton text :repeat="3" :animated="false" /></div>
             <p v-else-if="searchHits.length === 0" class="conversation-hint">{{ t.workspace.searchEmpty }}</p>
@@ -914,17 +1023,21 @@ onBeforeUnmount(() => {
      而「状态类」慢动效是另一回事 —— 1.8s 落在 Apple HIG「每秒 ≤1 次视觉变化」的安全区间内。 */
   --tab-status-pulse: 1.8s;
 }
-.tab-status__glyph { color: inherit; }
-/* 颜色:每态一档语义 token —— 活动指示走强调色、等待交互走警告色、完成走成功色、
-   新会话走二级文字色、空闲走三级文字色。 */
-.tab-status[data-icon='sparkles'] { color: var(--dl-text-secondary); }
+/* 槽里只剩「正在产出」的呼吸圆点,取强调色(可操作 / 进行中的语义色)。 */
 .tab-status[data-icon='dot'] { color: var(--dl-accent); }
-.tab-status[data-icon='choiceCard'] { color: var(--dl-warning); }
-.tab-status[data-icon='check'] { color: var(--dl-success); }
-.tab-status[data-icon='ring'] { color: var(--dl-text-tertiary); }
-/* 「响应中」= 实心圆点(CSS 画,不用图形);「等待对话」= 空心圆环。二者是同族两极。 */
 .tab-status__dot { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); border-radius: var(--dl-radius-pill); background: currentColor; }
-.tab-status__ring { inline-size: var(--dl-space-3); block-size: var(--dl-space-3); border: var(--dl-border-width) solid currentColor; border-radius: var(--dl-radius-pill); }
+/* 文字 Badge:底用状态色的浅底、字用状态色本身 —— 成对出现在同一语义族内(与文件状态芯片同配方)。
+   等待交互 = 警告档,输出完成 = 成功档;两者都靠**文字**表意,颜色只作加固。 */
+.tab-badge {
+  flex: none;
+  padding: 0 var(--dl-space-1);
+  border-radius: var(--dl-radius-sm);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-snug);
+  white-space: nowrap;
+}
+.tab-badge[data-level='warning'] { color: var(--dl-warning); background: var(--dl-warning-subtle); }
+.tab-badge[data-level='success'] { color: var(--dl-success); background: var(--dl-success-subtle); }
 /* 「响应中」的慢速呼吸:opacity 在 1 → 0.45 之间、周期 1.8s(安全阈值:每秒不超过一次视觉变化)。
    只用 opacity(动效白名单);不做缩放 / 旋转(Apple 的降级判据把 scaling / spinning 列为应改动项)。 */
 .tab-status[data-icon='dot'] .tab-status__dot { animation: tab-status-breathe var(--tab-status-pulse) var(--dl-ease-standard) infinite; }
@@ -1140,6 +1253,47 @@ onBeforeUnmount(() => {
   color: var(--dl-text-tertiary);
 }
 
+/* 分类过滤:两个 aria-pressed 的切换钮(选中 = 实心强调,未选 = 描边) */
+.conversation-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--dl-space-1);
+  padding: 0 var(--dl-space-2) var(--dl-space-2);
+}
+.conversation-filter__option {
+  padding: var(--dl-space-1) var(--dl-space-3);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-pill);
+  background: var(--dl-bg-elevated);
+  color: var(--dl-text-secondary);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-snug);
+  cursor: pointer;
+}
+.conversation-filter__option:hover { background: var(--dl-bg-hover); }
+.conversation-filter__option:focus-visible { outline: var(--dl-focus-width) solid var(--dl-focus-ring); outline-offset: var(--dl-focus-offset); }
+.conversation-filter__option[aria-pressed='true'] { border-color: transparent; background: var(--dl-accent); color: var(--dl-text-on-accent); }
+
+/* 文件行:两段式,与 ▾ 里其它行同形(主行文件名 + 状态芯片,次行域内目录路径)。 */
+.conversation-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: start;
+  padding: var(--dl-space-2);
+  border: 0;
+  border-radius: var(--dl-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.conversation-row:hover { background: var(--dl-bg-hover); }
+.conversation-row:focus-visible { outline: var(--dl-focus-width) solid var(--dl-focus-ring); outline-offset: var(--dl-focus-offset); }
+.conversation-row[aria-current='true'] { background: var(--dl-accent-soft); }
+.conversation-row__main { display: flex; align-items: center; gap: var(--dl-space-2); min-width: 0; }
+.conversation-row__name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--dl-font-size-sm); color: var(--dl-text-primary); }
+.conversation-row__path { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); color: var(--dl-text-tertiary); }
+
 .conversation-list {
   display: flex;
   flex-direction: column;
@@ -1147,6 +1301,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   max-height: min(60vh, 480px);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .conversation-group {

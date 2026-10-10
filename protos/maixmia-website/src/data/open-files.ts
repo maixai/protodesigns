@@ -9,45 +9,81 @@ export type FilePanelState =
   | { status: 'empty' }
   | { status: 'error' }
 
-// 文件栏里的一个 tab。
-// 打开集是**全局**的(跨项目 / 跨会话共享,换项目、换会话都不清空),故每个 tab 自带出处:
-//   projectId / projectName —— 该文件所属项目;栏里可能同时混装多个项目的文件,tab 上必须
-//   自己声明出处(不再有「栏首标一次项目名」那种前提)。
-//   path —— 项目内相对路径,与该文件所属项目合起来才是唯一标识(不同项目可能有同名文件)。
-//   kind —— preview(临时槽:斜体、同一时刻至多一个,新的预览顶掉旧的)或 pinned(独占一格)。
+// 分域键:整套文件工作区**只属于 (Agent, 项目) 这一对**。
+// 依据:tab 表示的对话或文件,只能属于被选中的 Agent 与被选中的项目。于是「打开集 / 窗口几何 /
+// 最近打开」都按这一对分域保存 —— 条上不会出现两个项目的东西,文件名在域内天然唯一。
+export function fileDomainKey(agentId: AgentId, projectId: string): string {
+  return `${agentId}::${projectId}`
+}
+
+// 域内的一个 tab。
+//   path —— 项目内相对路径,在域内唯一(故 tab 的键就是它)。
+// **每个打开的文件独占一个 tab**(原来的「预览槽」语义已作废:单击 = 预览、占一个可复用槽、被下一个
+// 顶替;那是 IDE 的惯例,而本应用的模型是「打开即独占」,且已支持多窗口 —— 「避免铺满 tab」这条
+// 理由不成立)。单击 / 双击 / Enter 三条路径因此行为一致:创建或复用该文件自己的 tab。
 // 状态芯片不在这里:它按与文件树**同一条**规则实时派生(见 FileBar 的 stateOf),存一份会过期。
 export interface FileTab {
   path: string
-  projectId: string
-  projectName: string
-  kind: 'preview' | 'pinned'
 }
 
-// tab / 活动文件的唯一标识:项目 + 路径。
-export function fileTabKey(tab: { projectId: string; path: string }): string {
-  return `${tab.projectId}::${tab.path}`
+// tab / 活动文件的唯一标识。分域之后「项目 + 路径」里的项目那一段是冗余的(整域只属一个项目)。
+export function fileTabKey(tab: { path: string }): string {
+  return tab.path
 }
 
-// 「最近打开」是**全局**一份(跨项目),下拉开按项目分组呈现。故不再有 per-project 的
-// 「文件工作区」概念 —— 打开集本身就是全局的。
-// 带 agentId / projectName:下拉里要分组、要显示「项目 › 路径」,而这两样在栏内拿不到。
-export interface RecentFile {
-  agentId: AgentId
-  projectId: string
-  projectName: string
-  path: string
+// 文件窗口的几何(fixed 定位的视口坐标)。
+export interface FileWindowRect {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
-// 打开集(全局一份)+ 活动文件的键。全项目 / 全会话共享,换项目、换会话都不清空。
-export interface FileWorkspace {
+// 一个文件窗口的**完整**状态:几何 + 是否可见 + 层序。
+// 三样都按 (Agent, 项目) 分域保存,故关掉窗口(visible=false)≠ 关掉标签、≠ 清空几何:
+// 从条上再点一次即按原样恢复(与「关闭 ≠ 删除」同源),切走分域再切回来也一样 ——
+// 这也是 VS Code / IntelliJ「编辑器与窗口按项目保存与恢复」的既有行为。
+export interface FileWindow {
+  rect: FileWindowRect
+  // 可见 = 窗口正显示在屏幕上(条上那个切换按钮的 aria-pressed 就是它)。
+  visible: boolean
+  // 层序:数值大者在上。聚焦(点它 / 在它里面操作)即取当前最大值 + 1。
+  z: number
+}
+
+// 一个分域的文件工作区。
+export interface FileDomain {
   tabs: FileTab[]
   activeKey: string
+  // 「最近打开」= 关掉但仍在历史里的路径(新的在前)。分域之后只需路径 —— 项目由域本身给出。
+  recent: string[]
+  // 每个打开过的文件的窗口状态(键 = 路径)。
+  windows: Record<string, FileWindow>
+  // 当前聚焦的窗口(路径);空 = 没有聚焦的窗口(F6 / Esc 的落点)。
+  focus: string
 }
+
+// 打开集**按 (Agent, 项目) 分域**:键 = fileDomainKey。切 Agent / 切项目时旧域只是**不被呈现**
+// (其打开集、窗口几何、最近打开原样留着),切回来即恢复 —— 不销毁、不清空。
+export type FileWorkspace = Record<string, FileDomain>
+
+export const EMPTY_DOMAIN: FileDomain = { tabs: [], activeKey: '', recent: [], windows: {}, focus: '' }
 
 export function emptyFileWorkspace(): FileWorkspace {
-  return { tabs: [], activeKey: '' }
+  return {}
 }
 
+// 取某个域的当前状态;该域还没被碰过时返回一份空域(**不写入** —— 读不该产生副作用)。
+export function fileDomainOf(workspace: FileWorkspace, key: string): FileDomain {
+  return workspace[key] ?? EMPTY_DOMAIN
+}
+
+// 不可变地写回某个域。
+export function withFileDomain(workspace: FileWorkspace, key: string, domain: FileDomain): FileWorkspace {
+  return { ...workspace, [key]: domain }
+}
+
+// 展示名 = 路径末段。
 // 展示名 = 路径末段。
 export function fileBaseName(path: string): string {
   return path.split('/').at(-1) ?? path
@@ -58,12 +94,11 @@ export function fileDirName(path: string): string {
   return path.split('/').slice(0, -1).join('/')
 }
 
-// 把一份文件记入最近打开(按「项目 + 路径」去重、置顶、限量)。
+// 把一份文件记入某个域的「最近打开」(按路径去重、置顶、限量)。
 const RECENT_LIMIT = 16
 
-export function rememberRecent(recent: readonly RecentFile[], entry: RecentFile): RecentFile[] {
-  const rest = recent.filter((item) => !(item.projectId === entry.projectId && item.path === entry.path))
-  return [entry, ...rest].slice(0, RECENT_LIMIT)
+export function rememberRecent(recent: readonly string[], path: string): string[] {
+  return [path, ...recent.filter((item) => item !== path)].slice(0, RECENT_LIMIT)
 }
 
 // ---- 折叠未变更的片段 ----

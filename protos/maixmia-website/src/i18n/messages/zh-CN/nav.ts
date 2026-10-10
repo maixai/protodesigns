@@ -11,4 +11,7 @@ export const nav = {
   language: '语言',
   login: '登录',
   currentLanguage: '当前语言',
+  // 工作台页的整站 Header 折叠控件(首页不渲染它)。
+  collapseHeader: '收起顶栏',
+  expandHeader: '展开顶栏',
 }

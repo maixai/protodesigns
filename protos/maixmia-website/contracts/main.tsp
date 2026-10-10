@@ -384,6 +384,22 @@ model FileContent {
   lines: FileLine[];
 }
 
+// ---- Agent 栏:Agent 级的「需要你处理」信号聚合 ----
+//
+// 「信号」= 某 Agent 名下、**尚未被用户点开看过**的两类会话各有多少条:
+//   awaiting  等待交互(Agent 在等你拍板)
+//   completed 响应完成(Agent 刚出结果,你还没看)
+// 载体据此在该 Agent 的标签上挂一枚 Badge;两类并存时**取更紧急的一档(awaiting > completed)**。
+// 「是否已看过」是**视图状态**、不进契约 —— 调用方把自己那份「已看过」的会话 id 传给聚合函数,
+// 计数里自动排除它们(与 tab 上的状态 Badge 用的是同一份已看过集合,两处不会各说各话)。
+@summary("AgentSignal")
+@jsonSchema
+model AgentSignal {
+  agentId: AgentId;
+  awaiting: int32;      // 未看过的「等待交互」会话数
+  completed: int32;     // 未看过的「响应完成」会话数
+}
+
 // ---- 会话搜索 ----
 
 // 会话搜索命中:结果必须能定位到具体某一轮对话。

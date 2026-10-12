@@ -266,7 +266,8 @@ for (const width of WIDTHS) {
     await expect(page.locator('.demo-note')).toHaveCount(0)
     await expect(page.locator('.composer-hint')).toHaveCount(0)
     await openSwitcher(page)
-    await expect(page.locator('.session-item')).toHaveCount(6)
+    // 菜单隐去**正在显示**的那段(默认是 weekly)→ 6 条会话里列出 5 条。
+    await expect(page.locator('.session-item')).toHaveCount(SESSIONS_IN_DEFAULT_PROJECT - 1)
     await closeSwitcher(page)
     await expect(page).toHaveScreenshot(`workspace-ready-${width}.png`, { fullPage: true })
     expect(errors).toEqual([])
@@ -864,7 +865,8 @@ test('overflow 菜单:隐藏项在菜单里,选中后变可见', async ({ page }
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  const total = SESSIONS_IN_DEFAULT_PROJECT
+  // 菜单列出「可切换」的会话 = 全量减去**正在显示**的那段(默认是 weekly)。
+  const total = SESSIONS_IN_DEFAULT_PROJECT - 1
   const visibleTitles = await page.locator(TAB).evaluateAll((elements) => elements.map((element) => element.textContent ?? ''))
   await openSwitcher(page)
   const menuRows = page.locator('.session-item')
@@ -1307,21 +1309,25 @@ test('加载骨架、新建与会话切换', async ({ page }, testInfo) => {
   await waitForStable(page)
   // 会话行住在菜单里:开菜单 → 选第二条 → 菜单自动收起、转录切到该会话。
   await openSwitcher(page)
-  await page.locator('.session-item').nth(1).click()
+  const pickedRow = page.locator('.session-item').nth(1)
+  const pickedTitle = await pickedRow.locator('.session-title').innerText()
+  await pickedRow.click()
   await expect(page.locator(SWITCHER_PANEL)).toHaveCount(0)
   await expect(page.locator('.chat-message')).toHaveCount(2)
+  // 刚选中并显示的那段从此**不列在菜单里** —— 「当前」不再靠列表里的标记表达,而是靠它根本不在列表里。
   await openSwitcher(page)
-  await expect(page.locator('.session-item').nth(1)).toHaveAttribute('aria-current', 'true')
+  await expect(page.locator('.session-item', { hasText: pickedTitle })).toHaveCount(0)
   await closeSwitcher(page)
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请帮我准备访谈提纲。')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
-  // 会话按项目隔离:默认项目下原 6 条 + 新建 1 条 = 7 条。
+  // 会话按项目隔离:默认项目下原 6 条 + 新建 1 条 = 7 条;新建的那段是**当前显示**的 → 不列在菜单里,
+  // 故菜单里是 6 条。
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(7)
-  await expect(page.locator('.session-item').first()).toContainText('请帮我准备访谈提纲。')
+  await expect(page.locator('.session-item')).toHaveCount(6)
+  await expect(page.locator('.session-item', { hasText: '请帮我准备访谈提纲。' }), '当前显示的新会话不在列表里').toHaveCount(0)
 })
 
 test('真实动效路径：排队、光标、流式、停止保留、重新生成与完成', async ({ page }, testInfo) => {
@@ -1430,7 +1436,9 @@ test('切换语言重取历史，生成中延后刷新，不丢用户输入', as
   await expect(page.getByRole('log')).toContainText('Let’s turn the goal into a draft')
   await expect(page.getByRole('log')).toContainText('保留我输入的中文。')
   await openSwitcher(page)
-  await expect(page.locator('.session-item').first()).toContainText('Turn project updates into an action plan')
+  // 正在显示的那段(weekly)不列在菜单里;其余会话行照常按 EN 词条渲染(证明切语言确实重取了历史)。
+  await expect(page.locator('.session-item', { hasText: 'Turn project updates into an action plan' })).toHaveCount(0)
+  await expect(page.locator('.session-item', { hasText: 'Plan next quarter’s roadmap' }), '列表用 EN 标题').toHaveCount(1)
 })
 
 // 本需求的**核心不变量**:草稿按会话独立保存,且任何一次装载 / 切语言都不得丢掉它。
@@ -1471,7 +1479,8 @@ test('侧栏换 Agent → 项目区更换 → 新建会话归属当前项目', a
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator('.chat-message')).toHaveCount(2)
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(3)
+  // product-docs 有 3 段会话;其中一段正显示 → 菜单里 2 条。
+  await expect(page.locator('.session-item')).toHaveCount(2)
   await closeSwitcher(page)
 
   // 新建对话 + 发送:新会话必须归属**当前项目**(product-docs)。
@@ -1482,10 +1491,11 @@ test('侧栏换 Agent → 项目区更换 → 新建会话归属当前项目', a
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('请帮我写一段发布说明。')
   await expect(page.locator('.conversation-tab', { hasText: '请帮我写一段发布说明。' })).toHaveAttribute('aria-selected', 'true')
-  // 新会话进入 product-docs 的会话列表(knowledge + quarterly + release + 新会话 = 4),并排在最前。
+  // 新会话进入 product-docs 的会话列表(knowledge + quarterly + release + 新会话 = 4),且它是**当前
+  // 显示**的那段 → 不列在菜单里,故菜单里是另外 3 段。
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(4)
-  await expect(page.locator('.session-item').first()).toContainText('请帮我写一段发布说明。')
+  await expect(page.locator('.session-item')).toHaveCount(3)
+  await expect(page.locator('.session-item', { hasText: '请帮我写一段发布说明。' }), '当前显示的新会话不在列表里').toHaveCount(0)
 })
 
 // 底栏换 Agent:项目列表随之更换(断言具体项目名的出现 / 消失)。
@@ -1529,10 +1539,11 @@ test('会话搜索:命中正文、点击或键盘激活后定位并高亮该轮'
   await expect(highlighted).toHaveCount(1)
   await expect(highlighted).toHaveAttribute('data-message-id', 'weekly-4')
 
-  // 重新打开菜单:上次的搜索词已随菜单关闭清空,回到会话列表(当前项目 weekly-report 下的 6 条)。
+  // 重新打开菜单:上次的搜索词已随菜单关闭清空,回到会话列表(当前项目 weekly-report 的 6 条里,
+  // 正在显示的 weekly 被隐去 → 5 条)。
   await openSwitcher(page)
   await expect(page.locator('.hit-item')).toHaveCount(0)
-  await expect(page.locator('.session-item')).toHaveCount(6)
+  await expect(page.locator('.session-item')).toHaveCount(5)
 
   // 键盘复现:Tab 到命中项并用 Enter 激活,同样定位到 weekly-4 并高亮。
   await page.getByRole('textbox', { name: '搜索对话' }).fill('彩排')
@@ -2780,9 +2791,9 @@ test('会话按项目隔离:只显示当前项目的会话,无会话项目显示
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  // 项目 A(weekly-report):6 条会话,且不含其它项目的会话标题。会话行住在菜单里。
+  // 项目 A(weekly-report):6 条会话(其中一段正显示 → 菜单里 5 条),且不含其它项目的会话标题。
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(6)
+  await expect(page.locator('.session-item')).toHaveCount(5)
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].research)
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].knowledge)
   await closeSwitcher(page)
@@ -2805,8 +2816,9 @@ test('端到端:项目 A 下新建会话,切到项目 B 时不出现,切回 A �
   await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(7)
-  await expect(page.locator('.session-item').first()).toContainText('请整理一下本季度的目标。')
+  // 7 段里隐去正显示的那段(刚发送的新会话)→ 6 条。
+  await expect(page.locator('.session-item')).toHaveCount(6)
+  await expect(page.locator('.session-item', { hasText: '请整理一下本季度的目标。' }), '当前显示的新会话不在列表里').toHaveCount(0)
   await closeSwitcher(page)
   // 等保存收尾:保存中会短暂锁住项目 / 会话切换(与既有「生成中不可切」同一把锁)。
   await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).not.toHaveAttribute('readonly', '')
@@ -2817,8 +2829,8 @@ test('端到端:项目 A 下新建会话,切到项目 B 时不出现,切回 A �
   // 切回项目 A:新会话仍在。
   await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[0] }).locator('.project-row__button').click()
   await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(7)
-  await expect(page.locator('.session-item').first()).toContainText('请整理一下本季度的目标。')
+  await expect(page.locator('.session-item')).toHaveCount(6)
+  await expect(page.locator('.session-item', { hasText: '请整理一下本季度的目标。' })).toHaveCount(0)
 })
 
 // ============================================================================
@@ -2928,7 +2940,8 @@ test('从菜单选中 waiting 的 quarterly:其确认卡出现、等待你组消
   // 重新打开:只剩「本项目」组,无「等待你」组。
   await openSwitcher(page)
   await expect(page.locator('.conversation-group')).toHaveCount(1)
-  await expect(page.locator('.conversation-group__title')).toHaveText(/本项目.*3/)
+  // quarterly 现在是**当前显示**的那段 → 隐去;product-docs 的 3 段里列出 2 段。
+  await expect(page.locator('.conversation-group__title')).toHaveText(/本项目.*2/)
   await expect(page.locator('.conversation-group__title', { hasText: '等待你' })).toHaveCount(0)
   await closeSwitcher(page)
   // 跨区域一致:转录里是**它自己**的确认卡,pending 芯片是它的受影响文件,遥测说等待确认。
@@ -6514,3 +6527,114 @@ for (const width of [1280, 1600]) {
     }
   })
 }
+
+// ============================================================================
+// 唯一性与列表过滤(本轮):
+//   ① 一个窗体至多属于一块区域 —— 把一段已在别处打开的对话停靠过来时它是**被搬走**,不是复制
+//      (dockWindow 的移动语义);
+//   ② 已被打开、正摆在眼前的对话不再出现在切换器的会话列表里(与文件侧 recentForBar 同一条语义),
+//      但左半句的反面同样成立:被**隐藏**的(关掉的 tab、关掉的浮窗)必须留在列表里 —— 那是恢复路径。
+// ============================================================================
+
+// 把一枚 tab 拖到区域**右缘带**里松手 → 沿该边切出一块子区域(与 regions.spec 同一手势)。
+async function dragTabToRightEdge(page: Page, tab: Locator): Promise<void> {
+  const tabBox = await tab.boundingBox()
+  const region = await page.locator('.conversation[data-surface-id]').first().boundingBox()
+  expect(tabBox, 'tab 有几何盒').not.toBeNull()
+  expect(region, '区域有几何盒').not.toBeNull()
+  if (tabBox === null || region === null) return
+  const strip = await page.locator('.file-tabs').boundingBox()
+  const stripBottom = (strip?.y ?? tabBox.y) + (strip?.height ?? tabBox.height)
+  await page.mouse.move(tabBox.x + tabBox.width / 2, tabBox.y + tabBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(tabBox.x + tabBox.width / 2, stripBottom + 60, { steps: 8 })
+  await page.mouse.move(region.x + region.width - 30, region.y + region.height / 2 - 120, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(120)
+}
+
+test('同一对话不会同时挂在两块区域:把已在别处打开的对话停靠过来是搬走而非复制', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 布局不变量的 DEV 守卫在违反时 console.error —— 冒烟与这条用例都以「无 console error」兜底判据。
+  const issues: string[] = []
+  page.on('console', (message) => { if (message.type() === 'error') issues.push(message.text()) })
+
+  // 把第 2 枚对话 tab 拖到右缘 → 它落进新切出的区域,并成为那块区域的活动成员。
+  const movedTitle = await page.locator('.tab-slot').nth(1).locator('.conversation-tab__label').innerText()
+  await dragTabToRightEdge(page, page.locator('.tab-slot').nth(1))
+  const panes = page.locator('.conversation[data-surface-id]')
+  await expect(panes, '切出两块区域').toHaveCount(2)
+  const movedId = await panes.nth(1).locator(`${TAB}[aria-selected="true"]`).getAttribute('data-tab-id')
+  expect(movedId, '新区域的活动 tab 就是被拖走的那段对话').not.toBeNull()
+  if (movedId === null) return
+  // 前置:此刻它只挂在右区域一枚 tab。
+  await expect(page.locator(`${TAB}[data-tab-id="${movedId}"]`), '前置:全页恰一枚').toHaveCount(1)
+
+  // 在**根区域**的切换器里点这段对话(它已在另一块区域打开)。它仍列在这里 —— 被隐去的只有
+  // 「本区域正在显示的那段」,不是「所有有 tab 的成员」(见 switcherExcludedSessionIds 的说明)。
+  await panes.nth(0).locator(SWITCHER_TRIGGER).click()
+  await expect(page.locator(SWITCHER_PANEL)).toBeVisible()
+  await page.locator('.session-item', { hasText: movedTitle }).click()
+
+  // 断言:全页同 id 的 tab 只有一枚(移动,不是复制),且它现在是根区域的活动成员。
+  await expect(page.locator(`${TAB}[data-tab-id="${movedId}"]`), '全页同 id 的 tab 只有一枚').toHaveCount(1)
+  await expect(panes.nth(0).locator(`${TAB}[data-tab-id="${movedId}"][aria-selected="true"]`), '被搬到根区域并成为活动成员').toHaveCount(1)
+  // 搬运把来源区域摘空 → 那块区域随之后被移除(「摘空即移除」)。
+  await expect(panes, '来源区域被摘空后移除').toHaveCount(1)
+  expect(issues, '不变量守卫未报错(无 console error)').toEqual([])
+})
+
+test('切换器的会话列表隐去本区域正在显示的那段;关掉它的 tab 后它回到列表', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 默认显示的是 weekly → 它不进列表;其余 5 段仍在(「本项目 · N」的计数随之变)。
+  await openSwitcher(page)
+  await expect(page.locator('.session-item', { hasText: HEADINGS['zh-CN'].weekly }), '正在显示的那段不在列表里').toHaveCount(0)
+  await expect(page.locator('.session-item'), '其余会话仍在列表里').toHaveCount(5)
+  await expect(page.locator('.conversation-group__title')).toContainText('5')
+
+  // 选一段别的对话(roadmap)→ 它成为本区域显示的那段 → 从列表里隐去;weekly 回到列表。
+  await page.locator('.session-item', { hasText: HEADINGS['zh-CN'].roadmap }).click()
+  await expect(page.locator(SWITCHER_PANEL)).toHaveCount(0)
+  await openSwitcher(page)
+  await expect(page.locator('.session-item', { hasText: HEADINGS['zh-CN'].roadmap }), '刚打开的对话不再列出').toHaveCount(0)
+  await expect(page.locator('.session-item', { hasText: HEADINGS['zh-CN'].weekly }), '原先显示的那段回到列表').toHaveCount(1)
+
+  // 关掉 roadmap 的 tab(关掉 ≠ 删除 → 隐藏)→ 它回到列表(恢复路径)。
+  const roadmapSlot = page.locator('.tab-slot', { has: page.locator(TAB, { hasText: HEADINGS['zh-CN'].roadmap }) })
+  await roadmapSlot.hover()
+  await roadmapSlot.locator('.tab-close').click()
+  await openSwitcher(page)
+  await expect(page.locator('.session-item', { hasText: HEADINGS['zh-CN'].roadmap }), '关掉 tab 后回到列表').toHaveCount(1)
+})
+
+test('切换器的文件列表:打开着的文件不在列表里,关掉它的窗口后回到「最近关闭」', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 打开一个文件为**悬浮**窗体(树行单击即悬浮)→ 它可见 → 不进「文件」列表。
+  await clickFileRow(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`)).toHaveCount(1)
+  // 悬浮窗是整页最上层,会盖住会话头右端的切换器 —— 故用**键盘**开列表并切到「文件」页
+  // (Ctrl+K 是既有快捷键;搜索框 → Tab×2 即两枚过滤钮)。这本身也是「非指针入口」的一次覆盖。
+  await page.keyboard.press('Control+k')
+  await expect(page.locator(SWITCHER_PANEL)).toBeVisible()
+  await page.locator('.conversation-search__input').focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.conversation-filter__option[aria-pressed="true"]'), '已切到「文件」页').toHaveText('文件')
+  await expect(page.locator('.conversation-row[data-file-option]', { hasText: 'README.md' }), '打开着的文件不在列表里').toHaveCount(0)
+
+  // 关掉这个悬浮窗体(关掉 ≠ 删除 → 隐藏)→ 它回到「最近关闭」列表(恢复路径)。
+  await closeSwitcher(page)
+  await page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"] .file-panel__close`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`)).toHaveCount(0)
+  await openSwitcher(page)
+  await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
+  await expect(page.locator('.conversation-row[data-file-option]', { hasText: 'README.md' }), '关掉后回到列表').toHaveCount(1)
+})

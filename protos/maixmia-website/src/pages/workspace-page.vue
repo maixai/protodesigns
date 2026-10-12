@@ -20,7 +20,7 @@ import type { ChatRuntime } from '../data/chat-runtime'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
-import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
+import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
@@ -148,6 +148,21 @@ function activeChatOf(surfaceId: string): string {
   const surface = surfaceOf(layout.value, surfaceId)
   const win = surface === undefined ? null : activeMemberOf(surface)
   return win !== null && win.content.kind === 'chat' ? win.content.sessionId : ''
+}
+// 切换器的会话列表要**隐去**的那些会话:本区域**正在显示**的那段对话(activeChatOf)∪ 任何
+// **可见的悬浮对话**(floatingChatIds)。已被打开、正摆在眼前的对话不该再作为「可切换项」列出 ——
+// 与文件侧 recentForBar 的既有语义一致(可见的窗口不进下拉列表)。
+//
+// 判据只写在这一处。**刻意只隐去「正在显示的那段」,而不是所有有 tab 的成员**:本仓把项目的每个
+// 会话都装载成根区域的成员(见 syncChatMembers),按「有 tab」过滤会把列表清空(默认 6 条会话全是
+// 成员);且「把已在别的区域开着的一段对话搬进本区域」这条路径(见 dockWindow 的移动语义)要求它
+// 仍能在本区域的切换器里被选中。被**隐藏**的会话(关掉的 tab、收起的浮窗)不在此列 —— 那是它们的
+// 恢复路径,必须留在列表里。
+function switcherExcludedSessionIds(surfaceId: string): readonly string[] {
+  const ids = new Set(floatingChatIds.value)
+  const active = activeChatOf(surfaceId)
+  if (active !== '') ids.add(active)
+  return Array.from(ids)
 }
 // ---- 全页唯一的 live region:哪一个是 `role="log"` ----
 // 不变量:任何布局下 document 里 `role="log"` 的数量恰为 1(除非根区域正显示文件这种
@@ -358,9 +373,21 @@ function toggleDirectory(projectId: string, path: string): void {
   else next.add(key)
   expandedDirs.value = next
 }
+// 布局不变量的 **DEV 期守卫**:页面里所有布局写回都汇到 patchLayout(commitLayout 也经它),
+// 故这条断言放在这一处即可 —— 新布局若违反已声明的不变量(data/windows 的 layoutViolations),
+// 立刻 console.error 一条含「是哪条不变量」的可读信息。目的:让「同一个窗体属于两块区域」
+// 这类缺陷在开发期就暴露,而不是等用户看出「同一个对话在两块区域各有一枚 tab」。
+// 只在开发构建生效(import.meta.env.DEV),生产不带这段;写回前先过守卫,再落值。
+function assertInvariants(next: WorkspaceLayout): WorkspaceLayout {
+  if (import.meta.env.DEV) {
+    const violations = layoutViolations(next)
+    if (violations.length > 0) console.error(`[layout-invariant] ${violations.join('; ')}`)
+  }
+  return next
+}
 // 当前分域上的不可变更新(其余分域原样保留)。
 function patchLayout(next: (current: WorkspaceLayout) => WorkspaceLayout): void {
-  workspaceMap.value = withLayout(workspaceMap.value, domainKey.value, next(layout.value))
+  workspaceMap.value = withLayout(workspaceMap.value, domainKey.value, assertInvariants(next(layout.value)))
 }
 // ---- 区域生命周期:成员被摘空的区域移除 ----
 // 不变量:非根区域必有成员(要么是内容区,要么已被摘除);只有根区域可以「无成员」——它退化成
@@ -741,7 +768,7 @@ function onTearCancel(): void {
   clearDropIntent()
   if (snapshot !== null && snapshotDomain === domainKey.value) {
     void nextTick(() => {
-      workspaceMap.value = withLayout(workspaceMap.value, snapshotDomain, snapshot)
+      workspaceMap.value = withLayout(workspaceMap.value, snapshotDomain, assertInvariants(snapshot))
     })
   }
   if (name !== '') announcePlacement(t.value.workspace.fileBar.tearAttach.replace('{name}', windowLabel(name)))
@@ -1173,9 +1200,12 @@ function resetGenerations(): void {
 }
 
 // ---- 装载与重装 ----
-// 让某段对话成为**指定区域**的活动成员(已在 → 只激活;被关掉过 → 补回;被拆出为悬浮 → 只置顶)。
+// 让某段对话成为**指定区域**的活动成员(已在 → 只激活;被关掉过 → 补回;被拆出为悬浮 → 只置顶;
+// 已在**别的**区域开着 → 由 dockWindow 的**移动**语义搬过来)。
+// 经 commitLayout(而非 patchLayout):搬走一段对话可能把原区域摘空,而「摘空即移除」是页面既定的
+// 区域生命周期规则 —— 走过一遍 prune,那块空区域才会随这次搬运一起消失(根区域除外)。
 function activateChat(surfaceId: string, sessionId: string): void {
-  patchLayout((current) => activateChatAt(current, surfaceId, sessionId))
+  commitLayout((current) => activateChatAt(current, surfaceId, sessionId))
 }
 function activateChatAt(current: WorkspaceLayout, surfaceId: string, sessionId: string): WorkspaceLayout {
   const win = current.windows.find((item) => item.id === sessionId)
@@ -1187,8 +1217,11 @@ function activateChatAt(current: WorkspaceLayout, surfaceId: string, sessionId: 
   return dockWindow(base, sessionId, surfaceId, 0)
 }
 // 保证一段对话是**指定区域**的成员(不改变它是否活动)。
+// 新语义下仍然安全:它自带 `surface.members.includes(sessionId)` 早退 —— 已是**本区域**成员时
+// 一个字段都不动(不会把自己搬走再搬回来)。只有「窗体存在于别处(别的区域 / 悬浮)」时才会落到
+// dockWindow;那是移动,不产生重复成员(不变量③)。同样经 commitLayout 兜住「搬空来源区域」。
 function ensureChatMember(surfaceId: string, sessionId: string): void {
-  patchLayout((current) => {
+  commitLayout((current) => {
     const win = current.windows.find((item) => item.id === sessionId)
     if (win !== undefined && win.placement === 'floating') return current
     const surface = surfaceOf(current, surfaceId)
@@ -1622,7 +1655,7 @@ function syncChatMembers(): void {
     const at = members.findIndex((member) => later.has(member))
     next = seedChatWindow(next, targetSurface, id, at < 0 ? members.length : at)
   })
-  if (next !== current) workspaceMap.value = withLayout(workspaceMap.value, domain, next)
+  if (next !== current) workspaceMap.value = withLayout(workspaceMap.value, domain, assertInvariants(next))
 }
 watch([sessions, domainKey], () => { syncChatMembers() })
 // 「已看过」的唯一登记点:某会话在 awaiting / completed 期间成为**某个区域的活动成员**即记入。
@@ -1808,6 +1841,7 @@ onBeforeUnmount(() => {
                 :menu-panel-id="menuPanelIdOf(surfaceId)"
                 :sessions="sessions"
                 :sessions-status="sessionStatus"
+                :excluded-session-ids="switcherExcludedSessionIds(surfaceId)"
                 :search-query="searchQuery"
                 :search-hits="searchHits"
                 :is-searching="isSearching"

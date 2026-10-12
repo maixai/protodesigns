@@ -34,8 +34,11 @@ import {
   reorderTabs,
   seedChatWindow,
   setWindowRect,
+  surfaceOf,
+  surfaceOwning,
   visibleWindows,
   windowIdOf,
+  withSurfaceSplit,
 } from '../../src/data/windows'
 
 const README = 'README.md'
@@ -176,6 +179,93 @@ test('floatWindow / dockWindow:归属在区域与浮层之间迁移,成员与 pl
   const appended = dockWindow(floated, README, MAIN_SURFACE, 99)
   expect(appended.surfaces[0]?.members).toEqual([PROGRESS, README])
   expect(layoutViolations(appended)).toEqual([])
+})
+
+// ============================================================================
+// dockWindow 的**移动**语义:一个窗体至多属于一个区域(不变量③)。
+// 此前它只从**目标区域**过滤,于是「把一段已经在 A 区开着的对话,从别处停靠进 B 区」会让它同时
+// 属于 A 与 B —— 同一个对话在两块区域各挂一枚 tab。修法:先从**所有**区域摘掉,再插进目标区域。
+// ============================================================================
+
+test('dockWindow 是「移动」而非「复制」:已在 A 区的窗体停靠进 B 区后只属于 B', () => {
+  // 根区域:两个对话 + 一个文件;把 README 切到子区域 —— 它此后只属于子区域。
+  let layout = seedChat(emptyLayout(), WEEKLY, 0)
+  layout = seedChat(layout, ROADMAP, 1)
+  layout = openTab(layout, MAIN_SURFACE, { kind: 'file', path: README })
+  layout = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README)
+  const child = layout.surfaces.at(-1)
+  expect(child).toBeDefined()
+  if (child === undefined) return
+  expect(surfaceOwning(layout, README)?.id, '切分后 README 只属于子区域').toBe(child.id)
+
+  // 把它从子区域停靠回根区域(与「在切换器里点一段已在别处打开的项」同一条路径)。
+  const moved = dockWindow(layout, README, MAIN_SURFACE, 0)
+  expect(surfaceOwning(moved, README)?.id, '移动后只属于根区域').toBe(MAIN_SURFACE)
+  expect(surfaceOf(moved, child.id)?.members, '原子区域不再有它').toEqual([])
+  expect(surfaceOf(moved, child.id)?.activeId, '子区域没有其他成员 → 活动位清空').toBe('')
+  expect(fileMemberIds(moved, MAIN_SURFACE), '插在目标区域下标 0 处').toEqual([README])
+  expect(surfaceOf(moved, MAIN_SURFACE)?.activeId, '置为目标区域的活动成员').toBe(README)
+  expect(moved.focus).toBe(README)
+  expect(layoutViolations(moved), '不变量恒为空(尤其③:至多属于一个区域)').toEqual([])
+
+  // 反向也成立:把它再停靠回子区域 → 只属于子区域,根区域不再有它。
+  const back = dockWindow(moved, README, child.id, 0)
+  expect(surfaceOwning(back, README)?.id).toBe(child.id)
+  expect(surfaceOf(back, MAIN_SURFACE)?.members.includes(README)).toBe(false)
+  expect(layoutViolations(back)).toEqual([])
+})
+
+test('dockWindow 移动语义:原区域的活动位交给相邻成员(优先右侧,其次左侧)', () => {
+  // 根区域 A = [ROADMAP, WEEKLY];把 README 切到子区域 B,再让 ROADMAP 成为 A 的活动成员。
+  let layout = seedChat(emptyLayout(), ROADMAP, 0)
+  layout = seedChat(layout, WEEKLY, 1)
+  layout = openTab(layout, MAIN_SURFACE, { kind: 'file', path: README })
+  layout = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README)
+  const childId = layout.surfaces.at(-1)?.id ?? ''
+  expect(childId).not.toBe('')
+  layout = activateTab(layout, MAIN_SURFACE, ROADMAP)
+  expect(surfaceOf(layout, MAIN_SURFACE)?.activeId).toBe(ROADMAP)
+
+  // ROADMAP 是 A 的首项 → 搬走后活动位交给**右侧**的 WEEKLY。
+  const moved = dockWindow(layout, ROADMAP, childId, 0)
+  expect(surfaceOf(moved, MAIN_SURFACE)?.members).toEqual([WEEKLY])
+  expect(surfaceOf(moved, MAIN_SURFACE)?.activeId, '交给右侧邻居').toBe(WEEKLY)
+  expect(surfaceOf(moved, childId)?.members).toEqual([ROADMAP, README])
+  expect(surfaceOf(moved, childId)?.activeId).toBe(ROADMAP)
+  expect(layoutViolations(moved)).toEqual([])
+
+  // 末位没有右邻 → 交给**左侧**邻居:另起一份 A = [ROADMAP, WEEKLY],活动是末位的 WEEKLY。
+  let left = seedChat(emptyLayout(), ROADMAP, 0)
+  left = seedChat(left, WEEKLY, 1)
+  left = openTab(left, MAIN_SURFACE, { kind: 'file', path: README })
+  left = withSurfaceSplit(left, MAIN_SURFACE, 'row', README)
+  const leftChildId = left.surfaces.at(-1)?.id ?? ''
+  left = activateTab(left, MAIN_SURFACE, WEEKLY)
+  const movedLeft = dockWindow(left, WEEKLY, leftChildId, 1)
+  expect(surfaceOf(movedLeft, MAIN_SURFACE)?.activeId, '末位 → 交给左侧邻居').toBe(ROADMAP)
+  expect(surfaceOf(movedLeft, leftChildId)?.members).toEqual([README, WEEKLY])
+  expect(layoutViolations(movedLeft)).toEqual([])
+})
+
+test('dockWindow:窗体已在目标区域里(同区域重排)→ 只改下标并激活,不产生重复成员', () => {
+  let layout = openTab(emptyLayout(), MAIN_SURFACE, { kind: 'file', path: README })
+  layout = openTab(layout, MAIN_SURFACE, { kind: 'file', path: PROGRESS })
+  const moved = dockWindow(layout, README, MAIN_SURFACE, 1)
+  expect(surfaceOf(moved, MAIN_SURFACE)?.members, '成员仍只有两份').toEqual([PROGRESS, README])
+  expect(surfaceOf(moved, MAIN_SURFACE)?.activeId).toBe(README)
+  expect(layoutViolations(moved)).toEqual([])
+})
+
+test('dockWindow:被隐藏(关过 tab)的窗体重新停靠会恢复可见', () => {
+  let layout = seedChat(emptyLayout(), WEEKLY, 0)
+  layout = closeTab(layout, MAIN_SURFACE, WEEKLY)
+  expect(layout.windows.find((win) => win.id === WEEKLY)?.visible, '关掉 = 隐藏').toBe(false)
+  const docked = dockWindow(layout, WEEKLY, MAIN_SURFACE, 0)
+  expect(chatMemberIds(docked, MAIN_SURFACE), '重新回到条上').toEqual([WEEKLY])
+  expect(docked.windows.find((win) => win.id === WEEKLY)?.visible, '恢复可见').toBe(true)
+  expect(docked.windows.find((win) => win.id === WEEKLY)?.placement).toBe('docked')
+  expect(surfaceOf(docked, MAIN_SURFACE)?.activeId).toBe(WEEKLY)
+  expect(layoutViolations(docked)).toEqual([])
 })
 
 // 向下拖出 tab 的落点是 floatWindow(见 workspace.spec 的手势用例)。这里断言它的**纯操作**性质:

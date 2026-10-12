@@ -33,6 +33,11 @@ type SessionsStatus = 'loading' | 'ready' | 'empty' | 'error'
 const props = defineProps<{
   sessions: ChatSession[]
   sessionsStatus: SessionsStatus
+  // 下拉的**会话列表**里要隐去的会话 id(视图状态,不进契约):本区域正在显示的那段 + 任何可见的
+  // 悬浮对话。判据由页面持有(见 workspace-page 的 switcherExcludedSessionIds)—— 组件只负责滤掉,
+  // 因为它只管列表;**tab 条不受影响**(tabSessions 由 order + sessions 全量映射,被隐去的会话
+  // 恰恰就是条上那些 tab,过滤 sessions 会把它们一并抹掉)。
+  excludedSessionIds: readonly string[]
   searchQuery: string
   searchHits: ConversationSearchHit[]
   isSearching: boolean
@@ -155,6 +160,9 @@ const searchRef = ref<HTMLInputElement | null>(null)
 
 // 全部会话按**最近更新**倒序:菜单的两组沿用这个顺序(它是「索引」,便于按时间查找)。
 const orderedSessions = computed(() => [...props.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
+// 下拉列表要展示的会话 = 全量里滤掉「已打开、正摆在眼前的那些」(见 excludedSessionIds 的说明)。
+// 只作用于**列表**;tab 条走 sessionById(仍用全量 sessions),故条上的 tab 一枚不少。
+const menuSessions = computed(() => orderedSessions.value.filter((session) => !props.excludedSessionIds.includes(session.id)))
 // 会话按 id 索引:tab 条的顺序由 props.order 给出(区域成员的顺序),这里只做 id → 会话的映射。
 const sessionById = computed(() => new Map(props.sessions.map((session) => [session.id, session])))
 
@@ -211,9 +219,9 @@ function tabTitle(session: ChatSession): string {
   return `${session.title} · ${t.value.workspace.sessionStatus[effectiveStatus(session)]}`
 }
 
-const awaitingSessions = computed(() => orderedSessions.value.filter(isAwaitingUnseen))
+const awaitingSessions = computed(() => menuSessions.value.filter(isAwaitingUnseen))
 // 菜单「本项目」组与「等待你」组不重复:已看过(或本就不等待)的会话落在这组。
-const projectSessions = computed(() => orderedSessions.value.filter((session) => !isAwaitingUnseen(session)))
+const projectSessions = computed(() => menuSessions.value.filter((session) => !isAwaitingUnseen(session)))
 
 // ---- 溢出计算(简单、确定、可断言)----
 // 调研:Telerik TabStrip 与 SAP Fiori 的 tabsOverflowMode 默认都是「超出部分收进末尾的『更多』

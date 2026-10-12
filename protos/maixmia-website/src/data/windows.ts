@@ -454,17 +454,38 @@ export function floatWindow(layout: WorkspaceLayout, windowId: string, rect: Win
   }
 }
 
-// floating → docked:插到目标区域成员的指定下标处(越界则夹到合法范围),置为可见并激活它。
+// 把窗体停靠进目标区域:插到成员数组的指定下标处(越界则夹到合法范围),置为可见、置为停靠并激活它。
 // 置可见是必要的:它可能正是从「最近关闭」复原回来的那一个(关闭只把 visible 置假)。
+//
+// **本函数是「移动」语义,不是「复制」**:先把它从**所有**区域的成员里摘掉,再插进目标区域 ——
+// 一个窗体至多属于一个区域(不变量③)。此前只从目标区域过滤,于是「把一段已经在 A 区开着的对话,
+// 从别处停靠进 B 区」会让它同时成为 A 与 B 的成员(同一个对话在两块区域各挂一枚 tab),正是这个
+// 漏网。腾出的活动位交给**相邻成员**(优先右侧、其次左侧,与 closeTab / floatWindow / openFloating /
+// buildSplit 同一条规则):它原来占据的内容区不该空着。
+//
+// 依据:Zed 的 tab 切换器只列「已打开」的 tab,它的 issue #5100(《Command to move a tab/editor
+// rather than split/duplicate it》)是最受赞同的诉求之一 —— 原话「90% 的情况我想移动、不想复制,
+// 不明白为什么大多数编辑器默认复制」;VS Code 则**故意**允许同一文件开在两块 editor group(为
+// 并排对照,其 editor.revealIfOpen 默认关)。本原型没有并排对照的诉求,取「移动、不复制」——
+// 这也正是 floatWindow / openFloating / buildSplit 已经遵守的规则,只有本函数此前漏了。
+//
+// 调用方因此**不需要**为「窗体已在别的区域」另写一条分支:本函数自己把它搬过来。
 export function dockWindow(layout: WorkspaceLayout, windowId: string, surfaceId: string, index: number): WorkspaceLayout {
   const win = layout.windows.find((item) => item.id === windowId)
   const surface = surfaceOf(layout, surfaceId)
   if (win === undefined || surface === undefined) return layout
-  const rest = surface.members.filter((id) => id !== windowId)
+  // 先从**所有**区域摘掉(腾出的活动位交给相邻成员),再插进目标区域的下标处。
+  const stripped = layout.surfaces.map((item) => ({
+    ...item,
+    members: item.members.filter((id) => id !== windowId),
+    activeId: item.activeId === windowId ? neighborMember(item.members, windowId) : item.activeId,
+  }))
+  const rest = stripped.find((item) => item.id === surfaceId)?.members ?? []
   const at = Math.max(0, Math.min(index, rest.length))
   const members = [...rest.slice(0, at), windowId, ...rest.slice(at)]
   return {
-    ...replaceSurface(layout, surfaceId, (item) => ({ ...item, members, activeId: windowId })),
+    ...layout,
+    surfaces: stripped.map((item) => (item.id === surfaceId ? { ...item, members, activeId: windowId } : item)),
     windows: replaceWindow(layout.windows, { ...win, placement: 'docked', visible: true }),
     focus: windowId,
   }

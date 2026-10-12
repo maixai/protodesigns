@@ -1,6 +1,7 @@
 // 演示结构与内存数据；展示文案从当前语言词条组装，刷新即重置。
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { ChatMessage } from '../contracts/generated/chat-message'
+import type { Attachment } from '../contracts/generated/attachment'
 import type { Agent } from '../contracts/generated/agent'
 import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { Project } from '../contracts/generated/project'
@@ -86,7 +87,7 @@ const messageSeeds = {
     { id: 'release-1', role: 'user', body: 'releaseUser', createdAt: '2026-10-06T05:19:00Z' },
     { id: 'release-2', role: 'assistant', body: 'releaseAssistant', createdAt: '2026-10-06T05:20:00Z' },
   ],
-} satisfies Record<string, (ChatMessage & { body: keyof Messages['workspace']['messages'] })[]>
+} satisfies Record<string, (Omit<ChatMessage, 'attachments'> & { body: keyof Messages['workspace']['messages'] })[]>
 
 const responsePool: (keyof Messages['workspace']['responses'])[] = ['first', 'second', 'third']
 const extraSessions: ChatSession[] = []
@@ -129,7 +130,8 @@ export function mockAgentSignals(demoState: AppRoute['demoState'], seenSessionId
 
 export function mockTranscript(sessionId: string): ChatMessage[] {
   const key = sessionSeeds.find((session) => session.id === sessionId)?.title
-  const initial: ChatMessage[] = key ? messageSeeds[key].map((message) => ({ ...message, body: t.value.workspace.messages[message.body] })) : []
+  // 预置消息不带附件(attachments: []);带附件的是本次会话里用户发出去的那些(见 extraMessages)。
+  const initial: ChatMessage[] = key ? messageSeeds[key].map((message) => ({ ...message, body: t.value.workspace.messages[message.body], attachments: [] })) : []
   const extra = (extraMessages.get(sessionId) ?? []).map((message) => {
     // 部分正文保持原文；完成及重新生成完成的应答按当前语言组装。
     const responseKey = message.body === responseBodies.get(message.id) ? translatedReplies.get(message.id) : undefined
@@ -148,14 +150,16 @@ export function mockCreateSession(projectId: string): ChatSession {
   return { ...session, title: t.value.workspace.newChat }
 }
 
-export function mockSendMessage(sessionId: string, text: string): ChatMessage {
+// 用户发出一条消息:正文 + 本轮附件一并挂在那条用户消息上(附件是「这一轮带出去的携带信息」的
+// 规范化留痕;粘贴文本的**全文**就在 attachments[].content 里,不因芯片折叠而丢失)。
+export function mockSendMessage(sessionId: string, text: string, attachments: Attachment[]): ChatMessage {
   sequence.message += 1
   const turn = turns.get(sessionId) ?? 0
   turns.set(sessionId, turn + 1)
   const responseKey = responsePool[turn % responsePool.length] ?? 'first'
   const createdAt = new Date(Date.UTC(2026, 9, 8, 10, sequence.message)).toISOString()
-  const user: ChatMessage = { id: `user-${sequence.message}`, role: 'user', body: text, createdAt }
-  const response: ChatMessage = { id: `response-${sequence.message}`, role: 'assistant', body: t.value.workspace.responses[responseKey], createdAt }
+  const user: ChatMessage = { id: `user-${sequence.message}`, role: 'user', body: text, createdAt, attachments: attachments.map((attachment) => ({ ...attachment })) }
+  const response: ChatMessage = { id: `response-${sequence.message}`, role: 'assistant', body: t.value.workspace.responses[responseKey], createdAt, attachments: [] }
   extraMessages.set(sessionId, [...(extraMessages.get(sessionId) ?? []), user, { ...response, body: '' }])
   translatedReplies.set(response.id, responseKey)
   responseBodies.set(response.id, response.body)

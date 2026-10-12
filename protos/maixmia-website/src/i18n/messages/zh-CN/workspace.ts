@@ -34,6 +34,9 @@ export const workspace = {
   // 项目行的「⋯」操作菜单的可访问名。(原 expandProject / collapseProject 已随目录行改用
   // 「整行 button + aria-expanded」而下线,不再有「动作词 + 项目名」拼出的可访问名。)
   projectActions: '项目操作',
+  // 文件行的「加入当前对话」按钮:拖拽之外的非拖拽通路(WCAG 2.5.7),把该文件加成当前区域
+  // 活动会话的附件。文案自带「加入当前对话」的语义,不与「打开」混淆。
+  addFileToConversation: '把「{name}」加入当前对话',
   treeLoading: '正在加载文件…',
   treeEmpty: '这个项目还没有文件',
   treeError: '项目文件加载失败',
@@ -85,6 +88,46 @@ export const workspace = {
   inputLabelOf: '与「{name}」对话',
   placeholder: '描述你的任务，或接着聊…',
   inputHint: 'Enter 发送 · Shift+Enter 换行',
+  // 输入坞底行的模型下拉(disclosure + listbox):触发钮的可访问名、面板名与当前项标记。
+  modelMenu: {
+    label: '选择模型',
+    current: '当前模型',
+    window: '上下文',
+  },
+  // 可选模型目录的展示名(i18n 键在 data/models.ts)。名称是品牌名,两种语言同值。
+  models: {
+    sonnet45: 'Claude Sonnet 4.5',
+    opus41: 'Claude Opus 4.1',
+    sonnet45_1m: 'Claude Sonnet 4.5 (1M)',
+  },
+  // 每个模型的一句话说明(下拉项里的次要行);不写「处理中」这类模糊词。
+  modelDescriptions: {
+    balanced: '均衡的速度与能力，适合日常任务',
+    deep: '更强的推理与写作，适合复杂任务',
+    longContext: '更长的上下文窗口，适合大文件与长对话',
+  },
+  // 附件区(输入框卡片内、textarea 之上)与它四条入口的文案。
+  composer: {
+    attachments: '附件',
+    add: '添加文件',
+    remove: '移除附件：{name}',
+    // 粘贴内容的展示名(在 data 层生成时即写进附件,故走词条)。
+    pastedText: '粘贴文本',
+    pastedImage: '粘贴的图片',
+    // 芯片上的行数 / 字符数(仅展示用;发送的是全文)。
+    lines: '{count} 行',
+    // 单数形:中文没有单复数,与 lines 同值 —— 两语言共用同一条取值逻辑,故键位对齐。
+    linesOne: '{count} 行',
+    chars: '{count} 字符',
+    // 新增 / 移除经页面已有的 role="status" 通道播报。
+    added: '已加入附件：{name}',
+    removed: '已移除附件：{name}',
+    // 校验失败时的**可见**提示(不静默丢弃)。
+    tooLarge: '「{name}」超过 {limit} 上限，未加入',
+    tooMany: '一段对话最多带 {count} 个附件',
+    // 侧栏文件拖到对话窗体上时的落点提示。
+    dropHint: '松手把这个文件加入当前对话',
+  },
   stop: '停止生成',
   regenerate: '重新生成',
   queued: '正在思考…',

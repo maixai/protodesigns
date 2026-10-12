@@ -38,6 +38,9 @@ export const workspace = {
   // Accessible name of the project row's "⋯" action menu. (expandProject / collapseProject were
   // dropped when directory rows moved to a whole-row button with aria-expanded.)
   projectActions: 'Project actions',
+  // "Add to conversation" button on a file row: the non-drag equivalent (WCAG 2.5.7) that adds the
+  // file as an attachment of the focused region's active conversation.
+  addFileToConversation: 'Add "{name}" to the conversation',
   treeLoading: 'Loading files…',
   treeEmpty: 'This project has no files yet',
   treeError: 'Unable to load project files',
@@ -91,6 +94,43 @@ export const workspace = {
   inputLabelOf: 'Message to "{name}"',
   placeholder: 'Describe a task, or keep the conversation going…',
   inputHint: 'Enter to send · Shift+Enter for a new line',
+  // Model dropdown on the composer's bottom row (disclosure + listbox): trigger name, panel name,
+  // and the current-item marker.
+  modelMenu: {
+    label: 'Choose a model',
+    current: 'Current model',
+    window: 'Context',
+  },
+  // Display names of the model catalog (i18n key lives in data/models.ts). Brand names are the same
+  // in every language.
+  models: {
+    sonnet45: 'Claude Sonnet 4.5',
+    opus41: 'Claude Opus 4.1',
+    sonnet45_1m: 'Claude Sonnet 4.5 (1M)',
+  },
+  // One-line note for each model (the secondary line inside a dropdown option); no vague words.
+  modelDescriptions: {
+    balanced: 'Balanced speed and capability for everyday tasks',
+    deep: 'Stronger reasoning and writing for complex tasks',
+    longContext: 'A longer context window for large files and long conversations',
+  },
+  // Attachment area (inside the composer card, above the textarea) and its four entry points.
+  composer: {
+    attachments: 'Attachments',
+    add: 'Add files',
+    remove: 'Remove attachment: {name}',
+    pastedText: 'Pasted text',
+    pastedImage: 'Pasted image',
+    lines: '{count} lines',
+    // 单数形:英文的「1 lines」是可见的语病,故单列一条(中文两份同值)。
+    linesOne: '{count} line',
+    chars: '{count} chars',
+    added: 'Added attachment: {name}',
+    removed: 'Removed attachment: {name}',
+    tooLarge: '"{name}" exceeds the {limit} limit and was not added',
+    tooMany: 'A conversation can carry at most {count} attachments',
+    dropHint: 'Drop to add this file to the conversation',
+  },
   stop: 'Stop generating',
   regenerate: 'Regenerate',
   queued: 'Thinking…',

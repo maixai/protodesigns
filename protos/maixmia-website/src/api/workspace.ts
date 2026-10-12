@@ -2,6 +2,7 @@
 import type { AgentId, ChatSession } from '../contracts/generated/chat-session'
 
 import type { ChatMessage } from '../contracts/generated/chat-message'
+import type { Attachment } from '../contracts/generated/attachment'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
@@ -51,14 +52,17 @@ export async function getTranscript(sessionId: string): Promise<Result<ChatMessa
   return { ok: true, value: mockTranscript(sessionId) }
 }
 
-export async function sendMessage(sessionId: string, text: string): Promise<Result<ChatMessage>> {
+// 发送一轮消息。text 是用户敲进输入框的正文;attachments 是本轮随消息带出的附件
+// (项目文件路径 / 图片名称与类型 / 粘贴文本的**全文**)—— 附件既属消息、也是「这一轮要计入
+// 携带信息」的声明,故与正文一并下发,mock 会把它们挂到那一条用户消息上。
+export async function sendMessage(sessionId: string, text: string, attachments: Attachment[]): Promise<Result<ChatMessage>> {
   const demoState = currentRoute.value.demoState
   await delay()
   if (!text.trim()) return { ok: false, error: new Error(t.value.workspace.emptyMessage) }
   if (!mockSessions(demoState).some((session) => session.id === sessionId)) {
     return { ok: false, error: new Error(t.value.workspace.invalidSession) }
   }
-  return { ok: true, value: mockSendMessage(sessionId, text.trim()) }
+  return { ok: true, value: mockSendMessage(sessionId, text.trim(), attachments) }
 }
 
 // 新会话必须归属某个项目;项目本身就挂在某个 Agent 上,故 agent 由项目反推 —— 调用方

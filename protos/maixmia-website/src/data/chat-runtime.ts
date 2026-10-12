@@ -5,6 +5,7 @@
 // 页面持有 `Record<sessionId, ChatRuntime>`;所有写入都走 withRuntime(不可变写回),
 // 就地改字段会漏掉重渲染。
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
+import type { Attachment } from '../contracts/generated/attachment'
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
@@ -14,6 +15,12 @@ export interface ChatRuntime {
   transcript: TranscriptState
   // 输入框的草稿。**每段对话各一份** —— 切走再切回、拆出成窗体,草稿都还在。
   draft: string
+  // 本轮将要随消息发出的附件(文件 / 图片 / 粘贴文本)。与草稿同一分层:每段对话各一份,
+  // 随会话存活;发送成功后清空。
+  attachments: Attachment[]
+  // 本段对话选中的模型 id(视图状态,不进契约)。**作用域 = 本会话**:切换只影响这段对话的
+  // 后续轮次与它自己的 context 上限,不扰动其它对话。空串 = 尚未选择,由 models.modelById 回落默认。
+  modelId: string
   generation: GenerationPhase
   // 正在流式输出的那条(与转录里那一条是同一个 id)。
   rendered: ChatMessage | null
@@ -40,6 +47,9 @@ export function emptyRuntime(): ChatRuntime {
   return {
     transcript: { status: 'loading' },
     draft: '',
+    attachments: [],
+    // 空串 = 尚未选择:显示时由 modelById 回落默认模型;一旦用户在本会话内切换,即写死具体 id。
+    modelId: '',
     generation: 'idle',
     rendered: null,
     full: null,

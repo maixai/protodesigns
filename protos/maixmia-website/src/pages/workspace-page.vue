@@ -4,6 +4,7 @@ import type { ComponentPublicInstance } from 'vue'
 import { NSkeleton } from 'naive-ui'
 import type { ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { ChatMessage } from '../contracts/generated/chat-message'
+import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry, ProjectEntryStateId } from '../contracts/generated/project-entry'
@@ -18,6 +19,7 @@ import type { FileTab, FilePanelState, WorkspaceMap } from '../data/windows'
 import type { ChatRuntime } from '../data/chat-runtime'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
+import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
 import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, focusWindow, focusedWindow, hideWindow, layoutOf, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
@@ -259,6 +261,22 @@ function patchRuntime(sessionId: string, patch: (current: ChatRuntime) => ChatRu
 function updateDraft(sessionId: string, value: string): void {
   patchRuntime(sessionId, (current) => ({ ...current, draft: value }))
 }
+// 附件增删:都是**本会话**运行态的一部分(随会话存活);上限在这里兜底(输入坞也拦一次)。
+function addAttachments(sessionId: string, list: Attachment[]): void {
+  if (list.length === 0) return
+  patchRuntime(sessionId, (current) => {
+    const room = MAX_ATTACHMENTS - current.attachments.length
+    if (room <= 0) return current
+    return { ...current, attachments: [...current.attachments, ...list.slice(0, room)] }
+  })
+}
+function removeAttachment(sessionId: string, id: string): void {
+  patchRuntime(sessionId, (current) => ({ ...current, attachments: current.attachments.filter((item) => item.id !== id) }))
+}
+// 切换模型:**作用域 = 本会话** —— 只写这段对话的 modelId,别的对话的遥测与 context 上限不受影响。
+function selectModel(sessionId: string, id: string): void {
+  patchRuntime(sessionId, (current) => ({ ...current, modelId: id }))
+}
 function updatePinned(sessionId: string, value: boolean): void {
   patchRuntime(sessionId, (current) => ({ ...current, isPinned: value }))
 }
@@ -486,6 +504,29 @@ function onFileRowKey(event: KeyboardEvent, row: ProjectTreeRow): void {
   if (event.key !== 'Enter' && event.key !== ' ') return
   event.preventDefault()
   openFromTree(row.path)
+}
+// ---- 把侧栏文件加入对话(两条通路,WCAG 2.5.7 要求拖拽之外必须另有点击通路)----
+// 拖源:文件行带上**自定义 MIME 类型**(值为路径),对话坞据此与「外部文件拖入」区分 ——
+// 只有带它的拖拽才被接管,外部文件拖入保持浏览器默认行为。
+function onFileRowDragStart(row: ProjectTreeRow, event: DragEvent): void {
+  const data = event.dataTransfer
+  if (data === null) return
+  data.setData(FILE_DRAG_TYPE, row.path)
+  data.effectAllowed = 'copy'
+}
+// 「加入当前对话」的**目标会话** = 焦点区域的活动对话;焦点不在任何对话上时回落到 live 的那段。
+// 与拖拽落到某张卡片上同义:拖拽的落点由**指针**决定,点击的落点由**焦点区域**决定。
+const attachTargetSessionId = computed<string>(() => {
+  const active = activeChatOf(focusedSurfaceId.value)
+  return active !== '' ? active : liveSessionId.value
+})
+// 非拖拽通路:点文件行那枚「加入当前对话」按钮 = 把该文件加成目标会话的附件。
+function onAddFileToConversation(row: ProjectTreeRow): void {
+  const sessionId = attachTargetSessionId.value
+  if (sessionId === '') return
+  const attachment = toFileAttachment(row.path, row.name)
+  addAttachments(sessionId, [attachment])
+  announcePlacement(t.value.workspace.composer.added.replace('{name}', attachment.name))
 }
 // 区域的归属反推(不变量③:一个窗体至多属于一个区域);找不到则退回根区域。
 function ownerSurfaceIdOf(current: WorkspaceLayout, windowId: string): string {
@@ -928,7 +969,7 @@ async function loadConfirmation(sessionId: string): Promise<void> {
 function resolveConfirmation(sessionId: string, allowed: boolean): void {
   if (sessionId === '' || runtimeFor(sessionId).confirmation === null) return
   const body = allowed ? t.value.workspace.confirmation.followUpAllowed : t.value.workspace.confirmation.followUpRejected
-  const followUp: ChatMessage = { id: `confirmation-followup-${allowed ? 'allowed' : 'rejected'}`, role: 'assistant', body, createdAt: new Date().toISOString() }
+  const followUp: ChatMessage = { id: `confirmation-followup-${allowed ? 'allowed' : 'rejected'}`, role: 'assistant', body, createdAt: new Date().toISOString(), attachments: [] }
   patchRuntime(sessionId, (current) => ({ ...current, confirmationOutcome: allowed ? 'allowed' : 'rejected', followUp }))
 }
 // 文件面板里的确认动作:落到**持有该确认请求**的那段对话上(与转录里的确认卡同一个请求)。
@@ -990,10 +1031,12 @@ async function send(sessionId: string, text: string): Promise<void> {
   if (trimmed === '' || isBusyOf(sessionId)) return
   const current = runtimeFor(sessionId)
   if (current.transcript.status === 'loading' || current.transcript.status === 'error') return
+  // 本轮带出去的附件(含粘贴文本的**全文**):发送即随消息出去,发送成功后从草稿里清空。
+  const outgoing = current.attachments.map((attachment) => ({ ...attachment }))
   // 发送即接管转录:把在途的旧装载作废,免得它的结果在本次发送之后写回来。
   takeOverTranscript(sessionId)
   const existing = current.transcript.status === 'ready' ? current.transcript.messages : []
-  const pending: ChatMessage = { id: 'pending-user', role: 'user', body: trimmed, createdAt: new Date().toISOString() }
+  const pending: ChatMessage = { id: 'pending-user', role: 'user', body: trimmed, createdAt: new Date().toISOString(), attachments: outgoing }
   patchRuntime(sessionId, (state) => ({
     ...state,
     hasSendError: false,
@@ -1003,14 +1046,15 @@ async function send(sessionId: string, text: string): Promise<void> {
     // 空态没有历史消息的阅读位置 → 恢复跟随;否则保留既有的粘底状态(用户上滚过就不抢)。
     isPinned: state.transcript.status === 'empty' ? true : state.isPinned,
     draft: '',
+    attachments: [],
     transcript: { status: 'ready', messages: [...existing, pending] },
   }))
   if (currentRoute.value.demoState !== 'normal') navigateTo('workspace')
-  const result = await sendMessage(sessionId, trimmed)
+  const result = await sendMessage(sessionId, trimmed, outgoing)
   if (!isAlive.value) return
   if (!result.ok) {
-    // 发送失败:把文本退回草稿,转录回到发送前。
-    patchRuntime(sessionId, (state) => ({ ...state, transcript: existing.length ? { status: 'ready', messages: existing } : { status: 'empty' }, draft: trimmed, generation: 'idle', hasSendError: true }))
+    // 发送失败:把文本与附件退回草稿,转录回到发送前。
+    patchRuntime(sessionId, (state) => ({ ...state, transcript: existing.length ? { status: 'ready', messages: existing } : { status: 'empty' }, draft: trimmed, attachments: outgoing, generation: 'idle', hasSendError: true }))
     return
   }
   const full = result.value
@@ -1623,13 +1667,23 @@ onBeforeUnmount(() => {
                       </button>
                       <button
                         v-else type="button" class="entry-row__button entry-row__button--file"
-                        :title="row.path"
+                        :title="row.path" draggable="true"
                         @click="onFileRowClick(row, $event)"
                         @dblclick="onFileRowDblClick(row)"
                         @keydown="onFileRowKey($event, row)"
+                        @dragstart="onFileRowDragStart(row, $event)"
                       >
                         <span class="entry-name">{{ row.name }}</span>
                         <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
+                      </button>
+                      <!-- 拖拽之外的非拖拽通路(WCAG 2.5.7):把该文件加入焦点区域的活动对话。
+                           它与文件行那枚按钮是**兄弟**而非嵌套 —— 嵌套 button 是非法 HTML。 -->
+                      <button
+                        v-if="!row.expandable" type="button" class="entry-row__add"
+                        :aria-label="t.workspace.addFileToConversation.replace('{name}', row.name)"
+                        @click="onAddFileToConversation(row)"
+                      >
+                        <span aria-hidden="true">＋</span>
                       </button>
                       <span class="entry-guides" aria-hidden="true"><span v-for="guide in row.level - 1" :key="guide" class="entry-guide" /></span>
                     </li>
@@ -1780,6 +1834,10 @@ onBeforeUnmount(() => {
                   @resolve="resolveConfirmation(activeChatOf(surfaceId), $event)"
                   @update:draft="updateDraft(activeChatOf(surfaceId), $event)"
                   @update:pinned="updatePinned(activeChatOf(surfaceId), $event)"
+                  @add-attachments="addAttachments(activeChatOf(surfaceId), $event)"
+                  @remove-attachment="removeAttachment(activeChatOf(surfaceId), $event)"
+                  @update:model="selectModel(activeChatOf(surfaceId), $event)"
+                  @announce="announcePlacement"
                 />
                 <!-- 空位占位:这块区域的「转录位」,但没有绑定会话 —— 它沿用同一套 role / data-state
                      契约,只是**不含输入坞**。全页 role="log" 仍恰为 1(见 livePlaceholderSurfaceId)。 -->
@@ -1867,6 +1925,10 @@ onBeforeUnmount(() => {
           @resolve="resolveConfirmation(chatSessionIdOf(win), $event)"
           @update:draft="updateDraft(chatSessionIdOf(win), $event)"
           @update:pinned="updatePinned(chatSessionIdOf(win), $event)"
+          @add-attachments="addAttachments(chatSessionIdOf(win), $event)"
+          @remove-attachment="removeAttachment(chatSessionIdOf(win), $event)"
+          @update:model="selectModel(chatSessionIdOf(win), $event)"
+          @announce="announcePlacement"
         />
       </template>
       <!-- 落点预览:半透明带 + 落点区域整体描边高亮(见 .conversation.is-split-target)。
@@ -1972,14 +2034,28 @@ onBeforeUnmount(() => {
 .tree-hint--error { color: var(--dl-error); }
 .entry-list { display: flex; flex-direction: column; }
 .entry-row { position: relative; display: flex; }
-.entry-row__button { display: flex; align-items: center; gap: var(--dl-space-1); width: 100%; min-height: var(--workspace-tree-row-height); padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step)); padding-inline-end: var(--dl-space-2); text-align: left; color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
+.entry-row__button { display: flex; align-items: center; gap: var(--dl-space-1); width: 100%; min-width: 0; min-height: var(--workspace-tree-row-height); padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step)); padding-inline-end: var(--dl-space-2); text-align: left; color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
 .entry-row__button:hover { background: var(--dl-bg-hover); }
 .entry-row__button:hover .tree-caret { color: var(--dl-text-primary); }
 .entry-row__button:active { background: var(--dl-bg-sunken); }
+/* 文件行的「加入当前对话」按钮:密集行(树行)的行内控件 —— 与项目行的 ⋯ 同一处置:
+   **绝对定位浮在行的右端**,故行按钮仍是**整行宽**(密集行的「整行为命中区」判据不破),
+   它自己平时透明、行悬停 / 行内聚焦时显现,但始终可 Tab 到达。命中区 24×24(第三档)。
+   行按钮的右侧内边距为它预留位置,文件名与状态芯片不会被盖住。 */
+.entry-row__add { position: absolute; inset-block-start: 50%; inset-inline-end: var(--dl-space-1); transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; inline-size: var(--dl-space-6); block-size: var(--dl-space-6); border-radius: var(--dl-radius-sm); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-sm); line-height: 1; opacity: 0; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.entry-row:hover .entry-row__add, .entry-row__add:focus-visible { opacity: 1; }
+/* 无 hover 的输入方式(触屏 / 手写笔)下**常驻可见**:这枚钮承载的是 WCAG 2.5.7 要求的
+   非拖拽通路,默认透明会让它在触屏上等于不存在 —— hover 只是指针场景的省空间手段,不是前提。 */
+@media (hover: none) {
+  .entry-row__add { opacity: 1; }
+}
+.entry-row__add:hover { background: var(--dl-bg-hover); color: var(--dl-accent); }
+.entry-row__add:focus-visible { box-shadow: var(--dl-focus-ring); }
 .entry-guides { position: absolute; inset-block: 0; inset-inline-start: var(--workspace-tree-step); display: flex; pointer-events: none; }
 .entry-guide { width: var(--workspace-tree-step); border-inline-start: var(--dl-border-width) solid var(--workspace-tree-guide); }
-/* 文件行是**整行 button**:左内边距在目录行的「缩进 + chevron 槽」之上再加一份 chevron 槽。 */
-.entry-row__button--file { padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step) + var(--workspace-tree-caret-slot)); }
+/* 文件行是**整行 button**:左内边距在目录行的「缩进 + chevron 槽」之上再加一份 chevron 槽;
+   右内边距为绝对定位的「加入当前对话」钮预留位置(24 + 4),文件名与芯片因此不落到它下面。 */
+.entry-row__button--file { padding-inline-start: calc(var(--workspace-tree-level) * var(--workspace-tree-step) + var(--workspace-tree-caret-slot)); padding-inline-end: calc(var(--dl-space-6) + var(--dl-space-1)); }
 .entry-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--dl-font-size-xs); font-weight: 400; color: var(--dl-text-primary); }
 .entry-state { flex-shrink: 0; padding: 0 var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); color: var(--dl-text-secondary); }
 .entry-state[data-state='created'] { color: var(--dl-accent); }
@@ -2058,6 +2134,10 @@ onBeforeUnmount(() => {
     --workspace-avatar-size: var(--dl-icon-lg);
     --workspace-avatar-gap: var(--dl-space-2);
     --workspace-gutter: var(--dl-space-4); }
+  /* 抽屉 = 触屏语境:纵向密集行的收窄例外不再适用(手指纵向落点精度低),「加入当前对话」钮
+     随行一起回到 44×44;行按钮的右侧内边距同步让出这一档。 */
+  .entry-row__add { inset-inline-end: 0; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); }
+  .entry-row__button--file { padding-inline-end: var(--dl-target-size); }
   .workspace-layout { grid-template-columns: minmax(0, 1fr); }
   /* 抽屉贴视口左缘(脱离外壳内缩),只圆朝内容一侧的两角;抬到 **modal** 档(浮动的文件面板在
      overlay 档,抽屉必须在它之上)。 */

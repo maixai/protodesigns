@@ -213,6 +213,36 @@ model ChatSession {
   status: SessionStatus;
 }
 
+// 附件的三种形态。被 Attachment 引用后会内联进 attachment.d.ts,故不单独加 @jsonSchema。
+enum AttachmentKind {
+  file,
+  image,
+  text,
+}
+
+// 一条消息**携带的附件**。它是「这一轮对话要计入的额外输入」的规范化表达:
+// 侧栏拖入 / 点按钮加入的项目文件、`+` 上传的本地文件、以及从剪贴板粘贴进来的图片与长文本。
+//
+// kind 判别联合的三支各有自己的字段口径:
+//   file  —— 项目内的一个文件(路径是相对项目根的相对路径),正文在磁盘上,不塞进 content;
+//   image —— 图片:path 是项目/本地可展示的来源,预览由载体用 objectURL 现做,契约不存字节;
+//   text  —— 粘贴进来的长文本:**正文完整存在 content 里**,lineCount / charCount 只用于芯片展示
+//            (展示可以折叠,发送出去的必须是全文)。
+// 故「展示折叠」与「发送全文」由同一份数据承担:折叠发生在渲染层,数据层永远是全文。
+@summary("Attachment")
+@jsonSchema
+model Attachment {
+  id: string;
+  kind: AttachmentKind;
+  name: string;              // 展示名:文件名 / 「粘贴文本」
+  path?: string;             // file / image 的项目内相对路径;text 无
+  mimeType?: string;
+  sizeBytes?: int32;
+  lineCount?: int32;         // text:行数(仅展示用)
+  charCount?: int32;         // text:字符数(仅展示用)
+  content?: string;          // text:正文全文;文件类走 path,不塞正文
+}
+
 @summary("ChatMessage")
 @jsonSchema
 model ChatMessage {
@@ -220,6 +250,8 @@ model ChatMessage {
   role: "user" | "assistant";
   body: string;
   createdAt: utcDateTime;
+  // 该消息携带的附件(发送时随 payload 出去);无附件时为空数组。
+  attachments: Attachment[];
 }
 
 // 对话记录的异步四态:前三态无数据,ready 带消息列表。

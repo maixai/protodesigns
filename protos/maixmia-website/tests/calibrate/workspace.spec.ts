@@ -208,9 +208,10 @@ for (const width of WIDTHS) {
     await waitForStable(page)
     await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toBeVisible()
     if (width === 375) await expectComposerUnclipped(page)
-    // 发送已无独立按钮(本轮删除 ↑ 按钮):空闲态下输入框内没有任何按钮;发送动作由 Enter 承担。
+    // 发送已无独立按钮(本轮删除 ↑ 按钮):空闲态下没有送出动作的按钮;发送动作由 Enter 承担。
+    // 底行现在有 ⊕ 与「模型 ▾」两枚按钮,但它们都不是发送钮 —— 故这里按类名判,不再数「卡片内无按钮」。
     await expect(page.getByRole('button', { name: '发送消息', exact: true })).toHaveCount(0)
-    await expect(page.locator('.composer-form button')).toHaveCount(0)
+    await expect(page.locator('.composer-form .send-button')).toHaveCount(0)
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1)
     expect(await contrastViolations(page)).toEqual([])
     // 独立控件(按钮 / 图标按钮)仍守 44×44。**排除五类**:
@@ -226,7 +227,10 @@ for (const width of WIDTHS) {
     //      分别在「侧栏密集行触达」「会话头 tab 条」「文件栏几何」「文件面板标题栏」用例里逐条核对。
     //   ⑥ **Agent 栏**(底栏那条横向密集行)的行内控件:标签与溢出 ▾(同为 32)—— 同属横向密集行,
     //      判据同上;它常驻渲染,故必须排除(见「Agent 栏几何」用例里逐条核对)。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger)').evaluateAll((buttons) => buttons.map((button) => {
+    //   ⑦ **侧栏文件行**的「加入当前对话」钮(.entry-row__add,24)—— 树行的行内控件,属密集行档;
+    //      整行 button 仍是整行宽(它是绝对定位浮在行右端,不切走命中区),故「整行为命中区」不破。
+    //      它在「侧栏文件:拖入…;点「加入当前对话」是等价通路」用例里逐条核对(命中区 ≥24 + 键盘可达)。
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -1133,9 +1137,9 @@ test('键盘发送、Enter 空草稿不发送、Shift+Enter 与输入框自动�
   const input = page.getByRole('textbox', { name: /与「.+」对话/ })
   await tabTo(page, input)
   await expect(input).toBeFocused()
-  // 发送按钮已删除(本轮):输入框里没有任何按钮;空草稿按 Enter 不发送 —— 「空态不可发」改由
-  // send() 的 canSend 守卫承担(原先靠按钮的 aria-disabled 表达)。
-  await expect(page.locator('.composer-form button')).toHaveCount(0)
+  // 发送按钮已删除(本轮):卡片里没有送出动作的按钮;空草稿按 Enter 不发送 —— 「空态不可发」改由
+  // send() 的 canSend 守卫承担(原先靠按钮的 aria-disabled 表达)。底行的 ⊕ / 模型 ▾ 不是发送钮。
+  await expect(page.locator('.composer-form .send-button')).toHaveCount(0)
   await page.keyboard.press('Enter')
   await expect(page.locator('.chat-message')).toHaveCount(4)
   await page.keyboard.type('Please prepare a demo checklist.')
@@ -2562,8 +2566,9 @@ test('文件树:目录可折叠、文件行整行可点可聚焦、芯片只标�
   await expect(fileButton).toHaveJSProperty('tagName', 'BUTTON')
   const nameSpan = readmeRow.locator('.entry-name')
   await expect(nameSpan).toHaveJSProperty('tagName', 'SPAN')
-  // 文件行里恰好一个可聚焦控件(那个整行 button)—— 不再是「不可 Tab 到达的只读行」。
-  await expect(readmeRow.locator('button')).toHaveCount(1)
+  // 文件行里两个可聚焦控件:整行 button(打开)+ 浮在行右端的「加入当前对话」钮
+  // (拖拽之外的非拖拽通路,WCAG 2.5.7)—— 不再是「不可 Tab 到达的只读行」。
+  await expect(readmeRow.locator('button')).toHaveCount(2)
   await expect(readmeRow.locator('a, [tabindex]')).toHaveCount(0)
 
   // 芯片:created(新建)/ modified(已修改)渲染;none 不渲染。
@@ -3362,8 +3367,9 @@ test('输入区重构:坞为流内元素、坞底贴面板内底、转录区与�
 
   // 发送钮已删(计数 0);提示行本轮也下线,「Enter 发送 · Shift+Enter 换行」改挂在输入框的
   // title 上 —— 删了发送钮又删了提示行 = 完全不知道 Enter 能发送,故必须补这处兜底。
+  // (底行的 ⊕ 与「模型 ▾」不是发送钮,故按 .send-button 判。)
   await expect(page.getByRole('button', { name: '发送消息', exact: true })).toHaveCount(0)
-  await expect(page.locator('.composer-form button')).toHaveCount(0)
+  await expect(page.locator('.composer-form .send-button')).toHaveCount(0)
   await expect(page.locator('.composer-hint')).toHaveCount(0)
   await expect(page.locator('.composer-form')).toHaveAttribute('title', 'Enter 发送 · Shift+Enter 换行')
 

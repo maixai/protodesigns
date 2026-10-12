@@ -8,6 +8,7 @@
 // 与 VS Code 把 zoom / 滚动位置放在 editor instance 而非 document 同一分层)。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
+import type { Attachment } from '../contracts/generated/attachment'
 import { useI18n } from '../i18n'
 import ChatComposer from './chat-composer.vue'
 import TranscriptView from './transcript-view.vue'
@@ -32,6 +33,11 @@ const emit = defineEmits<{
   resolve: [allowed: boolean]
   'update:draft': [value: string]
   'update:pinned': [value: boolean]
+  // 输入坞的附件增删 / 模型切换与播报请求:原样上报给页面(页面持有回写运行态的入口)。
+  'add-attachments': [attachments: Attachment[]]
+  'remove-attachment': [id: string]
+  'update:model': [id: string]
+  announce: [text: string]
 }>()
 
 const { t } = useI18n()
@@ -172,6 +178,10 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
       @send="emit('send', $event)"
       @stop="emit('stop')"
       @update:draft="emit('update:draft', $event)"
+      @add-attachments="emit('add-attachments', $event)"
+      @remove-attachment="emit('remove-attachment', $event)"
+      @update:model="emit('update:model', $event)"
+      @announce="emit('announce', $event)"
       @back-to-bottom="returnToBottom"
     />
   </div>

@@ -10,6 +10,7 @@
 // 于是「输入坞属于对话窗体」由结构保证:拖出 / 停靠换的只是外壳与几何,内容本体不变。
 import { computed } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
+import type { Attachment } from '../contracts/generated/attachment'
 import type { WindowRect } from '../contracts/generated/workspace-window'
 import { useI18n } from '../i18n'
 import { useWindowFrame } from '../composables/use-window-frame'
@@ -63,6 +64,11 @@ const emit = defineEmits<{
   resolve: [allowed: boolean]
   'update:draft': [value: string]
   'update:pinned': [value: boolean]
+  // 输入坞的附件增删 / 模型切换与播报请求(原样转给页面)。
+  'add-attachments': [attachments: Attachment[]]
+  'remove-attachment': [id: string]
+  'update:model': [id: string]
+  announce: [text: string]
 }>()
 
 const { t } = useI18n()
@@ -143,6 +149,10 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
         @resolve="emit('resolve', $event)"
         @update:draft="emit('update:draft', $event)"
         @update:pinned="emit('update:pinned', $event)"
+        @add-attachments="emit('add-attachments', $event)"
+        @remove-attachment="emit('remove-attachment', $event)"
+        @update:model="emit('update:model', $event)"
+        @announce="emit('announce', $event)"
       />
     </div>
   </WindowFrame>

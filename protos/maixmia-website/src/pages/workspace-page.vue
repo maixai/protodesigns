@@ -544,6 +544,17 @@ function uncoverSurface(surfaceId: string): number {
   return ids.length
 }
 
+// **停靠之后**的收尾:让还盖着那块区域的**其它**悬浮窗体让位,并把「已停靠 X」与「收起了几个
+// 遮挡的」合成**一条**播报(announcePlacement 是后写覆盖先写的单通道,分两次调用会丢前一条)。
+//
+// 必须在**停靠写回之后**调用:刚停靠的那个窗体此刻已不是 floating,故不会被它自己收掉;
+// 而另一个正好盖着该区域的浮窗会被收起 —— 否则用户「把窗体停靠过去」这个动作看起来失败了
+// (内容被盖住),与「点侧栏显示被盖住的窗体」是同一类缺陷,只是入口不同。
+function afterDock(surfaceId: string, message: string): void {
+  const hidden = uncoverSurface(surfaceId)
+  announcePlacement(hidden > 0 ? `${message} ${occludedMessage(hidden)}` : message)
+}
+
 function revealWindow(path: string, fallback: (current: WorkspaceLayout) => WorkspaceLayout): void {
   const owner = surfaceOwning(layout.value, path)
   if (owner !== undefined) {
@@ -697,7 +708,7 @@ function dockFileWindow(id: string, from: WindowRect | null = null): void {
     const surface = surfaceOf(current, targetSurface)
     return dockWindow(current, id, targetSurface, surface?.members.length ?? 0)
   })
-  announcePlacement(t.value.workspace.filePanel.dockedAnnounce.replace('{name}', windowLabel(id)))
+  afterDock(targetSurface, t.value.workspace.filePanel.dockedAnnounce.replace('{name}', windowLabel(id)))
   if (from !== null) {
     void nextTick(() => {
       requestAnimationFrame(() => {
@@ -800,7 +811,7 @@ function onTearEnd(): void {
     const surface = surfaceOf(current, mergeId)
     return surface === undefined ? current : dockWindow(current, key, mergeId, surface.members.length)
   })
-  announcePlacement(t.value.workspace.regions.mergeAnnounce.replace('{name}', windowLabel(key)))
+  afterDock(mergeId, t.value.workspace.regions.mergeAnnounce.replace('{name}', windowLabel(key)))
 }
 // ---- 落点解析:拖 tab 与拖悬浮窗体落到**同一套**语义上 ----
 // 落点表(两种手势共用):
@@ -967,7 +978,7 @@ function onWindowDragEnd(id: string, pointer: { x: number; y: number }): void {
       const surface = surfaceOf(current, mergeId)
       return surface === undefined ? current : dockWindow(current, id, mergeId, surface.members.length)
     })
-    announcePlacement(t.value.workspace.regions.mergeAnnounce.replace('{name}', windowLabel(id)))
+    afterDock(mergeId, t.value.workspace.regions.mergeAnnounce.replace('{name}', windowLabel(id)))
     return
   }
   // 都不是 → 保持悬浮:几何已写回当前分域(组件在 drag-end 之前先 emitRect)。

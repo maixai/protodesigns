@@ -6679,3 +6679,27 @@ test('切换器的文件列表:打开着的文件不在列表里,关掉它的窗
   await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
   await expect(page.locator('.conversation-row[data-file-option]', { hasText: 'README.md' }), '关掉后回到列表').toHaveCount(1)
 })
+
+// 与「点侧栏显示被盖住的窗体」同一类缺陷的**另一个入口**:把悬浮窗体**停靠**进内容区时,
+// 若另一枚悬浮窗体正盖着那块区域,新停靠的窗体同样会被盖住 —— 用户的动作看起来失败了。
+// 判据与前者共用:停靠完成后,区域显示区中心的 elementFromPoint 必须命中区域内容,不是浮窗。
+// 三条停靠路径(头部停靠钮 / 双击标题栏、拖 tab 并入区域、拖悬浮窗体并入区域)共用同一个收尾。
+test('把悬浮窗体停靠进内容区时,盖着该区域的其它悬浮窗让位(与侧栏显示同一类缺陷的另一入口)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // A:一枚停靠窗体先占住内容区(否则「盖住内容区」无从谈起)。
+  await openDockedFile(page, README)
+  // B:再开一枚悬浮窗 —— 它的默认几何正好盖住内容区。
+  await clickFileRow(page, PROGRESS)
+  await expect.poll(async () => panelCenterHit(page), { message: '前置:B 盖住了内容区中心' }).toBe('floating')
+  // C:再开一枚(它在最上层,故它的「停靠」钮点得到),然后把它停靠过去。
+  await clickFileRow(page, GITIGNORE)
+  await dockFloatingPath(page, GITIGNORE)
+
+  // 不变量:停靠完成后,内容区中心必须落在区域内容里,而不是任何悬浮窗体。
+  await expect.poll(async () => panelCenterHit(page), { message: '停靠后内容区不再被浮窗盖住' }).toBe('content')
+  // 盖着的那枚被收起(= 让位),且这是可恢复的(从文件列表能再打开 —— 见上一条同类用例)。
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="${PROGRESS}"]`), '盖住目标区域的那枚被收起').toHaveCount(0)
+  await expect(page.locator('.workspace-live'), '播报说明了收起了几个遮挡窗').toContainText('收起')
+})

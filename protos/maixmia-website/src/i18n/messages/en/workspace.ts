@@ -92,6 +92,8 @@ export const workspace = {
     explore: { title: 'Explore an idea', body: 'I want to build an agent that summarizes project progress each week. Help me define its inputs and outputs.' },
   },
   inputLabel: 'Message to Mia',
+  // 每个输入框按会话可区分(见 zh-CN 同名键的说明);无标题时回落到 inputLabel。
+  inputLabelOf: 'Message to "{name}"',
   placeholder: 'Describe a task, or keep the conversation going…',
   inputHint: 'Enter to send · Shift+Enter for a new line',
   stop: 'Stop generating',
@@ -167,8 +169,8 @@ export const workspace = {
   sessionStatus: {
     new: 'New conversation',
     streaming: 'Responding',
-    awaiting: 'Awaiting input',
-    completed: 'Response complete',
+    awaiting: 'Awaiting',
+    completed: 'Done',
     idle: 'Idle',
   },
   // Concrete action copy for runtime telemetry: mocks provide the key (statusDetail) and the
@@ -233,6 +235,36 @@ export const workspace = {
     menuEmpty: 'Nothing opened yet',
     // A tab's title (mouse-readable): path plus how it was opened. File names are technical
     // identifiers, written the same way in every language.
+    // ---- Tearing a tab down into a floating window / dropping one back onto the strip ----
+    // The tab's "pop out" button (the non-drag path for WCAG 2.5.7); the carrier fills in {name}.
+    popOut: 'Pop {name} out into a floating window',
+    // The pop-out button has moved out of the tab order (see the component's comment); its keyboard
+    // path is now the shortcut. The title is deliberately **bilingual**: whichever the UI language is,
+    // hovering shows both the action and the shortcut.
+    popOutTitle: 'Pop {name} out as a floating window · Ctrl/Cmd+Shift+M — 把 {name} 拆出为悬浮窗口',
+    // Drop-outcome announcements while dragging (role="status"): say what releasing would do.
+    tearOut: 'Popped {name} out; release to keep it floating',
+    tearAttach: 'Put {name} back on the tab strip',
+    dockTarget: 'Release to dock {name} back onto the tab strip',
+    // Hint badge shown while a floating window is dragged over the strip (must match what docking does).
+    dockHint: 'Release here to maximize and reclaim this tab position',
+    // Announced when an already-open window is shown (file tree / recently closed). The animation is
+    // only redundant emphasis; the text plus the region actually switching carry the information
+    // (WCAG: information must not be conveyed by motion alone).
+    revealAnnounce: 'Switched to "{name}"',
+  },
+  // Conversation window (how a conversation looks once torn out of the tab strip into a floating window):
+  // title bar / close / drop hint. Conversations share the **same** window mechanism as files, so the tab's
+  // "pop out" button and the drag announcements **reuse the fileBar copy** ({name} is filled with the session
+  // title); only the drop hint is separate — the file one's "maximize" is off for a conversation (there is no
+  // maximized state; it just docks back onto the strip and takes a tab).
+  chatWindow: {
+    label: 'Conversation window',
+    close: 'Close conversation window',
+    headerLabel: 'Conversation title bar',
+    headerHint: 'Drag the title bar to move · drop onto the top tab strip to dock',
+    dock: 'Dock back onto the tab strip',
+    dockHint: 'Release here to dock this conversation back onto the tab strip',
   },
   // The file panel shows the whole file with change markers by default (not just diff fragments),
   // and can switch to unified / side-by-side diff. Line markers use shapes, not colour alone
@@ -240,16 +272,29 @@ export const workspace = {
   filePanel: {
     label: 'File panel',
     close: 'Close file panel',
+    // When docked, the ✕ closes this file's tab (the panel occupies the region's content area, so
+    // merely hiding the window has no visible effect and leaves the region rendering a hidden member);
+    // only the floating form hides the window.
+    closeTab: 'Close this file tab',
     viewLabel: 'View',
     viewFile: 'Whole file',
     viewUnified: 'Unified diff',
     viewSide: 'Side-by-side',
     sideUnavailable: 'The window is too narrow, so side-by-side fell back to unified',
     wrap: 'Wrap lines',
-    // Title bar (also the drag handle): accessible name plus hover hint.
+    // Title bar (also the drag handle while floating): accessible name plus hover hint.
+    // Double-click means different things in each mode, so there are two hints.
     headerLabel: 'File title bar',
-    headerHint: 'Drag the title bar to move the window · double-click it to reset',
+    headerHint: 'Drag the title bar to move the window · double-click it to dock into the content area',
+    headerHintDocked: 'Double-click the title bar to float the window again',
     moveHint: 'Arrow keys move the window',
+    // The float ↔ dock native button (an equivalent keyboard path on the title bar): its label follows the mode.
+    dock: 'Dock into the content area',
+    float: 'Float as a separate window',
+    resetGeometry: 'Reset window position and size',
+    // Placement-change announcements (role="status").
+    dockedAnnounce: '{name} docked into the content area',
+    floatedAnnounce: '{name} floated back as a separate window',
     // Resize handles (APG Window Splitter): accessible names for the four edges plus the key hint.
     resizeRight: 'Resize panel width (right edge)',
     resizeLeft: 'Resize panel width (left edge)',
@@ -273,6 +318,32 @@ export const workspace = {
     retry: 'Retry',
     emptyTitle: 'Cannot preview this file',
     emptyBody: 'This is a binary file; the workspace previews text content only.',
+  },
+  // ---- Region splitting: drop a tab on a region's edge to split a new region off along that edge;
+  // regions are separated by draggable splitters ----
+  regions: {
+    resizeSeparator: 'Resize regions',
+    resizeHint: 'Arrow keys to resize · Home / End for the extremes',
+    // Drop hints while dragging a tab over another region (same language as the dock hint):
+    // edge = split, interior = merge.
+    splitRight: 'Release to create a new region to the right',
+    splitBottom: 'Release to create a new region below',
+    mergeHint: 'Release to merge into this region',
+    splitAnnounce: 'Split {name} into a new region',
+    mergeAnnounce: 'Merged {name} into that region',
+    // Announcement (role="status") when a region's members empty out and the region is removed.
+    // The root region cannot be removed, so this never fires for it.
+    regionClosed: 'Closed an empty region',
+  },
+  // Onboarding page: the root region has neither members nor children, so the whole right side has
+  // nothing to show. This is **not** the same as the empty-slot placeholder (where a region merely
+  // has no active member), so the copy is separate and does not reuse emptyTitle / emptyBody.
+  onboarding: {
+    // Monospace technical mark: this language's sense of craft comes from the monospace type
+    // carrying technical information — no illustration, no gradient, no glow.
+    mark: 'MIA / WORKSPACE',
+    title: 'Nothing open here yet',
+    body: 'Start a conversation, or pick one of the suggestions below.',
   },
   // Workspace agent names: the conversation-heading subtitle shows the session's owning agent.
   agents: {

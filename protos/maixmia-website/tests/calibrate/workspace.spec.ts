@@ -107,8 +107,9 @@ async function waitForStable(page: Page, state = 'ready', heading: string = zhHe
 async function expectComposerUnclipped(page: Page): Promise<void> {
   const input = page.getByRole('textbox')
   await expect(input).toHaveValue('')
-  await expect(input).toHaveAttribute('id', 'workspace-composer')
-  await expect(input).toHaveAttribute('name', 'workspace-composer')
+  // 输入框 id / name 按**会话**唯一(workspace-composer-<sessionId>),不再是一个固定的全局 id。
+  await expect(input).toHaveAttribute('id', /^workspace-composer-/)
+  await expect(input).toHaveAttribute('name', /^workspace-composer-/)
   await expect.poll(() => input.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(0)
   const bounds = await input.boundingBox()
   expect(bounds?.width ?? 0).toBeGreaterThanOrEqual(44)
@@ -205,7 +206,7 @@ for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
-    await expect(page.getByRole('textbox', { name: '给 Mia 的消息' })).toBeVisible()
+    await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toBeVisible()
     if (width === 375) await expectComposerUnclipped(page)
     // 发送已无独立按钮(本轮删除 ↑ 按钮):空闲态下输入框内没有任何按钮;发送动作由 Enter 承担。
     await expect(page.getByRole('button', { name: '发送消息', exact: true })).toHaveCount(0)
@@ -216,15 +217,16 @@ for (const width of WIDTHS) {
     //   ① 侧栏文件树的目录行 —— 密集列表 / 树行,按 design-language ⑥ 走收窄例外(≥1024px 28px);
     //   ② 会话头 tab 条这一行的控件(.conversation-tab / .conversation-icon-button)——
     //      紧凑导航行档(32px),判据换成 WCAG 2.5.8 的间距替代方案(相邻目标中心距 ≥24);
-    //   ③ tab 上的关闭钮(.tab-close)—— tab 行内的密集控件档(24px),同属第三档例外;
+    //   ③ tab 上的关闭钮(.tab-close)与拆出钮(.tab-pop)—— tab 行内的密集控件档(24px),同属第三档例外;
+    //      (拆出钮是本轮新增:拖拽之外的非拖拽通路 WCAG 2.5.7,与关闭钮同排、同档。)
     //   ④ **文件栏**(顶部那条横向密集行)的行内控件:tab / ▾ 菜单钮 / tab 关闭钮 —— 同为横向
     //      密集行,判据同上(它常驻渲染,故必须排除,否则这条断言会在无文件时也红);
-    //   ⑤ **文件面板标题栏**的行内控件:视图分段(24)/ 换行钮与关闭钮(32)—— 它们是那条 40px
-    //      工具栏的行内控件,横向排布的间距判据天然成立。三类例外的完整判据分别在
-    //      「侧栏密集行触达」「会话头 tab 条」「文件栏几何」「文件面板标题栏」用例里逐条核对。
+    //   ⑤ **文件面板标题栏**的行内控件:视图分段(24)/ 换行钮与关闭钮(32)/ 悬浮↔停靠钮(32)
+    //      —— 它们是那条 40px 工具栏的行内控件,横向排布的间距判据天然成立。三类例外的完整判据
+    //      分别在「侧栏密集行触达」「会话头 tab 条」「文件栏几何」「文件面板标题栏」用例里逐条核对。
     //   ⑥ **Agent 栏**(底栏那条横向密集行)的行内控件:标签与溢出 ▾(同为 32)—— 同属横向密集行,
     //      判据同上;它常驻渲染,故必须排除(见「Agent 栏几何」用例里逐条核对)。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger)').evaluateAll((buttons) => buttons.map((button) => {
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -272,7 +274,9 @@ for (const width of WIDTHS) {
       await login(page)
       await page.goto(`/#/workspace?s=${state}`)
       await waitForStable(page, state)
-      if (width === 375) await expectComposerUnclipped(page)
+      // 空位占位**不含输入坞**(没有窗体就没有输入框);error 态落在装载那段对话上,有输入框。
+      if (state === 'empty') await expect(page.locator('.composer-dock'), '空位占位没有输入坞').toHaveCount(0)
+      if (width === 375 && state === 'error') await expectComposerUnclipped(page)
       expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1)
       expect(await contrastViolations(page)).toEqual([])
       if (state === 'empty') await expectEmptyAtTop(page)
@@ -291,7 +295,7 @@ for (const width of WIDTHS) {
         const suggestions = page.locator('.suggestion-card')
         await expect(suggestions).toHaveCount(3)
         await suggestions.first().click()
-        await expect(page.getByRole('textbox', { name: '给 Mia 的消息' })).toHaveValue('帮我把团队知识库整理工作拆成一周内可执行的计划。')
+        await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toHaveValue('帮我把团队知识库整理工作拆成一周内可执行的计划。')
         await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
       }
     })
@@ -725,14 +729,19 @@ test('tab 关闭钮:悬停/聚焦可见、默认不可见、零重排、tabindex
     await expect(close).toHaveAttribute('tabindex', '-1')
   }
   // aria-actions 指向存在的元素,id 与 tab 一一对应,aria-label 含对应标题(唯一可辨别)。
+  // 本轮:tab 上多了「拆出」钮(拖拽之外的非拖拽通路,WCAG 2.5.7),故 aria-actions 由**两个** id
+  // 组成(拆出 + 关闭)—— 断言因此从「等于关闭钮 id」改为「包含关闭钮 id,且每个 id 都指向存在的元素」。
   const mapping = await slots.evaluateAll((elements) => elements.map((slot) => {
     const tab = slot.querySelector('[role="tab"]')
     const close = slot.querySelector('.tab-close')
+    const pop = slot.querySelector('.tab-pop')
     return {
       tabId: tab?.id ?? '',
       actions: tab?.getAttribute('aria-actions') ?? '',
       closeId: close?.id ?? '',
       closeLabel: close?.getAttribute('aria-label') ?? '',
+      popId: pop?.id ?? '',
+      popLabel: pop?.getAttribute('aria-label') ?? '',
       // tab 的 title 现在追加了状态词(鼠标提示),不再等于纯会话标题;这里取**可见标签文字**
       // (= 会话标题)来核对关闭钮的可访问名含对应标题。
       title: tab?.querySelector('.conversation-tab__label')?.textContent ?? '',
@@ -740,10 +749,14 @@ test('tab 关闭钮:悬停/聚焦可见、默认不可见、零重排、tabindex
   }))
   for (const item of mapping) {
     expect(item.actions, 'tab 有 aria-actions').not.toBe('')
-    expect(item.closeId, 'aria-actions 指向关闭钮').toBe(item.actions)
+    expect(item.actions.split(' '), 'aria-actions 指向关闭钮').toContain(item.closeId)
+    expect(item.actions.split(' '), 'aria-actions 指向拆出钮').toContain(item.popId)
     expect(item.closeId, '关闭钮 id 与 tab id 一一对应').toBe(`conversation-close-${item.tabId.replace('conversation-tab-', '')}`)
     expect(item.closeLabel, '关闭钮 aria-label 含对应标题').toContain(item.title)
-    expect(await page.locator(`#${item.closeId}`).count(), 'aria-actions 指向的元素存在').toBe(1)
+    expect(item.popLabel, '拆出钮 aria-label 含对应标题').toContain(item.title)
+    for (const actionId of item.actions.split(' ')) {
+      expect(await page.locator(`#${actionId}`).count(), `aria-actions 指向的元素 ${actionId} 存在`).toBe(1)
+    }
   }
 
   // 零重排:悬停前 / 悬停后,各 tab 的 x / width 逐值不变(关闭钮是绝对定位 + 恒定预留的槽)。
@@ -791,8 +804,9 @@ test('关闭 ≠ 删除:关掉的 tab 仍在 ▾ 面板,点它重新打开并激
   await expect(tabs).toHaveCount(initialCount)
 })
 
-// 关掉活动 tab:相邻项(优先右侧)接管;只剩一个打开项时没有关闭钮。
-test('关闭活动 tab:相邻项(优先右侧)接管;只剩一个时无关闭钮', async ({ page }) => {
+// 关掉活动 tab:相邻项(优先右侧)接管;只剩一个 tab 时**关闭钮仍在**(每块区域功能完全一样,
+// 关闭钮不再随数量消失),关掉最后一个 tab → 根区域既无成员又无子区域 → 引导页。
+test('关闭活动 tab:相邻项(优先右侧)接管;只剩一个时关闭钮仍在,关掉最后一个 → 引导页', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -806,15 +820,21 @@ test('关闭活动 tab:相邻项(优先右侧)接管;只剩一个时无关闭钮
   await activeSlot.hover()
   await activeSlot.locator('.tab-close').click()
   await expect(page.locator(TAB, { hasText: nextTitle })).toHaveAttribute('aria-selected', 'true')
-  // 继续关掉末尾的 tab,直到只剩一个打开项 —— 此时不再有关闭钮。
+  // 继续关掉末尾的 tab,直到只剩一个打开项。
   for (let remaining = SESSIONS_IN_DEFAULT_PROJECT - 1; remaining > 1; remaining -= 1) {
     const lastSlot = page.locator('.tab-slot').last()
     await lastSlot.hover()
     await lastSlot.locator('.tab-close').click()
     await expect(page.locator('.tab-slot')).toHaveCount(remaining - 1)
   }
-  await expect(page.locator('.tab-slot'), '条上恒有 ≥1 个打开项').toHaveCount(1)
-  await expect(closes, '只剩一个打开项时没有关闭钮').toHaveCount(0)
+  await expect(page.locator('.tab-slot'), '条上仍有一个打开项').toHaveCount(1)
+  // 语义已反转:只剩一个 tab 时关闭钮**仍在**(不再「只剩一个就没有关闭钮」)。
+  await expect(closes, '只剩一个 tab 时关闭钮仍在').toHaveCount(1)
+  // 关掉最后一个 tab → 根区域成员清空 → 引导页(全页没有任何转录,故 role="log" 为 0)。
+  await page.locator('.tab-slot').first().hover()
+  await closes.click()
+  await expect(page.locator('.onboarding'), '关掉最后一个 tab → 引导页').toHaveCount(1)
+  await expect(page.getByRole('log'), '引导页不是转录').toHaveCount(0)
 })
 
 // Delete 键关闭聚焦的 tab(MDN 的 tab role 文档写明的交互)。
@@ -1026,11 +1046,12 @@ test.describe('英文窄屏与无障碍回归', () => {
       await waitForStable(page, 'ready', enHeadingFor('ready'))
       if (state !== 'ready') await page.goto(`/#/workspace?s=${state}`)
       await waitForStable(page, state, enHeadingFor(state))
-      await expectComposerUnclipped(page)
+      if (state === 'empty') await expect(page.locator('.composer-dock'), '空位占位没有输入坞').toHaveCount(0)
+      else await expectComposerUnclipped(page)
       if (state === 'empty') await expectEmptyAtTop(page)
       await expect(page).toHaveScreenshot(`workspace-${state}-375-en.png`, { fullPage: true })
-      await expectComposerUnclipped(page)
       if (state === 'empty') await expectEmptyAtTop(page)
+      else await expectComposerUnclipped(page)
       if (state === 'error') {
         await page.getByRole('button', { name: 'Retry', exact: true }).click()
         await waitForStable(page, 'ready', enHeadingFor('ready'))
@@ -1104,7 +1125,7 @@ test.describe('英文窄屏与无障碍回归', () => {
 test('键盘发送、Enter 空草稿不发送、Shift+Enter 与输入框自动增高', async ({ page }) => {
   await login(page)
   await waitForStable(page)
-  const input = page.getByRole('textbox', { name: '给 Mia 的消息' })
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
   await tabTo(page, input)
   await expect(input).toBeFocused()
   // 发送按钮已删除(本轮):输入框里没有任何按钮;空草稿按 Enter 不发送 —— 「空态不可发」改由
@@ -1285,8 +1306,8 @@ test('加载骨架、新建与会话切换', async ({ page }, testInfo) => {
   await closeSwitcher(page)
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).fill('请帮我准备访谈提纲。')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).press('Enter')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请帮我准备访谈提纲。')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   // 会话按项目隔离:默认项目下原 6 条 + 新建 1 条 = 7 条。
   await openSwitcher(page)
@@ -1386,7 +1407,7 @@ test('切换语言重取历史，生成中延后刷新，不丢用户输入', as
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await login(page)
   await waitForStable(page)
-  const input = page.getByRole('textbox', { name: '给 Mia 的消息' })
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
   await input.fill('保留我输入的中文。')
   await input.press('Enter')
   await expect(page.locator('.stream-cursor')).toBeVisible()
@@ -1398,6 +1419,20 @@ test('切换语言重取历史，生成中延后刷新，不丢用户输入', as
   await expect(page.getByRole('log')).toContainText('保留我输入的中文。')
   await openSwitcher(page)
   await expect(page.locator('.session-item').first()).toContainText('Turn project updates into an action plan')
+})
+
+// 本需求的**核心不变量**:草稿按会话独立保存,且任何一次装载 / 切语言都不得丢掉它。
+test('切语言不丢草稿:输入框内容按会话独立保存', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
+  await input.fill('这段草稿必须活过切语言。')
+  await page.getByRole('button', { name: '语言', exact: true }).click()
+  await page.getByRole('button', { name: /English/ }).click()
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+  // 切语言只重取会话列表 / 转录 / 遥测;运行态(草稿)一个字段都不动。
+  await expect(page.getByRole('textbox', { name: /Message to ".+"/ })).toHaveValue('这段草稿必须活过切语言。')
 })
 
 // 端到端主路径(项目维度):侧栏换 Agent → 项目区随之更换 → 对话栏新建会话 →
@@ -1430,8 +1465,8 @@ test('侧栏换 Agent → 项目区更换 → 新建会话归属当前项目', a
   // 新建对话 + 发送:新会话必须归属**当前项目**(product-docs)。
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).fill('请帮我写一段发布说明。')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).press('Enter')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请帮我写一段发布说明。')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('请帮我写一段发布说明。')
   await expect(page.locator('.conversation-tab', { hasText: '请帮我写一段发布说明。' })).toHaveAttribute('aria-selected', 'true')
@@ -1721,7 +1756,7 @@ test('Agent Badge:等待交互优先于响应完成(两类并存取更紧急的�
   const writingBadge = agentTab(page, 'writing').locator('.agent-bar__badge')
   // 常规态:写作助手名下有一条**未看过**的「响应完成」(release 会话)→ 成功档。
   await expect(writingBadge, '常规态:写作助手有未看过的响应完成').toHaveAttribute('data-level', 'success')
-  await expect(writingBadge).toContainText('响应完成')
+  await expect(writingBadge).toContainText('已完成')
   // 负向:研究助手只有一条「响应中」会话 → 无此类对话,不挂 Badge。
   await expect(agentTab(page, 'research').locator('.agent-bar__badge'), '无此类对话不挂 Badge').toHaveCount(0)
 
@@ -1729,7 +1764,7 @@ test('Agent Badge:等待交互优先于响应完成(两类并存取更紧急的�
   await page.goto('/#/workspace?s=waiting')
   await waitForStable(page, 'ready', HEADINGS['zh-CN'].knowledge)
   await expect(writingBadge, '两类并存 → 取更紧急的等待交互').toHaveAttribute('data-level', 'warning')
-  await expect(writingBadge).toContainText('等待交互')
+  await expect(writingBadge).toContainText('待确认')
 
   // 点开等待中的 quarterly(它成为活动会话 → 视为已看过):等待信号清掉,而响应完成那条**还在**,
   // 于是 Badge 回落成成功档 —— 这一步同时证明「两类确实并存」与「并存时取等待交互」。
@@ -1760,7 +1795,7 @@ test('Agent Badge:数量 > 1 带计数、逐条点开后清除、不改变标签
   await clickTab(page, HEADINGS['zh-CN'].roadmap)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(badge.locator('.agent-bar__badge-count'), '只剩一条时不带计数').toHaveCount(0)
-  await expect(badge).toContainText('响应完成')
+  await expect(badge).toContainText('已完成')
   await clickTab(page, HEADINGS['zh-CN'].launch)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(badge, '两条都看过 → Badge 清除').toHaveCount(0)
@@ -1806,11 +1841,14 @@ test('遥测条:五项齐备、状态项为唯一 live region、Context 文本�
   const bar = page.locator('.telemetry')
   await expect(bar).toBeVisible()
 
-  // 状态项是 live region;遥测条其余部分不抢 live(整页只有这一个 role="status")。
+  // 状态项是 live region;遥测条里**只有它**一个(其余部分不抢 live)。
+  // 整页的 role="status" 现在有**两处**,各管各的事:① 遥测条的状态项(本用例关心的那个);
+  // ② 悬浮 ↔ 停靠的播报(.workspace-live,见「悬浮 ↔ 停靠的键盘通路与播报」用例)。
   const status = page.locator('.telemetry__status')
   await expect(status).toHaveAttribute('role', 'status')
   await expect(status).toHaveAttribute('aria-live', 'polite')
-  await expect(page.locator('.workspace-page [role="status"]')).toHaveCount(1)
+  await expect(page.locator('.telemetry [role="status"]'), '遥测条里只有一个 live region').toHaveCount(1)
+  await expect(page.locator('.workspace-page [role="status"]'), '整页两处:遥测状态项 + 停靠播报').toHaveCount(2)
 
   // 五项:状态 · 模型 · Context · 时长 · 项目。最后一项表达**当前项目**(CLI 的 cwd)——
   // 项目名是技术标识(目录名),条内只显示名;完整路径放进 title(悬停可见)。
@@ -1866,7 +1904,7 @@ test('遥测条状态项随流式变化,且不再有第二处状态行', async (
   // 转录里旧的状态行已并入遥测条,页面内不再有 .generation-status。
   await expect(page.locator('.generation-status')).toHaveCount(0)
   const word = page.locator('.telemetry__word')
-  const input = page.getByRole('textbox', { name: '给 Mia 的消息' })
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
   await input.fill('请把演示顺序排一下。')
   await input.press('Enter')
   await expect(word).toHaveText('思考中')
@@ -2079,23 +2117,25 @@ async function expectWaitingLinkage(
   // 先等运行遥测取回(Context 项出现)、侧栏项目列表与**当前项目的文件树**都加载完,再读值。
   // 芯片住在项目树里:项目默认展开、树本身是异步按需取的,不等树落定会读到「还没有芯片」的
   // 中间瞬时值。
-  await expect(page.locator('.telemetry__item--context'), label).toBeVisible()
   await expect(page.locator('.sidebar-loading'), label).toHaveCount(0)
   // 用 toBeAttached 而非 toBeVisible:窄屏下侧栏是收起的抽屉,树在 DOM 里但不可见。
   await expect(page.locator('.project-tree .entry-row').first(), label).toBeAttached()
   const word = page.locator('.telemetry__word')
   const card = page.locator('.transcript-inner .confirmation-card')
   const chip = page.locator(`${CHIP}[data-state="pending"]`)
+  // 空位占位**没有输入坞**(没有窗体就没有输入框)→ 遥测条整条不在,状态词无从谈起。
+  const hasComposer = await page.locator('.composer-dock').count() > 0
   if (expectWaiting) {
+    await expect(page.locator('.telemetry__item--context'), label).toBeVisible()
     await expect(word, label).toHaveText(WAITING_WORD)
     await expect(card, label).toHaveCount(1)
     await expect(chip, label).toHaveCount(1)
   } else {
-    await expect(word, label).not.toHaveText(WAITING_WORD)
+    if (hasComposer) await expect(word, label).not.toHaveText(WAITING_WORD)
     await expect(card, label).toHaveCount(0)
     await expect(chip, label).toHaveCount(0)
   }
-  return { word: (await word.innerText()) === WAITING_WORD, cards: await card.count(), chips: await chip.count() }
+  return { word: hasComposer && (await word.innerText()) === WAITING_WORD, cards: await card.count(), chips: await chip.count() }
 }
 
 for (const width of [375, 1280]) {
@@ -2479,8 +2519,8 @@ test('新建会话:初始为空,只含本次发送的两条', async ({ page }) =
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await expect(page.locator('.chat-message')).toHaveCount(0)
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).fill('只应出现这两条。')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).press('Enter')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('只应出现这两条。')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   // 用户 + 助手 = 2 条,且不含任何既有会话的正文。
   await expect(page.locator('.chat-message')).toHaveCount(2)
@@ -2657,8 +2697,11 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(projects).toContainText(PROJECT_NAMES.planning[1])
   await expect(projects).not.toContainText(PROJECT_NAMES.planning[0])
   await expect(items.first().locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
-  // 新当前项目(knowledge-base)没有会话:activeId 归空,h1 回退到「新建对话」。
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADINGS['zh-CN'].newChat)
+  // 新当前项目(knowledge-base)没有会话:区域既无成员又无子区域 → 渲染**引导页**;
+  // h1 随之等于引导页的标题(而不是「新建对话」—— 引导页上的大标题与 h1 必须对得上,
+  // 否则读屏用户听到的页面标题与屏幕上的标题不一致)。
+  await expect(page.locator('.onboarding')).toHaveCount(1)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('这里还没有打开的窗口')
   // 再关掉最后一个:没有项目可归属时侧栏给空态,遥测的项目项随之下线(不留上一个项目的假信息)。
   await items.first().locator('.project-menu__trigger').click()
   await page.locator('.project-menu__item').click()
@@ -2690,13 +2733,13 @@ test('打开项目:搜索过滤 → 勾选 → 打开后进入侧栏并自动选
   // 关闭后焦点归还触发钮。
   await expect(dialog).not.toBeVisible()
   await expect(openButton).toBeFocused()
-  // 新项目进入侧栏,并被**自动选中**;会话切到它(它没有会话 → 面板空态、转录空态)。
+  // 新项目进入侧栏,并被**自动选中**;会话切到它 —— 它没有会话 ⇒ 根区域既无成员又无子区域 ⇒
+  // 引导页(没有转录,故 role="log" 为 0)。
   await expect(page.locator('.project-item')).toHaveCount(3)
   const added = page.locator('.project-item').filter({ hasText: 'api-server' })
   await expect(added.locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
-  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
-  await openSwitcher(page)
-  await expect(page.locator('.conversation-hint')).toHaveText('这个项目还没有对话')
+  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
+  await expect(page.getByRole('log'), '引导页不是转录').toHaveCount(0)
 })
 
 test('打开项目对话框:取消 / Esc 关闭并归还焦点', async ({ page }) => {
@@ -2730,13 +2773,11 @@ test('会话按项目隔离:只显示当前项目的会话,无会话项目显示
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].research)
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].knowledge)
   await closeSwitcher(page)
-  // 切到项目 B(knowledge-base):它没有会话 → 面板空态,旧项目的会话不再出现。
+  // 切到项目 B(knowledge-base):它没有会话 ⇒ 根区域既无成员又无子区域 ⇒ 引导页,旧项目的会话不再出现。
   await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
-  await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(0)
-  await expect(page.locator('.conversation-hint')).toHaveText('这个项目还没有对话')
-  await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].weekly)
+  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
+  await expect(page.getByRole('log'), '引导页不是转录').toHaveCount(0)
+  await expect(page.locator('.workspace-projects')).not.toContainText(HEADINGS['zh-CN'].weekly)
   await expect(page.locator('[data-message-id="weekly-1"]')).toHaveCount(0)
 })
 
@@ -2747,20 +2788,18 @@ test('端到端:项目 A 下新建会话,切到项目 B 时不出现,切回 A �
   // 在项目 A(weekly-report)下新建并发送。
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).fill('请整理一下本季度的目标。')
-  await page.getByRole('textbox', { name: '给 Mia 的消息' }).press('Enter')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请整理一下本季度的目标。')
+  await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   await openSwitcher(page)
   await expect(page.locator('.session-item')).toHaveCount(7)
   await expect(page.locator('.session-item').first()).toContainText('请整理一下本季度的目标。')
   await closeSwitcher(page)
   // 等保存收尾:保存中会短暂锁住项目 / 会话切换(与既有「生成中不可切」同一把锁)。
-  await expect(page.getByRole('textbox', { name: '给 Mia 的消息' })).not.toHaveAttribute('readonly', '')
-  // 切到项目 B(knowledge-base):新会话归属 A,不出现在 B。
+  await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).not.toHaveAttribute('readonly', '')
+  // 切到项目 B(knowledge-base):项目无会话 ⇒ 引导页;新会话归属 A,不出现在 B。
   await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(0)
-  await closeSwitcher(page)
+  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
   await expect(page.locator('.workspace-projects')).not.toContainText('请整理一下本季度的目标。')
   // 切回项目 A:新会话仍在。
   await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[0] }).locator('.project-row__button').click()
@@ -2784,7 +2823,7 @@ test('waiting:quarterly 的 tab 挂「等待交互」Badge,点开后消失', asy
   const quarterlyTab = page.locator(TAB, { hasText: QUARTERLY['zh-CN'] })
   await expect(quarterlyTab).toHaveCount(1)
   const badge = quarterlyTab.locator('.tab-badge')
-  await expect(badge, '等待交互用文字 Badge 表达').toHaveText('等待交互')
+  await expect(badge, '等待交互用文字 Badge 表达').toHaveText('待确认')
   await expect(badge).toHaveAttribute('data-level', 'warning')
   // 等待态不再有图形指示 —— 前导槽里既没有呼吸灯,也没有任何别的形状。
   await expect(quarterlyTab.locator('.tab-status')).toHaveAttribute('data-status', 'awaiting')
@@ -2823,7 +2862,7 @@ for (const width of [375, 768]) {
       await expect(page.locator(SWITCHER_TRIGGER)).toHaveAccessibleName(new RegExp('等待确认'))
     } else {
       // 若该宽度下 quarterly 仍可见,则「等待交互」Badge 挂在那枚 tab 上,菜单钮不出警告徽标。
-      await expect(page.locator(TAB, { hasText: QUARTERLY['zh-CN'] }).locator('.tab-badge'), '等待交互 Badge 挂在 tab 上').toHaveText('等待交互')
+      await expect(page.locator(TAB, { hasText: QUARTERLY['zh-CN'] }).locator('.tab-badge'), '等待交互 Badge 挂在 tab 上').toHaveText('待确认')
     }
   })
 }
@@ -3255,8 +3294,8 @@ test('tab 键盘重排:Ctrl+Shift+PageDown/PageUp 移一位、aria-live 播报�
   await expect.poll(() => tabIds(page), { message: '快捷键右移一位后顺序变化' }).toEqual(expected)
   // 焦点跟随被移动的 tab(现在在索引 1)。
   await expect(page.locator(TAB).nth(1)).toBeFocused()
-  // aria-live 播报文本(1 基位次 + 总数)。
-  const live = page.locator('.conversation-tabs__live')
+  // aria-live 播报文本(1 基位次 + 总数)。播报通道已上移到页面级(全页唯一的那一条)。
+  const live = page.locator('.workspace-tab-live')
   await expect(live).toHaveAttribute('aria-live', 'polite')
   await expect(live).toHaveText(/已移到第 2 位,共 \d+ 位/)
   console.log(`[tab keyboard] 播报:${await live.innerText()}`)
@@ -3279,7 +3318,7 @@ test('输入区重构:坞为流内元素、坞底贴面板内底、转录区与�
   await login(page)
   await waitForStable(page)
   const form = page.locator('.composer-form')
-  const input = page.getByRole('textbox', { name: '给 Mia 的消息' })
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
 
   // 坞:无底面(背景透明)、无上边界。
   const dockStyle = await page.locator('.composer-dock').evaluate((element) => {
@@ -3400,7 +3439,7 @@ test('输入区内缩:四宽度 × 单/多行草稿,内缩静态、无 mask、�
       await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
       await login(page)
       await waitForStable(page)
-      const input = page.getByRole('textbox', { name: '给 Mia 的消息' })
+      const input = page.getByRole('textbox', { name: /与「.+」对话/ })
       const form = page.locator('.composer-form')
       if (multiline) {
         await input.fill('第一行草稿\n第二行草稿\n第三行草稿\n第四行草稿')
@@ -3635,7 +3674,7 @@ test('tab 状态指示:只有呼吸灯与两种文字 Badge,被删掉的三种�
   const badgeColor = await successBadges.first().evaluate((el) => getComputedStyle(el).color)
   const badgeBg = await successBadges.first().evaluate((el) => getComputedStyle(el).backgroundColor)
   console.log(`[tab badge] 成功档文案「${badgeText}」字 ${badgeColor} 底 ${badgeBg}`)
-  expect(badgeText, 'Badge 用会话状态词,不是自造的词').toBe('响应完成')
+  expect(badgeText, 'Badge 用会话状态词,不是自造的词').toBe('已完成')
   expect(badgeColor, '成功档字色 = --dl-success').toBe(await resolveToken(page, '--dl-success'))
   expect(badgeBg, '成功档底色 = --dl-success-subtle').toBe(await resolveToken(page, '--dl-success-subtle'))
   // 「新会话」「等待对话」两态不带任何指示:budget / incident / hiring 这些 tab 里外都没有标记。
@@ -3650,7 +3689,7 @@ test('tab 状态指示:只有呼吸灯与两种文字 Badge,被删掉的三种�
   await page.goto('/#/workspace?s=waiting')
   await waitForStable(page, 'ready', HEADINGS['zh-CN'].knowledge)
   const waitingBadge = page.locator(TAB, { hasText: QUARTERLY['zh-CN'] }).locator('.tab-badge')
-  await expect(waitingBadge).toHaveText('等待交互')
+  await expect(waitingBadge).toHaveText('待确认')
   await expect(waitingBadge).toHaveAttribute('data-level', 'warning')
   const warningColor = await waitingBadge.evaluate((el) => getComputedStyle(el).color)
   const warningBg = await waitingBadge.evaluate((el) => getComputedStyle(el).backgroundColor)
@@ -3697,7 +3736,7 @@ test('「输出完成(未看过)」Badge 随「已看过」变化', async ({ pag
   await login(page)
   await waitForStable(page)
   const roadmapTab = page.locator(TAB, { hasText: HEADINGS['zh-CN'].roadmap })
-  await expect(roadmapTab.locator('.tab-badge'), 'roadmap 是 completed 且未看过 → 成功色 Badge').toHaveText('响应完成')
+  await expect(roadmapTab.locator('.tab-badge'), 'roadmap 是 completed 且未看过 → 成功色 Badge').toHaveText('已完成')
   await expect(roadmapTab.locator('.tab-status'), '完成态同样没有图形').toHaveAttribute('data-icon', 'none')
   await roadmapTab.click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
@@ -3751,18 +3790,44 @@ const README = 'README.md'
 const PROGRESS = 'progress.csv'
 const GITIGNORE = '.gitignore'
 
-// 文件树里的文件行:整行一个 button。单击 = 预览,双击 = 钉住。
+// 文件树里的文件行:整行一个 button。单击 / 双击 / Enter **三条入口行为一致** —— 都打开一个
+// **悬浮**窗体(不占 tab)。要让文件占据区域内容区,再双击悬浮窗的标题栏把它停靠(见 openDockedFile)。
 async function clickFileRow(page: Page, name: string): Promise<void> {
   await page.locator('.entry-row[data-kind="file"]', { hasText: name }).first().locator('.entry-row__button').click()
 }
 
-async function pinFileRow(page: Page, name: string): Promise<void> {
-  await page.locator('.entry-row[data-kind="file"]', { hasText: name }).first().locator('.entry-row__button').dblclick()
+// 把**最近打开的那个悬浮窗体**停靠到区域内容区。
+// 用标题栏上的原生「停靠」按钮(而不是双击):窄宽度下标题栏右侧被控件挤满,双击落点会落到
+// 行尾控件上(那不算手柄);按钮是有 aria-label 的原生控件,任何宽度都点得准。
+// 悬浮窗体按层序渲染,新开的在最后(openFloating 会置顶),故取最后一个。
+async function dockLastFloating(page: Page): Promise<void> {
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(floating).not.toHaveCount(0)
+  await floating.last().locator('.file-panel__placement').click()
+  await expect.poll(async () => page.locator(`${FILE_PANEL}[data-mode="docked"]`).count(), { message: '文件已停靠到内容区' }).toBeGreaterThan(0)
+}
+
+// 打开一个文件并把它**钉进**区域内容区:单击树行(悬浮)+ 点标题栏的「停靠」按钮。
+// 「钉住」= 停靠 —— 树行本身的单击 / 双击 / Enter 已不再有「预览 / 钉住」之分。
+async function openDockedFile(page: Page, name: string): Promise<void> {
+  await clickFileRow(page, name)
+  await dockLastFloating(page)
+}
+
+// 按**路径**精确停靠某个悬浮窗体(多窗口下比「取最后一个」确定)。path 是域内完整相对路径。
+async function dockFloatingPath(page: Page, path: string): Promise<void> {
+  const win = page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="${path}"]`)
+  await expect(win, `${path} 的悬浮窗在场`).toHaveCount(1)
+  await win.locator('.file-panel__placement').click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"][data-file-path="${path}"]`), `${path} 已停靠`).toHaveCount(1)
 }
 
 // 窄屏侧栏是抽屉:打开它才能点树行;点完把抽屉关掉(否则会盖住要量的东西)。
+// 幂等:已经开着就不再点(否则会点在被自己盖住的入口上)。
 async function openSidebarIfNarrow(page: Page, width: number): Promise<void> {
-  if (width < 1024) await page.getByRole('button', { name: '打开侧栏' }).click()
+  if (width >= 1024) return
+  if (await page.locator('.workspace-sidebar.is-open').count() > 0) return
+  await page.getByRole('button', { name: '打开侧栏' }).click()
 }
 
 async function closeSidebarIfOpen(page: Page): Promise<void> {
@@ -3810,63 +3875,258 @@ function panelInnerBox(page: Page): Promise<Rect> {
   })
 }
 
-test('文件树打开 = 独占一格:单击 / 双击 / Enter 行为一致,重复打开同一文件不新增', async ({ page }) => {
+test('文件树打开 = 悬浮窗体(不占 tab):单击 / 双击 / Enter 行为一致,重复打开同一文件不新增', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   // 文件那一组**常驻**(住顶部行),但没打开文件时**不占位**(不抢对话 tablist 的宽度)。
   await expect(page.locator(FILE_BAR)).toHaveCount(1)
+  await expect(page.locator(FILE_TOOLBAR)).toHaveAttribute('role', 'toolbar')
   await expect(page.locator(FILE_TAB)).toHaveCount(0)
   await expect(page.locator('.file-bar__empty')).toHaveCount(0)
 
-  // 单击打开:出现一个 tab、它是按下态(窗口可见)、面板打开。
+  // 单击打开 → 一个**悬浮**窗体:覆盖层、不占 tab(条上仍是 0 项)。
   await clickFileRow(page, README)
-  await expect(page.locator(FILE_BAR)).toHaveCount(1)
-  await expect(page.locator(FILE_TAB)).toHaveCount(1)
-  // 文件项是 toolbar 里的切换按钮:按下态用 aria-pressed 表达(不是 tab 的 aria-selected)。
-  await expect(page.locator(FILE_TAB).first()).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.locator(FILE_TOOLBAR)).toHaveAttribute('role', 'toolbar')
-  // 文件项带 fileText 图标(区分「文件 vs 对话」;项目标识已随分域删除,它区分的不是类型)。
-  await expect(page.locator(`${FILE_TAB} .file-tab__icon`), '文件项有图标').toHaveCount(1)
-  const fileIconBox = await page.locator(`${FILE_TAB} .file-tab__icon`).boundingBox()
-  console.log(`[file tab] 图标 ${fileIconBox?.width.toFixed(1) ?? '?'}×${fileIconBox?.height.toFixed(1) ?? '?'}`)
-  // 负向:文件项不再有 tab 语义(它不是 tab —— 多窗口下「一个 tab 一个 panel」不成立)。
-  await expect(page.locator(FILE_TAB).first()).not.toHaveAttribute('role', 'tab')
-  await expect(page.locator(FILE_TAB).first()).not.toHaveAttribute('aria-selected', /.*/)
-  // **负向:预览态已作废** —— 不再有斜体,也没有 .is-preview。
-  expect(await firstTabFontStyle(page, 'first'), '不再是预览斜体').toBe('normal')
-  await expect(page.locator('.file-tab.is-preview')).toHaveCount(0)
-  await expect(page.locator(FILE_PANEL)).toBeVisible()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '单击 → 悬浮窗体').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`)).toHaveCSS('position', 'fixed')
+  await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
+  await expect(page.locator(`${FILE_PANEL}[data-file-path="README.md"]`)).toHaveAttribute('data-focused', 'true')
+  await expect(page.locator(FILE_PANEL).locator('.file-line').first(), '内容渲染出来了').toBeVisible()
 
-  // 再打开另一个文件 → **新增一格**(不再顶掉前一个):这就是用户报的那个缺陷的回归点。
-  await clickFileRow(page, PROGRESS)
-  await expect(page.locator(FILE_TAB), '两次打开 = 两格').toHaveCount(2)
-  await expect.poll(async () => fileTabLabels(page)).toEqual(['README.md', 'progress.csv'])
-
-  // 双击与单击行为一致:已在条上 → 只激活,不新增。
-  await pinFileRow(page, PROGRESS)
-  await expect(page.locator(FILE_TAB), '重复打开同一文件不新增').toHaveCount(2)
-  // 连续打开第三个 → **三个 tab**(用户报的原缺陷:后开的总把前一个顶掉,永远只有一格)。
-  await page.locator('.entry-row[data-kind="file"]', { hasText: GITIGNORE }).first().locator('.entry-row__button').click()
-  // 顶部行一次只显示得下若干项(实测 @1280 = 2),故打开集按**下拉**核对,条上按可见数核对。
-  await closeAllFileWindows(page)
-  await openSwitcher(page)
-  await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
-  await expect(page.locator('.conversation-row[data-file-option]'), '连续打开三个 → 三个 tab').toHaveCount(3)
-  const openNames = await page.locator('.conversation-group').first().locator('.conversation-row__name').allTextContents()
-  console.log(`[file tab] 三个打开的 ${JSON.stringify(openNames)}`)
-  expect(openNames.sort(), '三个文件都在,谁也没顶掉谁').toEqual([GITIGNORE, PROGRESS, README].sort())
-  await closeSwitcher(page)
-  await expect(page.locator(FILE_TAB), '条上按可见数显示').toHaveCount(FILE_BAR_VISIBLE[1280])
-
-  // Enter 也能打开(焦点在文件行上):README 已在条上 → 仍三格(不新增),只激活。
+  // 双击 / Enter 与单击**行为一致**:仍是同一个悬浮窗体(不新增、不变成第二个、也不上条)。
+  await page.locator('.entry-row[data-kind="file"]', { hasText: README }).first().locator('.entry-row__button').dblclick()
+  await expect(page.locator(FILE_PANEL), '双击不新增').toHaveCount(1)
   await page.locator('.entry-row[data-kind="file"]', { hasText: README }).first().locator('.entry-row__button').focus()
   await page.keyboard.press('Enter')
-  await expect(page.locator(FILE_TAB), 'Enter 打开已存在的文件不新增').toHaveCount(FILE_BAR_VISIBLE[1280])
+  await expect(page.locator(FILE_PANEL), 'Enter 与单击一致(复用同一窗体)').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '三条入口都不占 tab').toHaveCount(0)
+
+  // 再打开另一个文件 → **第二个悬浮窗体**(多窗口并存,谁也不顶掉谁)。
+  await clickFileRow(page, PROGRESS)
+  await expect(page.locator(FILE_PANEL), '两次打开 = 两个悬浮窗').toHaveCount(2)
+  await expect(page.locator(FILE_TAB), '仍不占 tab').toHaveCount(0)
+
+  // 关掉全部悬浮窗 → 一个都不剩(关闭 ≠ 删除:从树里再点即回来,见「多悬浮窗口」用例)。
   await closeAllFileWindows(page)
-  await openSwitcher(page)
-  await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
-  await expect(page.locator('.conversation-row[data-file-option]'), 'Enter 之后仍是三个').toHaveCount(3)
+  await expect(page.locator(FILE_PANEL)).toHaveCount(0)
+  await expect(page.locator(FILE_BAR)).toHaveCount(1)
+})
+
+test('悬浮 ↔ 停靠:双击标题栏即停靠(加入成员、占据内容区、不再作浮层),再双击还原悬浮(回到记忆几何)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 开一个悬浮窗体,并把它拖到一个便于识别的非默认位置(几何要被记忆)。
+  await clickFileRow(page, README)
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(floating).toHaveCount(1)
+  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  expect(headerBox, '悬浮窗标题栏有几何盒').not.toBeNull()
+  if (headerBox === null) return
+  await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 48, 24)
+  const placed = await panelRectOf(page, README)
+  console.log(`[dock] 停靠前悬浮几何 ${JSON.stringify(placed)}`)
+  // 像素基线:此前整套截图口径都在「未打开任何文件」的静置态,窗体两态完全没有回归保护。
+  // 几何固定后截图,基线才稳定。
+  await expect(page).toHaveScreenshot('workspace-file-window-floating-1280.png')
+
+  // 双击标题栏(身份区,不是行尾控件)→ **停靠到区域内容区**。
+  await floating.locator('.file-panel__meta').dblclick({ position: { x: 120, y: 20 } })
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '停靠窗体在场').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '停靠后不再作为浮层渲染').toHaveCount(0)
+  // 占一个 tab,且是活动项。
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+  await expect(page.locator(`${FILE_TAB}[data-file-path="README.md"][aria-pressed="true"]`), '它是条上的活动项').toHaveCount(1)
+  // 转录被它替换(同一时刻只显示一件东西)。
+  await expect(page.locator('.transcript'), '转录被它替换').toHaveCount(0)
+  // 「内容区确实被它占据」的机械证明:区域内容区中心命中停靠窗体。
+  const hit = await page.evaluate(() => {
+    const area = document.querySelector('.transcript-area')
+    if (!(area instanceof HTMLElement)) return 'no-area'
+    const rect = area.getBoundingClientRect()
+    const el = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    if (el === null) return 'null'
+    if (el.closest('.file-panel--docked') !== null) return 'docked'
+    if (el.closest('.transcript') !== null) return 'transcript'
+    return el.tagName
+  })
+  console.log(`[dock] 内容区中心命中 → ${hit}`)
+  expect(hit, '区域内容区中心命中的是停靠窗体').toBe('docked')
+  // 像素基线:停靠态(独占区域内容区 + 条上多一枚 tab)。
+  await expect(page).toHaveScreenshot('workspace-file-window-docked-1280.png')
+  // 停靠窗体填满内容区(顶边 / 底边贴合)。
+  const areaBox = await page.locator('.transcript-area').boundingBox()
+  const dockedBox = await page.locator(`${FILE_PANEL}[data-mode="docked"]`).boundingBox()
+  expect(areaBox).not.toBeNull()
+  expect(dockedBox).not.toBeNull()
+  if (areaBox !== null && dockedBox !== null) {
+    expect(Math.abs(dockedBox.y - areaBox.y), '停靠窗体顶边贴内容区顶边').toBeLessThanOrEqual(1)
+    expect(Math.abs(dockedBox.y + dockedBox.height - (areaBox.y + areaBox.height)), '停靠窗体底边贴内容区底边').toBeLessThanOrEqual(1)
+  }
+
+  // 双击停靠窗的标题栏 → **还原悬浮**:脱离成员(条上清空)、回到**记忆的悬浮几何**。
+  await page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__meta`).dblclick({ position: { x: 120, y: 20 } })
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '还原为悬浮窗体').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`)).toHaveCount(0)
+  await expect(page.locator(FILE_TAB), '脱离成员,条上不再有它').toHaveCount(0)
+  await expect(page.locator('.transcript'), '转录回来').toHaveCount(1)
+  await expect.poll(async () => Math.round((await panelRectOf(page, README)).x), { message: '回到记忆的悬浮几何 x' }).toBe(Math.round(placed.x))
+  const restored = await panelRectOf(page, README)
+  console.log(`[dock] 还原后几何 ${JSON.stringify(restored)}(原 ${JSON.stringify(placed)})`)
+  expect(Math.abs(restored.y - placed.y), '回到记忆的悬浮几何 y').toBeLessThanOrEqual(1)
+  expect(Math.abs(restored.width - placed.width), '宽也一致').toBeLessThanOrEqual(1)
+  expect(Math.abs(restored.height - placed.height), '高也一致').toBeLessThanOrEqual(1)
+})
+
+// 「显示一个已经打开的窗体」= reveal 语义,不是「再开一份」:
+// 树中的一次点击在文件**已经停靠在某块区域的 tab 条上**时,应当把**那块区域**切到它这一项
+// 并给一次提醒脉冲 —— 而不是把它从条上拽走、变成悬浮窗(用户报的缺陷)。
+// 业界对照:VS Code 把 reveal 做成一等动词(TreeView.reveal / WebviewPanel.reveal,与 open 并列);
+// 「点已打开项却又开一份」在 VS Code / IntelliJ / Zed 都是被反复公开抱怨的缺陷。
+test('文件树里点一个已经拥有 tab 的文件:切到它所在的区域并提醒,不再把它拽成悬浮窗', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 打开并停靠 → 它拥有一个 tab。
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件占据内容区').toHaveCount(1)
+  await expect(page.locator(`${FILE_TAB}[data-file-path="README.md"]`), '它拥有一个 tab').toHaveCount(1)
+
+  // 先把内容区让给一段对话 —— 这样「切回来」才是可观察的变化(否则 activateTab 会早退)。
+  await page.locator('.conversation-tab').first().click()
+  await expect(page.locator('.transcript:not(.transcript--placeholder)'), '内容区先显示对话').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件让位').toHaveCount(0)
+
+  // 再在树里点同一个文件:**不应**出现悬浮窗,而应把内容区切回它这一项。
+  await clickFileRow(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '不再把它拽成悬浮窗').toHaveCount(0)
+  await expect(page.locator(`${FILE_TAB}`), '仍留在 tab 条上').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '内容区切回该文件').toHaveCount(1)
+
+  // 提醒动效的机械证据:该 tab 在点击后的一拍内带 data-pulsing(动画与降级都挂在这个标记上)。
+  const tab = page.locator(`${FILE_TAB}[data-file-path="README.md"]`)
+  await expect(tab, '给一次提醒脉冲').toHaveAttribute('data-pulsing', 'true')
+  // 信息不得只由动效承载:同一条 role=status 播报说清了去了哪里。
+  await expect(page.locator('.workspace-live')).toContainText('已切换到')
+  // 脉冲是**一次性**的:一拍之后标记自己消失(循环闪烁是被平台规范劝退的反模式)。
+  await expect(tab).not.toHaveAttribute('data-pulsing', 'true', { timeout: 3000 })
+})
+
+test('文件树里点一个正在悬浮的文件:只把它置顶聚焦,不新增第二个窗口', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await clickFileRow(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '首次打开 = 悬浮窗体').toHaveCount(1)
+  await clickFileRow(page, README)
+  await expect(page.locator(FILE_PANEL), '仍只有一个窗体,不新增').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '仍是那个悬浮窗体').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '不占 tab').toHaveCount(0)
+})
+
+test('停靠态文件面板的 ✕ 关掉该文件的 tab:面板与 tab 一起消失,不留矛盾状态', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件停靠占据内容区').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '它有一个 tab').toHaveCount(1)
+
+  await page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__close`).click()
+
+  // 面板与 tab **一起**消失 —— 而不是「面板纹丝不动、只把 tab 标记成不可见」:
+  // 停靠态下 hideWindow 只置 visible:false,而区域取活动成员时不看 visible,于是会留下
+  // 「按自己的标记没有任何成员可见、却仍在渲染那个文件」的矛盾态(评审实测)。
+  await expect(page.locator(FILE_PANEL), '面板消失').toHaveCount(0)
+  await expect(page.locator(FILE_TAB), 'tab 也撤下').toHaveCount(0)
+  // 区域内容区回到一段对话(相邻成员接管),不是停在那个文件上、也不是空位占位。
+  await expect(page.locator('.transcript--placeholder'), '不停在空位占位上').toHaveCount(0)
+  await expect(page.locator('.transcript:not(.transcript--placeholder)'), '内容区交给相邻成员').toHaveCount(1)
+})
+
+test('区域内容区同一时刻只显示一件:点对话 tab 文件让位(tab 仍在条上),点文件 tab 又占回内容区', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`)).toHaveCount(1)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+  // 停靠窗体的 tab 是**正体**(文件项一律正体,预览斜体已作废)。
+  expect(await firstTabFontStyle(page, 'first'), '文件 tab 是正体').toBe('normal')
+
+  // 点一个对话 tab → 显示该对话:停靠窗体让位(内容区回到转录),但它的 tab 仍在条上。
+  await clickTab(page, HEADINGS['zh-CN'].roadmap)
+  await expect(page.getByRole('log')).toBeVisible()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件让位').toHaveCount(0)
+  await expect(page.locator(FILE_TAB), '它的 tab 仍在条上').toHaveCount(1)
+  await expect(page.locator('.transcript')).toHaveCount(1)
+
+  // 点回文件 tab → 该文件重新占据内容区。
+  await page.locator(`${FILE_TAB}[data-file-path="README.md"]`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件重新占据内容区').toHaveCount(1)
+  await expect(page.locator('.transcript')).toHaveCount(0)
+})
+
+test('悬浮 ↔ 停靠的键盘通路与播报:标题栏原生按钮回车即转换,role=status 播报状态变化', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await clickFileRow(page, README)
+  // 悬浮态按钮 = 「停靠到内容区」,是**原生 button**(可 Tab 可达、Enter 可触发)。
+  const dockButton = page.locator(`${FILE_PANEL}[data-mode="floating"] .file-panel__placement`)
+  await expect(dockButton).toHaveAttribute('aria-label', '停靠到内容区')
+  await dockButton.focus()
+  await expect(dockButton).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '回车即停靠').toHaveCount(1)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+  await expect(page.locator('.workspace-live'), '状态变化经 role=status 播报').toHaveText(/README\.md.*停靠/)
+
+  // 停靠态按钮文案反之,回车还原为悬浮。
+  const floatButton = page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__placement`)
+  await expect(floatButton).toHaveAttribute('aria-label', '悬浮为独立窗口')
+  await floatButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '回车即还原悬浮').toHaveCount(1)
+  await expect(page.locator(FILE_TAB)).toHaveCount(0)
+  await expect(page.locator('.workspace-live')).toHaveText(/README\.md.*悬浮/)
+})
+
+// 复位几何:「双击标题栏复位」这个旧手势已改指「停靠 / 悬浮」,复位能力因此改挂到标题栏上的
+// 一个原生按钮 —— 顺带把它从「鼠标专属手势」变成键盘可达。
+test('复位几何:标题栏的原生按钮把悬浮窗还原为默认落点,且键盘可达', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await clickFileRow(page, README)
+  const panel = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(panel).toHaveCount(1)
+
+  const origin = await panel.boundingBox()
+  expect(origin).not.toBeNull()
+  if (origin === null) return
+
+  // 先把它挪走:位移要够大,才能把「复位成功」与「根本没动」区分开。
+  await dragFromTo(page, origin.x + 60, origin.y + 18, -140, 96)
+  await expect
+    .poll(async () => (await panel.boundingBox())?.x ?? origin.x, { message: '已被拖离默认落点' })
+    .toBeLessThan(origin.x - 40)
+
+  const reset = panel.locator('.file-panel__reset')
+  await expect(reset, '悬浮态才有复位钮').toHaveCount(1)
+  await expect(reset).toHaveAttribute('aria-label', '复位窗口位置与大小')
+  await reset.focus()
+  await expect(reset).toBeFocused()
+  await page.keyboard.press('Enter')
+
+  await expect.poll(async () => (await panel.boundingBox())?.x ?? -1, { message: '复位回默认 x' }).toBeCloseTo(origin.x, 0)
+  await expect.poll(async () => (await panel.boundingBox())?.y ?? -1, { message: '复位回默认 y' }).toBeCloseTo(origin.y, 0)
+
+  // 停靠态的几何由区域内容区给出,没有「默认几何」可复位,故不渲染该钮。
+  await page.locator(`${FILE_PANEL}[data-mode="floating"] .file-panel__placement`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`)).toHaveCount(1)
+  await expect(page.locator('.file-panel__reset'), '停靠态不渲染复位钮').toHaveCount(0)
 })
 
 for (const width of [375, 768, 1280, 1600]) {
@@ -3884,9 +4144,11 @@ for (const width of [375, 768, 1280, 1600]) {
     const emptyBarBox = await bar.boundingBox()
     const emptyRowBox = await page.locator('.conversation-heading').boundingBox()
 
+    // 打开一个文件并停靠:窄屏下抽屉盖住悬浮窗,故先点树行(悬浮)、关抽屉、再双击标题栏停靠。
     await openSidebarIfNarrow(page, width)
-    await pinFileRow(page, README)
+    await clickFileRow(page, README)
     await closeSidebarIfOpen(page)
+    await dockLastFloating(page)
     await expect(bar).toHaveCount(1)
     const barBox = await bar.boundingBox()
     const rowBox = await page.locator('.conversation-heading').boundingBox()
@@ -3925,8 +4187,8 @@ test('文件组:关闭 ≠ 删除(下拉「文件」页里可再打开)、Delete
   await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  // 三个顶层文件各自双击钉住(避免预览互相顶掉)。
-  for (const name of [README, PROGRESS, GITIGNORE]) await pinFileRow(page, name)
+  // 三个顶层文件各自打开并停靠到内容区(条上三个 tab)。
+  for (const name of [README, PROGRESS, GITIGNORE]) await openDockedFile(page, name)
   await expect(page.locator(FILE_TAB)).toHaveCount(3)
   expect(await fileTabLabels(page)).toEqual(['README.md', 'progress.csv', '.gitignore'])
 
@@ -3956,14 +4218,15 @@ test('文件组:关闭 ≠ 删除(下拉「文件」页里可再打开)、Delete
   await expect(page.locator(FILE_TAB, { hasText: victim }), 'Delete 关闭了聚焦的 tab').toHaveCount(0)
 
   // 拖拽换位:顺序变化,**活动项不变**(拖动后台 tab 不切活动文件)。
+  // 两个停靠窗体**同时可见**,条上两项都处于按下态 —— 故「活动项」按**当前聚焦的窗体**核对。
   await expect(page.locator(FILE_TAB)).toHaveCount(2)
-  const activeBefore = await page.locator(`${FILE_TAB}[aria-pressed="true"]`).getAttribute('data-file-path')
+  const activeBefore = await page.locator(`${FILE_PANEL}[data-focused="true"]`).getAttribute('data-file-path')
   const orderBefore = await page.locator(FILE_TAB).evaluateAll((elements) => elements.map((el) => el.getAttribute('data-file-path')))
   await dragFileTab(page, 0, 1)
   const orderAfter = await page.locator(FILE_TAB).evaluateAll((elements) => elements.map((el) => el.getAttribute('data-file-path')))
   console.log(`[file bar drag] ${JSON.stringify(orderBefore)} → ${JSON.stringify(orderAfter)}`)
   expect(orderAfter, '拖拽改变了顺序').not.toEqual(orderBefore)
-  await expect(page.locator(`${FILE_TAB}[aria-pressed="true"]`), '拖拽不切活动文件').toHaveAttribute('data-file-path', activeBefore ?? '')
+  await expect(page.locator(`${FILE_PANEL}[data-focused="true"]`), '拖拽不切活动文件').toHaveAttribute('data-file-path', activeBefore ?? '')
 
   // 全部关掉 → 条上无文件项,但**这一组常驻**(显示空态);面板收起。
   await page.locator('.file-tab-slot').first().hover()
@@ -3996,8 +4259,23 @@ for (const width of [375, 768, 1280, 1600]) {
     for (const dir of ['src', 'utils', 'notes']) {
       await tree.locator('.entry-row[data-kind="directory"]', { hasText: dir }).first().locator('.entry-row__button').click()
     }
-    for (const name of [README, PROGRESS, GITIGNORE, 'main.ts', 'format.ts', '2026-W40.md']) await pinFileRow(page, name)
-    await closeSidebarIfOpen(page)
+    // 逐个打开并停靠:窄屏下抽屉盖住悬浮窗,故每次「开抽屉 → 点树行 → 关抽屉 → 停靠」;
+    // 一次只留一个悬浮窗,避免多窗级联时彼此的缩放手柄互相拦截(那些手柄画在面板**外侧**)。
+    for (const [name, path] of [
+      [README, 'README.md'],
+      [PROGRESS, 'progress.csv'],
+      [GITIGNORE, '.gitignore'],
+      ['main.ts', 'src/main.ts'],
+      ['format.ts', 'src/utils/format.ts'],
+      ['2026-W40.md', 'notes/2026-W40.md'],
+    ] as const) {
+      await openSidebarIfNarrow(page, width)
+      await clickFileRow(page, name)
+      await closeSidebarIfOpen(page)
+      await dockFloatingPath(page, path)
+    }
+    // 条上**渲染**的槽位数受可用宽约束(装不下的进 ▾),故 6 个成员不等于 6 个槽位 ——
+    // 条上的可见数由下面按 FILE_BAR_VISIBLE[width] 核对,全量由 ▾ 的「文件」页核对。
 
     // 允许宽由会话栏在 ResizeObserver + rAF 之后写出,可见数随之变化 —— 等它落定再采样,
     // 不读瞬时值(否则会数到还没重排的旧帧)。
@@ -4026,7 +4304,8 @@ for (const width of [375, 768, 1280, 1600]) {
       // 选中一个**确实被收起**的项(format.ts 在 375 与 768 两档都排不进可见窗口)——
       // 它随即变为活动项且可见。
       await page.locator('.conversation-row[data-file-option]', { hasText: 'format.ts' }).click()
-      await expect(page.locator(`${FILE_TAB}[aria-pressed="true"]`)).toHaveAttribute('data-file-path', 'src/utils/format.ts')
+      // 多窗口全部可见,条上多个项都处于按下态 —— 故按**具体路径**核对「它被激活并可见」。
+      await expect(page.locator(`${FILE_TAB}[data-file-path="src/utils/format.ts"]`)).toHaveAttribute('aria-pressed', 'true')
       await expect(page.locator(FILE_TAB, { hasText: 'format' })).toHaveCount(1)
     }
   })
@@ -4050,7 +4329,7 @@ test('文件栏内缩:内缩静态一档,末条不与坞 / 遥测条 / 文件栏
       // (首次打开文件不再引起版面跳动)。多行草稿先填好并等输入框长高落定,免得把「草稿长高」
       // 误当成「打开文件」的影响。
       if (multiline) {
-        await page.getByRole('textbox', { name: '给 Mia 的消息' }).fill('第一行草稿\n第二行草稿\n第三行草稿\n第四行草稿')
+        await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('第一行草稿\n第二行草稿\n第三行草稿\n第四行草稿')
         await expect.poll(async () => (await form.boundingBox())?.height ?? 0, { message: `${label}:草稿长高落定` }).toBeGreaterThan(0)
       }
       const emptyPad = await transcriptPadBottom(page)
@@ -4058,7 +4337,8 @@ test('文件栏内缩:内缩静态一档,末条不与坞 / 遥测条 / 文件栏
       const emptyTranscriptBox = await page.locator('.transcript').boundingBox()
 
       await openSidebarIfNarrow(page, width)
-      await pinFileRow(page, README)
+      // 打开一个**悬浮**窗体(不占 tab、不改内容区):本用例要证明的是「打开文件前后转录区几何逐值不变」。
+      await clickFileRow(page, README)
       await closeSidebarIfOpen(page)
       await expect(bar).toHaveCount(1)
 
@@ -4230,7 +4510,7 @@ function bodyScroll(page: Page): Promise<number> {
   return page.locator('#file-panel-body').evaluate((element) => element.scrollWidth - element.clientWidth)
 }
 
-test('文件面板四态:loading / ready(有数据)/ empty / error 均可达;Esc 关闭面板', async ({ page }) => {
+test('文件面板四态:loading / ready(有数据)/ empty / error 均可达;Esc 收起悬浮窗体', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -4240,12 +4520,11 @@ test('文件面板四态:loading / ready(有数据)/ empty / error 均可达;Esc
   await expect(page.locator(FILE_PANEL)).toHaveAttribute('data-status', 'ready')
   await expect(page.locator(FILE_PANEL).locator('.file-line').first()).toBeVisible()
 
-  // Esc 收起面板 —— 文件仍留在栏上(关闭 ≠ 删除)。
+  // Esc 收起**悬浮**窗体(不占 tab)→ 条上仍无文件项;再点树行即原样恢复(关闭 ≠ 删除)。
   await page.keyboard.press('Escape')
   await expect(page.locator(FILE_PANEL)).toHaveCount(0)
-  await expect(page.locator(FILE_TAB)).toHaveCount(1)
-  // 从栏上点回 → 面板重开。
-  await page.locator(FILE_TAB).first().click()
+  await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
+  await clickFileRow(page, README)
   await expect(page.locator(FILE_PANEL)).toHaveAttribute('data-status', 'ready')
 
   // empty:切到写作助手 → 展开 assets → 打开二进制文件(不可预览)。
@@ -4305,13 +4584,8 @@ test('文件面板:文件栏 tab 带状态芯片;面板打开时「回到底部�
   await openSidebarIfNarrow(page, 768)
   await clickFileRow(page, README)
   await closeSidebarIfOpen(page)
-  // 文件栏 tab 带上文件树里的状态芯片(README 是 modified)。
-  const chip = page.locator(`${FILE_TAB} .file-tab__chip`)
-  await expect(chip).toHaveCount(1)
-  await expect(chip).toHaveAttribute('data-state', 'modified')
-  await expect(chip).toHaveText('已修改')
 
-  // 面板打开时把转录上滚,让「回到底部」出现 —— 它必须落在面板**之下**(不被遮挡),
+  // 悬浮窗体打开时:把转录上滚,让「回到底部」出现 —— 它必须落在窗体**之下**(不被遮挡),
   // 且与坞、文件组在纵向次序上自上而下依次排开(坞已并入面板流内,不再是浮层)。
   await page.getByRole('log').focus()
   await page.keyboard.press('Home')
@@ -4333,6 +4607,13 @@ test('文件面板:文件栏 tab 带状态芯片;面板打开时「回到底部�
   const barBox = await page.locator(FILE_BAR).boundingBox()
   expect(barBox, '文件组有几何盒').not.toBeNull()
   if (barBox !== null) expect(barBox.y + barBox.height, '文件组在坞之上').toBeLessThanOrEqual(dockBox.y + 1)
+
+  // 停靠之后:文件栏 tab 带上文件树里的状态芯片(README 是 modified)。
+  await dockLastFloating(page)
+  const chip = page.locator(`${FILE_TAB} .file-tab__chip`)
+  await expect(chip).toHaveCount(1)
+  await expect(chip).toHaveAttribute('data-state', 'modified')
+  await expect(chip).toHaveText('已修改')
 })
 
 // ============================================================================
@@ -4358,15 +4639,17 @@ function panelRectOf(page: Page, path: string): Promise<Rect> {
   })
 }
 
-// 关掉**全部**文件窗口(多窗口下一次 Esc 只关聚焦的那一个):按到没有窗口为止。
-// 用 Esc 而不是点条上的切换钮 —— 它顺便顺带验证了「Esc 关窗口 ≠ 关标签」这条语义。
+// 关掉**全部悬浮**窗体(多窗口下一次 Esc 只关聚焦的那一个):按到没有悬浮窗为止。
+// 停靠窗体不吃 Esc(它是区域内容区里的一块,不覆盖别的浮层),故这里只针对悬浮窗体 ——
+// 会盖住下拉 / 别的浮层的正是它们。
 async function closeAllFileWindows(page: Page): Promise<void> {
   for (let guard = 0; guard < 12; guard += 1) {
-    if (await page.locator(FILE_PANEL).count() === 0) return
+    const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+    if (await floating.count() === 0) return
     await page.keyboard.press('Escape')
     await page.waitForTimeout(40)
   }
-  expect(await page.locator(FILE_PANEL).count(), '窗口都关掉了').toBe(0)
+  expect(await page.locator(`${FILE_PANEL}[data-mode="floating"]`).count(), '悬浮窗体都关掉了').toBe(0)
 }
 
 // 窗口的**下边界**(= 输入框顶 − 回到底部钮的预留 − 一档外边距),与 file-panel.vue 的 bottomLimit 同口径。
@@ -4496,29 +4779,21 @@ test('文件面板拖动:位置改变、四边钳进转录区、双击复位默�
   expect(moved.width, '拖动:宽不变').toBeCloseTo(reset.width, 0)
   expect(moved.height, '拖动:高不变').toBeCloseTo(reset.height, 0)
 
-  // ② 向四边拖出界 → 被钳回(临界值:0 与 区域 − 尺寸)。
-  //    先把窗口从默认位置拖到右下角(位移留在视口内);**再**做那次「拖出视口左上角」的极端拖拽 ——
-  //    顺序如此是刻意的:指针停在视口外时,部分引擎不再投递后续指针事件(webkit 实测),
-  //    故把「出界」留到最后一步。
-  box = await header.boundingBox()
-  if (box === null) return
-  await dragFromTo(page, box.x + box.width / 2, box.y + box.height / 2, 400, 400)
-  const clampedBottomRight = await panelRectInArea(page)
-  console.log(`[panel drag] 拖 +400,+400 → ${JSON.stringify(clampedBottomRight)}`)
-  const live = await transcriptAreaRect(page)
+  // ② 边缘钳制:拖动到**区域右 / 下边缘带**现在会触发切分(落点语义已统一 —— 拖悬浮窗体与拖 tab
+  //    共用同一个解析器,见 regions.spec 的切分 / 并入用例),故「拖到边缘被钳回」这一步改用
+  //    **方向键**核:键盘与拖动共用同一套平移钳制,且键盘路径完全不触发落点。
+  await header.focus()
+  await expect(header).toBeFocused()
+  for (let step = 0; step < 24; step += 1) await page.keyboard.press('Shift+ArrowRight')
+  await expect.poll(async () => { const rect = await panelRectInArea(page); return Math.round(rect.x + rect.width) }, { message: '右缘贴到视口内边距' }).toBe(Math.round(area.width - PANEL_MARGIN))
+  for (let step = 0; step < 24; step += 1) await page.keyboard.press('Shift+ArrowDown')
   const floor = await panelBottomLimit(page)
-  const topEdge = await panelTopLimit(page)
-  const rightEdge = clampedBottomRight.x + clampedBottomRight.width
-  const bottomEdge = clampedBottomRight.y + clampedBottomRight.height
-  console.log(`[panel drag] 右缘 ${rightEdge.toFixed(1)} / 视口右缘内边距 ${(live.width - PANEL_MARGIN).toFixed(1)} · 下缘 ${bottomEdge.toFixed(1)} / 视口下缘内边距 ${floor.toFixed(1)} · 顶边 ${clampedBottomRight.y.toFixed(1)} / 顶部行下沿 ${topEdge.toFixed(1)}`)
-  expect(rightEdge, '右缘不越出视口').toBeLessThanOrEqual(live.width - PANEL_MARGIN + 1)
-  expect(rightEdge, '右缘确实贴到视口').toBeGreaterThanOrEqual(live.width - PANEL_MARGIN - 16)
-  // 下界已去掉:能一路走到**视口下缘**(留一档外边距)——这正是用户两次反馈的那条。
-  expect(bottomEdge, '下缘不越出视口').toBeLessThanOrEqual(floor + 1)
-  expect(bottomEdge, '下缘确实能贴到视口下缘').toBeGreaterThanOrEqual(floor - 16)
-  // 四条边都可自由到达(上界也已去掉):顶边不再受顶部行下沿约束。
-  expect(clampedBottomRight.y, '顶边不受顶部行下沿约束(可以更靠上)').toBeGreaterThanOrEqual(PANEL_MARGIN - 1)
-  console.log(`[panel drag] 顶部行下沿 ${topEdge.toFixed(1)}(仅供参考:上界已去掉,不再约束)`);
+  await expect.poll(async () => { const rect = await panelRectInArea(page); return Math.round(rect.y + rect.height) }, { message: '下缘贴到视口内边距' }).toBe(Math.round(floor))
+  const clampedBottomRight = await panelRectInArea(page)
+  console.log(`[panel drag] 方向键撞右 / 下缘 → ${JSON.stringify(clampedBottomRight)}`)
+  // 平移不改尺寸(拖动 / 方向键共用同一套 clampRect:只平移,不压盒子)。
+  expect(clampedBottomRight.width, '边缘钳制:宽不变').toBeCloseTo(reset.width, 0)
+  expect(clampedBottomRight.height, '边缘钳制:高不变').toBeCloseTo(reset.height, 0)
 
   // 再往左上撞到钳制面 → 被钳回内边距。
   // 这里**只做横向拖拽**:位移大到足以撞到左缘,指针又全程停在视口内且不离开窗口的横向范围 ——
@@ -4551,9 +4826,7 @@ test('文件面板拖动:位置改变、四边钳进转录区、双击复位默�
   }
 
   // 视口收缩后**重新钳一次**(浮动窗口最经典的缺陷:视口变小后窗口留在界外)。
-  box = await header.boundingBox()
-  if (box === null) return
-  await dragFromTo(page, box.x + box.width / 2, box.y + box.height / 2, 400, 400)
+  // 此刻窗口贴在左上内边距,收缩到 900×700 后仍在界内 —— 但这两个尺寸都必须被重新钳过。
   await page.setViewportSize({ width: 900, height: 700 })
   await expect.poll(async () => {
     const rect = await panelRectInArea(page)
@@ -4561,20 +4834,16 @@ test('文件面板拖动:位置改变、四边钳进转录区、双击复位默�
   }, { message: '视口收缩后窗口被重新钳入' }).toBe(true)
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
 
-  // ③ 双击标题栏 → 复位默认几何(实测值 = 打开时的默认几何)。
-  await header.dblclick({ position: { x: 200, y: 20 } })
-  await page.waitForTimeout(200)
-  const restored = await panelRectInArea(page)
-  console.log(`[panel drag] 双击复位 → ${JSON.stringify(restored)}`)
-  await expectPanelRect(page, { x: reset.x, y: reset.y, width: reset.width, height: reset.height }, '双击复位默认几何')
-
-  // ④ 键盘:方向键按步长移动,Shift 大步长。
+  // ③ (原「双击标题栏 → 复位默认几何」已删除:双击标题栏这一手势在本单元改指「停靠到内容区」,
+  //    「复位几何」这个能力随之不存在了 —— 见本单元的状态转换表与悬浮窗体一节的说明。)
+  // ④ 键盘:方向键按步长移动,Shift 大步长。基线取当前位置(不再有「复位」可回)。
   // 几何写入样式是同步的,但**布局**要到下一帧才反映出来(实测:紧接按键读 rect 会读到上一帧),
   // 故这里用 expect.poll 等它落定。
+  const base = await panelRectInArea(page)
   await header.focus()
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowDown')
-  await expectPanelRect(page, { x: reset.x + 16, y: reset.y + 16 }, '方向键各移 16')
+  await expectPanelRect(page, { x: base.x + 16, y: base.y + 16 }, '方向键各移 16')
   const stepOnce = await panelRectInArea(page)
   console.log(`[panel drag] 方向键 +16 → ${JSON.stringify(stepOnce)}`)
   await page.keyboard.press('Shift+ArrowRight')
@@ -4676,53 +4945,56 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   }, { message: 'aria-valuenow 与渲染宽一致' }).toBeLessThanOrEqual(1)
 })
 
-test('文件栏按 (Agent, 项目) 分域:换会话不清空、换项目即换域、切回来原样恢复', async ({ page }) => {
+test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟着分域走,切回来原样恢复', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  await pinFileRow(page, README)
+  // 一个**悬浮**窗(带自己的几何)+ 一个**停靠** tab(占条):两种归属都要按分域保存与恢复。
+  await clickFileRow(page, README)
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  const header = floating.locator('.file-panel__meta')
+  const headerBox = await header.boundingBox()
+  expect(headerBox, '悬浮窗标题栏有几何盒').not.toBeNull()
+  if (headerBox !== null) await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 40, 20)
+  const placed = await panelRectOf(page, README)
+  console.log(`[file domain] 摆好的悬浮窗 ${JSON.stringify(placed)}`)
+  await clickFileRow(page, PROGRESS)
+  await dockLastFloating(page)
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
 
-  // 先把这个文件的窗口摆到一个非默认位置:窗口几何要跟着**分域**走,切走再切回必须原样恢复。
-  const header = page.locator('.file-panel__meta')
-  const headerBox = await header.boundingBox()
-  expect(headerBox, '面板标题栏有几何盒').not.toBeNull()
-  if (headerBox !== null) await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 40, 20)
-  const placed = await panelRectInArea(page)
-  console.log(`[file domain] 摆好的窗口 ${JSON.stringify(placed)}`)
-
-  // 换会话(同项目、同 Agent = 同一分域)→ 文件栏不变。
+  // 换会话(同项目、同 Agent = 同一分域)→ 悬浮窗与 tab 都不变。
   await clickTab(page, HEADINGS['zh-CN'].roadmap)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
-  await expect(page.locator(`${FILE_TAB}[data-file-path="README.md"]`), '换会话后分域不变,文件栏不变').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '换会话后分域不变').toHaveCount(1)
+  await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '换会话后 tab 不变').toHaveCount(1)
 
-  // 换项目(knowledge-base)—— 分域换成新的一对 → **条上只剩新域的内容**(旧域的文件不该再出现)。
+  // 换项目(knowledge-base)—— 分域换成新的一对 → 条上与浮层里都不再有旧域的东西。
+  // 新域没有会话 ⇒ 根区域既无成员又无子区域 ⇒ 引导页(没有转录,故不能等 role="log")。
   await page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await waitForStable(page, 'empty')
+  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
   await expect(page.locator(FILE_TAB), '换项目即换域,条上不再有旧域的文件').toHaveCount(0)
+  await expect(page.locator(FILE_PANEL), '浮层里也不再有旧域的窗口').toHaveCount(0)
   // 侧栏仍是范围指示的一半(本批不做 Agent 栏,故只断言侧栏这一半)。
   await expect(page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
 
-  // 在新域里开一个文件 → 条上只有它。
+  // 在新域里开一个文件并停靠 → 条上只有它。
   const tree = page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-tree')
   await tree.locator('.entry-row[data-kind="directory"]', { hasText: 'docs' }).first().locator('.entry-row__button').click()
-  await pinFileRow(page, 'index.md')
+  await openDockedFile(page, 'index.md')
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
   const labels = await fileTabLabels(page)
   console.log(`[file bar] 新域 tab ${JSON.stringify(labels)}`)
   expect(labels, '新域只有新域的文件').toEqual(['index.md'])
 
-  // 切回第一个项目 → 旧域**原样恢复**(文件还在条上,不是被关掉了)。
+  // 切回第一个项目 → 旧域**原样恢复**:tab 与悬浮窗都在,悬浮窗回到记忆的几何。
   await page.locator('.project-item', { hasText: PROJECT_NAMES.planning[0] }).locator('.project-row__button').click()
   await waitForStable(page)
-  await expect(page.locator(`${FILE_TAB}[data-file-path="README.md"]`), '切回来旧域原样恢复').toHaveCount(1)
+  await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '切回来旧域的 tab 原样恢复').toHaveCount(1)
   await expect(page.locator(FILE_TAB), '恢复的是旧域那一份,不掺新域').toHaveCount(1)
-
-  // 窗口几何也**连同分域一起恢复**:面板回到刚才摆的位置,不是回到默认几何。
-  await expect(page.locator(FILE_PANEL)).toHaveCount(1)
-  await expect.poll(async () => Math.round((await panelRectInArea(page)).x), { message: '恢复的位置与原分域一致' }).toBe(Math.round(placed.x))
-  const restored = await panelRectInArea(page)
-  console.log(`[file domain] 恢复后的窗口 ${JSON.stringify(restored)}`)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '悬浮窗也原样恢复').toHaveCount(1)
+  await expect.poll(async () => Math.round((await panelRectOf(page, README)).x), { message: '悬浮窗恢复的位置与原分域一致' }).toBe(Math.round(placed.x))
+  const restored = await panelRectOf(page, README)
+  console.log(`[file domain] 恢复后的悬浮窗 ${JSON.stringify(restored)}`)
   expect(Math.abs(restored.y - placed.y), '纵向也一致').toBeLessThanOrEqual(1)
   expect(Math.abs(restored.width - placed.width), '宽度也一致').toBeLessThanOrEqual(1)
   expect(Math.abs(restored.height - placed.height), '高度也一致').toBeLessThanOrEqual(1)
@@ -4732,7 +5004,7 @@ test('文件 tab:主标签是文件名、条内不出现项目名(分域之后�
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  await pinFileRow(page, README)
+  await openDockedFile(page, README)
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
   const tab = page.locator(FILE_TAB).first()
 
@@ -4759,7 +5031,7 @@ test('文件 tab:主标签是文件名、条内不出现项目名(分域之后�
   await page.locator('.project-item', { hasText: PROJECT_NAMES.research[1] }).locator('.project-row__button').click()
   await expect(page.locator('.project-item', { hasText: PROJECT_NAMES.research[1] }).locator('.entry-row[data-kind="file"]', { hasText: README })).toBeVisible()
   await expect(page.locator(FILE_TAB), '换 Agent + 换项目 = 换域,条上先是空的').toHaveCount(0)
-  await pinFileRow(page, README)
+  await openDockedFile(page, README)
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
   const crossLabels = await fileTabLabels(page)
   console.log(`[file tab] 新域标签 ${JSON.stringify(crossLabels)}`)
@@ -4768,20 +5040,17 @@ test('文件 tab:主标签是文件名、条内不出现项目名(分域之后�
   expect(crossText, '新域条内同样不写项目名').not.toContain(PROJECT_NAMES.research[1])
 })
 
-test('多文件窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / 关窗 ≠ 关标签 / 下边界钳在输入框之上', async ({ page }) => {
+test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / Esc 收起 ≠ 删除 / 可覆盖输入区', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  for (const name of [README, PROGRESS, GITIGNORE]) await pinFileRow(page, name)
+  for (const name of [README, PROGRESS, GITIGNORE]) await clickFileRow(page, name)
   const panel = (path: string): Locator => page.locator(`${FILE_PANEL}[data-file-path="${path}"]`)
 
-  // ① 三个文件 = 三个**同时可见**的窗口(条上三个 aria-pressed=true 的切换按钮与之一一对应)。
+  // ① 三个文件 = 三个**同时可见的悬浮窗口**。悬浮窗体**不占 tab** —— 文件条上仍是空的
+  //    (它们不是区域成员,只有停靠窗体才上条)。
   await expect(page.locator(FILE_PANEL), '三个文件三个窗口').toHaveCount(3)
-  // 条上放不下的那一个进下拉(实测 @1280 文件项可见数为 2),故按可见数核对;可见的都应处于按下态
-  // (= 其窗口可见)。
-  const stripVisible = FILE_BAR_VISIBLE[1280]
-  await expect(page.locator(FILE_TAB)).toHaveCount(stripVisible)
-  await expect(page.locator(`${FILE_TAB}[aria-pressed="true"]`), '条上可见项都是按下态').toHaveCount(stripVisible)
+  await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
   for (const name of [README, PROGRESS, GITIGNORE]) await expect(panel(name), `${name} 的窗口在场`).toHaveCount(1)
   // **每个窗口渲染的是自己的内容**(不是骨架屏):内容按 (域, 路径) 各存一份,互不覆盖。
   for (const name of [README, PROGRESS, GITIGNORE]) {
@@ -4798,24 +5067,30 @@ test('多文件窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / �
   console.log(`[multi window] 三轮切换后骨架屏计数 ${await page.locator(`${FILE_PANEL}[data-status="loading"]`).count()}`)
 
   // ② 级联:新窗口按小偏移错开,不完全重叠(窗口管理器的惯例)。
+  const windowPositions = (): Promise<string[]> => page.locator(FILE_PANEL).evaluateAll((els) => els.map((el) => {
+    const rect = el.getBoundingClientRect()
+    return `${Math.round(rect.x)},${Math.round(rect.y)}`
+  }))
+  // 位置在焦点切换后会随级联序重算,故用 poll 等它落定(几何断言在本仓一律如此),不读瞬时值。
+  await expect.poll(async () => new Set(await windowPositions()).size, { message: '三个窗口位置两两不同(级联偏移生效)' }).toBe(3)
   const boxes = await page.locator(FILE_PANEL).evaluateAll((els) => els.map((el) => {
     const rect = el.getBoundingClientRect()
     return { path: el.getAttribute('data-file-path'), x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width) }
   }))
   console.log(`[multi window] 三个窗口 ${JSON.stringify(boxes)}`)
-  const distinctXY = new Set(boxes.map((box) => `${box.x},${box.y}`))
-  expect(distinctXY.size, '三个窗口位置两两不同(级联偏移生效)').toBe(3)
 
-  // ③ 聚焦置顶:点最下面那个窗口(README 最先开 → z 最小),它的 z 应变最大。
-  const zOf = (path: string): Promise<number> => panel(path).evaluate((el) => Number.parseInt(getComputedStyle(el).zIndex, 10))
-  const zBefore = { readme: await zOf(README), progress: await zOf(PROGRESS), gitignore: await zOf(GITIGNORE) }
-  console.log(`[multi window] 聚焦前 z ${JSON.stringify(zBefore)}`)
-  expect(zBefore.readme, '先开的那一个在最下').toBeLessThan(zBefore.gitignore)
+  // ③ 聚焦置顶:点最下面那个窗口(README 最先开 → 栈位最低),它的栈位应变最大。
+  // 层序由**数组顺序 / DOM 顺序**表达(整层窗口共用 --dl-z-overlay,前后关系靠 DOM 顺序),
+  // 故这里量的是它在 .file-panel 兄弟里的位次:位次越大越在上。
+  const stackIndexOf = (path: string): Promise<number> => panel(path).evaluate((el) => Array.from(document.querySelectorAll('.file-panel')).indexOf(el))
+  const stackBefore = { readme: await stackIndexOf(README), progress: await stackIndexOf(PROGRESS), gitignore: await stackIndexOf(GITIGNORE) }
+  console.log(`[multi window] 聚焦前栈位 ${JSON.stringify(stackBefore)}`)
+  expect(stackBefore.readme, '先开的那一个在最下').toBeLessThan(stackBefore.gitignore)
   // 点它**没被盖住**的那一条(级联向右下错开,故最下面那个窗口的左侧一条是露出来的);
   // 窗口的四周是 44px 的缩放手柄,点得离边远一点。
   const readmeBody = panel(README).locator('.file-panel__body')
   await readmeBody.click({ position: { x: 14, y: 120 } })
-  await expect.poll(async () => zOf(README), { message: '点谁谁在上' }).toBeGreaterThan(await zOf(GITIGNORE))
+  await expect.poll(async () => stackIndexOf(README), { message: '点谁谁在上' }).toBeGreaterThan(await stackIndexOf(GITIGNORE))
   await expect(panel(README)).toHaveAttribute('data-focused', 'true')
   await expect(panel(GITIGNORE)).toHaveAttribute('data-focused', 'false')
 
@@ -4840,17 +5115,22 @@ test('多文件窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / �
     expect(now?.y, `${other.path} 的窗口没被带着动`).toBe(other.y)
   }
 
-  // ⑤ 下边界:把窗口往右下拖到底 → 底边停在「输入框之上」,不遮输入框。
+  // ⑤ 下边界:把窗口推到右下角 → 底 / 右缘停在视口内边距上。
+  //    这里用**方向键**而不是拖动:拖到区域边缘带现在会触发切分(落点语义统一,见 regions.spec),
+  //    而键盘与拖动共用同一套平移钳制,且完全不触发落点。
   const floor = await panelBottomLimit(page)
-  const topEdge = await panelTopLimit(page)
-  const headerBox = await panel(README).locator('.file-panel__meta').boundingBox()
-  if (headerBox !== null) await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 400, 400)
+  const areaForClamp = await transcriptAreaRect(page)
+  const readmeHeader = panel(README).locator('.file-panel__meta')
+  await readmeHeader.focus()
+  await expect(readmeHeader).toBeFocused()
+  for (let step = 0; step < 20; step += 1) await page.keyboard.press('Shift+ArrowRight')
+  for (let step = 0; step < 20; step += 1) await page.keyboard.press('Shift+ArrowDown')
   const dragged = await panelRectOf(page, README)
-  console.log(`[multi window] 拖到右下 → ${JSON.stringify(dragged)} / 视口下缘内边距 ${floor.toFixed(1)} / 顶部行下沿 ${topEdge.toFixed(1)}`)
-  // 下界已去掉:窗户能走到视口下缘附近(留一档外边距)。
+  console.log(`[multi window] 键盘推到右下 → ${JSON.stringify(dragged)} / 视口下缘内边距 ${floor.toFixed(1)}`)
+  // 下界 / 右界已去掉:窗口能走到视口下 / 右缘附近(留一档外边距)。
   expect(dragged.y + dragged.height, '能到达视口下缘').toBeLessThanOrEqual(floor + 1)
+  expect(dragged.x + dragged.width, '能到达视口右缘').toBeLessThanOrEqual(areaForClamp.width - PANEL_MARGIN + 1)
   expect(dragged.y, '顶边不受顶部行下沿约束').toBeGreaterThanOrEqual(PANEL_MARGIN - 1)
-  console.log(`[multi window] 顶部行下沿 ${topEdge.toFixed(1)}(上界已去掉,仅供参考)`)
   // ---- 两层 z 模型的机械证明:坞并入第 1 层(应用外壳)之后,第 2 层(文件窗体)可以盖住它。
   //      先把窗口推到能压住侧栏 / 标签条的纬度,逐点 elementFromPoint;再把它推到**输入区纬度**,
   //      证明输入框中心的命中从「输入区」翻转为「文件窗体」。 ----
@@ -4897,7 +5177,8 @@ test('多文件窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / �
   expect(zValues.zDock, '输入坞已回到第 1 层(不设 z-index)').toBe('auto')
   // 此刻窗体未盖住输入区(停在左上),点输入框仍可聚焦。
   await page.locator('.composer-form textarea').click()
-  expect(await page.evaluate(() => document.activeElement?.id ?? ''), '未被覆盖时输入框仍可聚焦').toBe('workspace-composer')
+  // 未被覆盖时输入框仍可聚焦(输入框 id 按会话唯一:workspace-composer-<sessionId>)。
+  expect(await page.evaluate(() => document.activeElement?.id ?? ''), '未被覆盖时输入框仍可聚焦').toMatch(/^workspace-composer-/)
 
   // 把窗体推到**输入区纬度**:坞在第 1 层,故输入框中心的命中翻转为文件窗体(用户要的「能被文件窗体覆盖」)。
   await panel(README).locator('.file-panel__meta').focus()
@@ -4948,27 +5229,26 @@ test('多文件窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / �
   await expect.poll(async () => Math.round((await panelRectOf(page, README)).y), { message: '方向键能移动它' }).toBe(PANEL_MARGIN + 16)
   // 通路③(Esc 隐藏 + 条上按钮点回来)在下面 ⑦ 里按「当前聚焦窗口」统一核 —— 那里不依赖具体是哪一个。
 
-  // ⑦ Esc 关掉**当前聚焦**的窗口:窗口少一个,但**标签仍在**条上(关窗 ≠ 关标签)。
+  // ⑦ Esc 收起**当前聚焦的悬浮窗体**:悬浮窗体不占 tab,故条上本来就为空。
   await page.keyboard.press('Escape')
-  await expect.poll(async () => page.locator(FILE_PANEL).count(), { message: 'Esc 关掉一个窗口' }).toBe(2)
-  await expect(page.locator(FILE_TAB), '三个标签一个不少').toHaveCount(stripVisible)
-  // 关闭全部窗口 → 下拉里三行**全部**未按下(条上只放得下两项,故按下拉核对全集)。
+  await expect.poll(async () => page.locator(`${FILE_PANEL}[data-mode="floating"]`).count(), { message: 'Esc 关掉一个窗口' }).toBe(2)
+  await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
+  // 全部收起(悬浮窗体只吃 Esc;停靠窗体才靠「对话让位 / 关 tab」)。
   await closeAllFileWindows(page)
-  await openSwitcher(page)
-  await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
-  await expect(page.locator('.conversation-row[data-file-option]'), '三个标签都在下拉里').toHaveCount(3)
-  await expect(page.locator('.conversation-row[data-file-option][aria-pressed="true"]'), '没有窗口可见时全部未按下').toHaveCount(0)
-  // 点其中一行 → 它的窗口按原样回来(几何 / 层序都还留着)。
-  await page.locator('.conversation-row[data-file-option]', { hasText: README }).click()
-  await expect.poll(async () => page.locator(FILE_PANEL).count(), { message: '点回来即重新显示' }).toBe(1)
-  await expect(panel(README), '回来的正是那一个').toHaveCount(1)
+  await expect(page.locator(FILE_PANEL), '全部收起后一个浮层都不剩').toHaveCount(0)
+  // 从文件树再点开 README → 它按**记忆的几何**回来(关闭 ≠ 删除:rect 在收起期间原样留着)。
+  await clickFileRow(page, README)
+  await expect(panel(README), '点回来即重新显示').toHaveCount(1)
+  await expect.poll(async () => Math.round((await panelRectOf(page, README)).y), { message: '回到被收起时的几何' }).toBe(PANEL_MARGIN + 16)
+  await expect.poll(async () => Math.round((await panelRectOf(page, README)).x), { message: '横向也回到被收起时的几何' }).toBe(PANEL_MARGIN)
 })
 
 test('文件面板:滚轮 / 横向滚动都隔离在面板内,不穿透到背后页面与转录区', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  await pinFileRow(page, README)
+  // 用**悬浮**窗体:本用例要把它缩到最小以造出溢出,只有悬浮窗体有缩放手柄。
+  await clickFileRow(page, README)
   await expect(page.locator(FILE_PANEL)).toBeVisible()
   const body = page.locator('#file-panel-body')
   await expect(body).toBeVisible()
@@ -5080,8 +5360,8 @@ test('最近关闭:只列**本域**的、两段式行(域内目录路径)、点�
   await login(page)
   await waitForStable(page)
   // weekly-report 里开两个再全关掉(留进本域的「最近关闭」)。
-  await pinFileRow(page, README)
-  await pinFileRow(page, PROGRESS)
+  await openDockedFile(page, README)
+  await openDockedFile(page, PROGRESS)
   for (let index = 0; index < 2; index += 1) {
     await page.locator('.file-tab-slot').first().hover()
     await page.locator('.file-tab-slot').first().locator('.file-tab-close').click()
@@ -5149,7 +5429,7 @@ test('下拉「文件」页:列出全部已打开的文件(含条上可见的)�
   await closeSwitcher(page)
 
   // ② 仅 1 个打开文件、0 个关闭:这一页里**恰 1 行**,空文案不存在。
-  await pinFileRow(page, README)
+  await openDockedFile(page, README)
   await closeAllFileWindows(page)
   await openSwitcher(page)
   await fileFilter.click()
@@ -5167,10 +5447,10 @@ test('下拉「文件」页:列出全部已打开的文件(含条上可见的)�
   // ③ 3 打开 + 1 关闭 → 4 行,分组正确(已打开 · 3 / 最近关闭)。
   //    注意:顶部行里一次只显示得下若干项(实测 @1600 = 3),**不是**全部—— 溢出项进下拉,故
   //    打开集一律按**下拉**核对,不按条上的可见项数核对。
-  await pinFileRow(page, PROGRESS)
-  await pinFileRow(page, GITIGNORE)
+  await openDockedFile(page, PROGRESS)
+  await openDockedFile(page, GITIGNORE)
   await page.locator('.project-item').nth(0).locator('.project-tree').locator('.entry-row[data-kind="directory"]', { hasText: 'notes' }).first().locator('.entry-row__button').click()
-  await pinFileRow(page, '2026-W40.md')
+  await openDockedFile(page, '2026-W40.md')
   const closing = await page.locator('.file-tab-slot').first().locator('.file-tab__label').innerText()
   await page.locator('.file-tab-slot').first().hover()
   await page.locator('.file-tab-slot').first().locator('.file-tab-close').click()
@@ -5339,7 +5619,8 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
   await expect(page.locator('.workspace-page'), '指针在没有 contain 的区域 → 守卫挂上').toHaveAttribute('data-swipe-guard', 'armed')
 
   // ④ workspace 内自己的滚动容器一律 contain(根禁导航 + 局部禁链式传播 = 页面侧的完整覆盖)。
-  await pinFileRow(page, README)
+  // 用**悬浮**窗体:本用例要缩到最小以造出横向可滚区,只有悬浮窗体有缩放手柄。
+  await clickFileRow(page, README)
   await expect(page.locator(FILE_PANEL)).toBeVisible()
   // 默认不换行(white-space: pre),但面板默认宽度足够宽,最长行仍放得下 —— 把面板缩到最小宽度,
   // 内容区才真的出现横向可滚区,「守卫不误伤合法横向滚动」这条才有意义。
@@ -5429,3 +5710,454 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
   expect(homeStyles.htmlY, '首页 html 纵向恢复默认').not.toBe('none')
   expect(homeStyles.bodyX, '首页 body 恢复默认').not.toBe('none')
 })
+
+// ============================================================================
+// 向下拖出 tab → 悬浮窗体;悬浮窗体拖到顶部 tab 条 → 吸附停靠
+// ============================================================================
+
+// 按住某点、**分多步**移到目标点(不要一步到位:一步到位只会让轴向锁定与落点判定各走一次极端分支)。
+async function pressDragTo(page: Page, fromX: number, fromY: number, toX: number, toY: number, steps = 16): Promise<void> {
+  await page.mouse.move(fromX, fromY)
+  await page.mouse.down()
+  await page.mouse.move(toX, toY, { steps })
+}
+
+test('向下拖出 tab:越过条下沿 → 摘掉条上的 tab 并出悬浮窗体(跟手);拖回条内 → 撤销;再拖出松手 → 保持悬浮', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+
+  const slotBox = await page.locator('.file-tab-slot').first().boundingBox()
+  const stripBox = await page.locator(FILE_TOOLBAR).boundingBox()
+  expect(slotBox, 'tab 有几何盒').not.toBeNull()
+  expect(stripBox, 'tab 条有几何盒').not.toBeNull()
+  if (slotBox === null || stripBox === null) return
+  const grabX = slotBox.x + slotBox.width / 2
+  const grabY = slotBox.y + slotBox.height / 2
+  const stripBottom = stripBox.y + stripBox.height
+  const tearY = stripBottom + 40
+
+  // 向下拖过条下沿 40px(判定阈值是 24px)→ 拆出。DOM 侧的两条断言就是「不变量④」的投影:
+  // 一个 floating 窗体不得同时留在任何区域的 members 里(= 条上不该还有它的 tab)。
+  await pressDragTo(page, grabX, grabY, grabX, tearY)
+  await expect(page.locator(FILE_TAB), '拆出后条上不再有它').toHaveCount(0)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '内容成了悬浮窗体').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '拆出即置顶聚焦').toHaveAttribute('data-focused', 'true')
+  await expect(page.locator('.workspace-live'), '拆出经 role=status 播报').toHaveText(/拆出.*README\.md/)
+
+  // 跟手:指针再向下 60px,窗体跟着走 —— 证明初始矩形是按指针(减抓取偏移)算的,不是默认几何。
+  const before = await panelRectOf(page, README)
+  await page.mouse.move(grabX, tearY + 60)
+  const after = await panelRectOf(page, README)
+  console.log(`[tear out] 跟手 ${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+  expect(Math.round(after.y - before.y), '窗体随指针下移相同的量').toBe(60)
+
+  // 迟滞:回到条下沿 12px 以内 → 自动撤销(松手前都可逆)。撤销要回到**拆出前的样子** ——
+  // 它此前是停靠在内容区里的活动项,故条上的 tab 与内容区里的停靠窗体都应原样回来。
+  await page.mouse.move(grabX, stripBottom + 6)
+  await expect(page.locator(FILE_TAB), '拖回条内 → tab 复原').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '悬浮窗体撤掉').toHaveCount(0)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '停靠窗体原样回来').toHaveCount(1)
+  await expect(page.locator('.workspace-live'), '撤销经 role=status 播报').toHaveText(/README\.md.*放回/)
+
+  // 再拖出去并**松手** → 保持悬浮(tab 不回来)。
+  await page.mouse.move(grabX, tearY, { steps: 8 })
+  await expect(page.locator(FILE_TAB), '又一次拆出').toHaveCount(0)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`)).toHaveCount(1)
+  await page.mouse.up()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '松手后保持悬浮').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '条上仍没有它').toHaveCount(0)
+
+  // 松手时把落定几何记进当前分域:切到别的 Agent 再切回来,它按原样回来(不是又回到默认位置)。
+  const placed = await panelRectOf(page, README)
+  await selectAgent(page, AGENT_NAMES['zh-CN'].research)
+  await expect(page.locator(FILE_PANEL), '换分域 → 它的窗体不在场').toHaveCount(0)
+  await selectAgent(page, AGENT_NAMES['zh-CN'].planning)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '切回来 → 悬浮窗体原样回来').toHaveCount(1)
+  await expect.poll(async () => Math.round((await panelRectOf(page, README)).y), '几何按落定值恢复').toBe(Math.round(placed.y))
+})
+
+test('拆出的非拖拽通路:tab 上的按钮可点、Enter 即把该文件拆成悬浮窗体', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+
+  // WCAG 2.5.7:拖拽不能是唯一入口 —— 每枚 tab 上有一枚真按钮,带 aria-label。
+  // 该钮**不在 Tab 序里**(tabindex=-1):键盘等价通路改由快捷键 Ctrl/Cmd+Shift+M 承担,
+  // WCAG 2.5.7 要求的是「存在非拖拽入口」,不要求在 Tab 序里(见 regions.spec 的快捷键用例)。
+  const pop = page.locator('.file-tab-pop')
+  await expect(pop, '每一枚 tab 都带一个拆出按钮').toHaveCount(1)
+  await expect(pop).toHaveAttribute('aria-label', '把 README.md 拆出为悬浮窗口')
+  await expect(pop, '已移出 Tab 序').toHaveAttribute('tabindex', '-1')
+  await pop.focus()
+  await expect(pop, '可键盘聚焦(程序化)').toBeFocused()
+  await page.keyboard.press('Enter')
+
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), 'Enter 即拆出为悬浮窗体').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '条上不再有它').toHaveCount(0)
+  await expect(page.locator('.workspace-live')).toHaveText(/拆出.*README\.md/)
+  // 焦点交给新窗体的标题栏(键盘操作者不丢位置)。
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"] .file-panel__meta`)).toBeFocused()
+})
+
+test('吸附:悬浮窗体拖到顶部 tab 条上 → 整条高亮 + 落点提示(不遮挡命中区);移出即消失;松手停靠回条上', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await clickFileRow(page, README)
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(floating).toHaveCount(1)
+
+  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  const headingBox = await page.locator('.conversation-heading').boundingBox()
+  expect(headerBox, '标题栏有几何盒').not.toBeNull()
+  expect(headingBox, '顶部条有几何盒').not.toBeNull()
+  if (headerBox === null || headingBox === null) return
+  const fromX = headerBox.x + 120
+  const fromY = headerBox.y + 20
+  const toX = headingBox.x + headingBox.width / 2
+  const toY = headingBox.y + headingBox.height / 2
+
+  // 按住标题栏、分多步拖进顶部条。
+  await page.mouse.move(fromX, fromY)
+  await page.mouse.down()
+  await page.mouse.move(toX, toY, { steps: 12 })
+
+  await expect(page.locator('.conversation-heading'), '整条 tab 条描边高亮').toHaveClass(/is-drop-target/)
+  const hint = page.locator('.conversation-heading__dock-hint')
+  await expect(hint, '出现落点提示').toBeVisible()
+  await expect(hint, '文案说清松手会发生什么').toHaveText('在此处松手可以最大化并重新占用这个 Tab 位置')
+  await expect(hint, '提示不接收指针 —— 不遮挡条的命中区').toHaveCSS('pointer-events', 'none')
+  await expect(page.locator('.workspace-live'), '落点经 role=status 播报').toHaveText(/松手将把.*README\.md.*停靠/)
+  // 提示本身也不与条重叠(挂在条下沿之下),故不占条的命中区。
+  const hintBox = await hint.boundingBox()
+  expect(hintBox, '提示有几何盒').not.toBeNull()
+  if (hintBox !== null) expect(hintBox.y, '提示落在条下沿之下').toBeGreaterThanOrEqual(headingBox.y + headingBox.height - 1)
+
+  // 指针离开条的矩形 → 提示淡出消失(条不再高亮)。
+  await page.mouse.move(toX, headingBox.y + headingBox.height + 260, { steps: 12 })
+  await expect(page.locator('.conversation-heading'), '离开后不再高亮').not.toHaveClass(/is-drop-target/)
+  await expect(hint, '提示消失').toHaveCount(0)
+
+  // 再进条并**松手** → 插回区域成员、占一个 tab、成为当前项。
+  await page.mouse.move(toX, toY, { steps: 12 })
+  await expect(hint, '回到条上提示再现').toBeVisible()
+  await page.mouse.up()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '停靠进区域内容区').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '不再是悬浮窗体').toHaveCount(0)
+  await expect(page.locator(FILE_TAB), '占回一个 tab').toHaveCount(1)
+  await expect(page.locator(`${FILE_TAB}[data-file-path="README.md"][aria-pressed="true"]`), '它是当前项').toHaveCount(1)
+  await expect(page.locator('.conversation-heading'), '松手后不再高亮').not.toHaveClass(/is-drop-target/)
+  await expect(hint, '松手后提示消失').toHaveCount(0)
+})
+
+test('Escape 取消:拖出途中按 Esc 撤销拆出;悬浮窗体拖到条上按 Esc 放弃吸附并回到按下时的几何', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+
+  // ① 拖出途中 Esc:撤销拆出、tab 复原(松手前都可逆)。
+  const slotBox = await page.locator('.file-tab-slot').first().boundingBox()
+  const stripBox = await page.locator(FILE_TOOLBAR).boundingBox()
+  expect(slotBox, 'tab 有几何盒').not.toBeNull()
+  expect(stripBox, 'tab 条有几何盒').not.toBeNull()
+  if (slotBox === null || stripBox === null) return
+  await pressDragTo(page, slotBox.x + slotBox.width / 2, slotBox.y + slotBox.height / 2, slotBox.x + slotBox.width / 2, stripBox.y + stripBox.height + 40)
+  await expect(page.locator(FILE_TAB), '已拆出').toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.locator(FILE_TAB), 'Esc 撤销拆出、tab 复原').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '悬浮窗体撤掉').toHaveCount(0)
+  await page.mouse.up()
+  await expect(page.locator(FILE_TAB), '松手后仍是 tab').toHaveCount(1)
+
+  // ② 悬浮窗体拖到条上再 Esc:放弃吸附,几何回到按下时的那一份。
+  await page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__placement`).click()
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(floating, '停靠 → 悬浮').toHaveCount(1)
+  const before = await panelRectOf(page, README)
+  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  const headingBox = await page.locator('.conversation-heading').boundingBox()
+  expect(headerBox, '标题栏有几何盒').not.toBeNull()
+  expect(headingBox, '顶部条有几何盒').not.toBeNull()
+  if (headerBox === null || headingBox === null) return
+  await page.mouse.move(headerBox.x + 120, headerBox.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(headingBox.x + headingBox.width / 2, headingBox.y + headingBox.height / 2, { steps: 12 })
+  await expect(page.locator('.conversation-heading'), '已落在条上').toHaveClass(/is-drop-target/)
+
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.conversation-heading'), 'Esc 后提示收起').not.toHaveClass(/is-drop-target/)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '仍是悬浮窗体').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '没有吸附').toHaveCount(0)
+  const after = await panelRectOf(page, README)
+  console.log(`[tear escape] 几何 ${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+  expect(Math.round(after.y), '几何回到按下时的那一份').toBe(Math.round(before.y))
+  await page.mouse.up()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '松手也不吸附').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '条上仍没有它').toHaveCount(0)
+})
+
+// ============================================================================
+// 单元 C1:对话也是窗体 —— 与文件走同一条窗体机制
+// ============================================================================
+
+// 悬浮的**对话**窗体(chat-panel)与对话 tab 上的「拆出」钮。两者都是本轮新增的挂点。
+const CHAT_PANEL = '.chat-panel'
+const CHAT_TAB_POP = '.tab-pop'
+
+test('对话窗体①:每个会话都在条上、都带成员化的拆出入口;成员顺序 = 条上顺序且不被重算冲掉', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 默认项目 6 条会话全在条上,每条都带「拆出」钮 —— 只有**成员化的窗体**才有这个入口
+  // (它不是所有会话都具有的装饰,而是「这个 tab 背后有一个窗体」的机械证据)。
+  await expect(page.locator(TAB), '每个会话都在条上').toHaveCount(SESSIONS_IN_DEFAULT_PROJECT)
+  await expect(page.locator(CHAT_TAB_POP), '每条都带拆出入口').toHaveCount(SESSIONS_IN_DEFAULT_PROJECT)
+
+  // 条上顺序 = 区域成员的对话顺序(组件不再另存一份):拖第 2 条到第 4 位 → 顺序被写回成员。
+  const before = await tabIds(page)
+  await dragTab(page, 1, 3)
+  const expected = [...before]
+  const moved = expected.splice(1, 1)[0] ?? null
+  expected.splice(3, 0, moved)
+  await expect.poll(() => tabIds(page), { message: '拖拽把新顺序写回成员' }).toEqual(expected)
+
+  // 关键:此后往成员数组里**加一个文件成员**(停靠打开一个文件)——对话的相对顺序不被
+  // 「每次渲染重算所有会话」冲掉(成员是增量维护的)。文件组占走顶部行的宽度后,条上可见的
+  // 对话 tab 会少几个(溢出的收进 ▾ 菜单),故这里核对**可见的那一段**仍是成员顺序的前缀。
+  await openDockedFile(page, README)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+  const visibleAfter = await tabIds(page)
+  expect(visibleAfter.length, '条被文件组挤窄后仍有可见对话 tab').toBeGreaterThan(0)
+  expect(visibleAfter, '可见段 = 成员顺序的前缀(顺序未被重算冲掉)').toEqual(expected.slice(0, visibleAfter.length))
+})
+
+test('对话窗体②③:向下拖对话 tab → 悬浮对话窗体(含着它自己的输入坞与草稿);拖回条上 → 停靠占 tab', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 先在**活动对话**的输入框里打一段草稿 —— 草稿随会话存活,拆出后必须跟着窗体走。
+  const activeInput = page.locator('.composer-dock textarea').first()
+  await activeInput.fill('拆出后仍在的草稿')
+  await expect(activeInput).toHaveValue('拆出后仍在的草稿')
+
+  // 拖**活动**那条 tab(第 1 条)向下拆出 —— 走与文件完全相同的那条内容无关的路径。
+  const slot = page.locator('.tab-slot').first()
+  const title = await slot.locator('.conversation-tab__label').innerText()
+  const slotBox = await slot.boundingBox()
+  const stripBox = await page.locator('.conversation-tabs').boundingBox()
+  expect(slotBox, 'tab 有几何盒').not.toBeNull()
+  expect(stripBox, '对话 tab 条有几何盒').not.toBeNull()
+  if (slotBox === null || stripBox === null) return
+  const grabX = slotBox.x + slotBox.width / 2
+  const grabY = slotBox.y + slotBox.height / 2
+  const tearY = stripBox.y + stripBox.height + 40
+
+  await pressDragTo(page, grabX, grabY, grabX, tearY)
+  // 条上不再有它(不变量④的投影:悬浮窗体不得同时留在区域的 members 里)。
+  await expect(page.locator(TAB, { hasText: title }), '拆出后条上不再有它').toHaveCount(0)
+  await expect(page.locator(TAB)).toHaveCount(SESSIONS_IN_DEFAULT_PROJECT - 1)
+  // 内容成了**悬浮对话窗体**:固定定位、置顶聚焦,里面渲染该会话的转录。
+  const chatPanel = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
+  await expect(chatPanel, '内容成了悬浮对话窗体').toHaveCount(1)
+  await expect(chatPanel).toHaveAttribute('data-focused', 'true')
+  await expect(chatPanel).toHaveCSS('position', 'fixed')
+  await expect(chatPanel.locator('.transcript-inner .chat-message').first(), '悬浮窗体里渲染该会话的转录').toBeVisible()
+  // 输入坞**属于对话窗体**:悬浮的对话窗体含它,且草稿随窗体带了出来、可继续输入。
+  const floatingInput = chatPanel.locator('textarea')
+  await expect(floatingInput, '悬浮对话窗体含输入坞').toHaveCount(1)
+  await expect(floatingInput, '草稿随窗体走').toHaveValue('拆出后仍在的草稿')
+  await expect(floatingInput).not.toHaveAttribute('readonly', '')
+  await floatingInput.fill('拆出后仍在的草稿，再续写一句')
+  await expect(floatingInput).toHaveValue('拆出后仍在的草稿，再续写一句')
+  await expect(page.locator('.workspace-live'), '拆出经 role=status 播报').toContainText('拆出')
+
+  // 松手 → 保持悬浮。
+  await page.mouse.move(grabX, tearY + 40, { steps: 6 })
+  await page.mouse.up()
+  await expect(chatPanel, '松手后保持悬浮').toHaveCount(1)
+  await expect(page.locator(TAB), '条上仍没有它').toHaveCount(SESSIONS_IN_DEFAULT_PROJECT - 1)
+
+  // 抓住悬浮对话窗的标题栏拖到顶部条上松手 → 吸附停靠、占回一个 tab。
+  const headerBox = await chatPanel.locator('.chat-panel__meta').boundingBox()
+  const headingBox = await page.locator('.conversation-heading').boundingBox()
+  expect(headerBox, '标题栏有几何盒').not.toBeNull()
+  expect(headingBox, '顶部条有几何盒').not.toBeNull()
+  if (headerBox === null || headingBox === null) return
+  await page.mouse.move(headerBox.x + 100, headerBox.y + headerBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(headingBox.x + headingBox.width / 2, headingBox.y + headingBox.height / 2, { steps: 12 })
+  await expect(page.locator('.conversation-heading'), '落在条上 → 整条高亮').toHaveClass(/is-drop-target/)
+  // 落点提示是**对话专用**词条(文件那条的「最大化」用在对话上不贴切)。
+  await expect(page.locator('.conversation-heading__dock-hint'), '提示用对话专用词条').toHaveText('在此处松手可以把这段对话停靠回这个 Tab 位置')
+  await page.mouse.up()
+
+  await expect(page.locator(CHAT_PANEL), '不再悬浮').toHaveCount(0)
+  await expect(page.locator(TAB), '停靠占一个 tab').toHaveCount(SESSIONS_IN_DEFAULT_PROJECT)
+  await expect(page.locator(TAB, { hasText: title }), '该会话回到条上').toHaveCount(1)
+  await expect(page.locator(TAB, { hasText: title }), '停靠后成为当前项(内容区显示它)').toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.transcript'), '内容区仍显示转录').toHaveCount(1)
+  // 输入坞随窗体**停靠回区域内容区**,草稿仍在。
+  await expect(page.locator('.composer-dock textarea').first(), '输入坞随窗体停靠回来,草稿仍在').toHaveValue('拆出后仍在的草稿，再续写一句')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+})
+
+test('对话窗体④:点对话 tab 与点文件 tab 都切换内容区(同一区域同一时刻只显示一件)', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件占据内容区').toHaveCount(1)
+  await expect(page.locator('.transcript')).toHaveCount(0)
+
+  // 点一个**别的**对话 tab → 内容区切成那段对话的转录(文件让位,但它的 tab 仍在条上)。
+  await clickTab(page, HEADINGS['zh-CN'].roadmap)
+  await expect(page.locator('.transcript'), '内容区换成转录').toHaveCount(1)
+  await expect(page.getByRole('heading', { level: 1 }), '切到的是点的那段对话').toHaveText(HEADINGS['zh-CN'].roadmap)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件让位').toHaveCount(0)
+  await expect(page.locator(FILE_TAB), '它的 tab 仍在条上').toHaveCount(1)
+
+  // 点回文件 tab → 该文件重新占据内容区。
+  await page.locator(`${FILE_TAB}[data-file-path="README.md"]`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '文件重新占据内容区').toHaveCount(1)
+  await expect(page.locator('.transcript')).toHaveCount(0)
+
+  // 此时文件是区域的活动成员;关掉它的 tab → 内容区交给**相邻成员**(closeTab 的相邻接管规则)。
+  await page.locator('.file-tab-slot').first().hover()
+  await page.locator('.file-tab-slot').first().locator('.file-tab-close').click()
+  await expect(page.locator(FILE_TAB), '文件 tab 撤下').toHaveCount(0)
+  await expect(page.locator('.transcript'), '内容区交给相邻成员(转录回来)').toHaveCount(1)
+  await expect(page.getByRole('log'), '不是卡在加载态').toHaveAttribute('data-state', 'ready')
+  // 接管者是一段**对话**(不是文件的残留):h1 因此不再是文件名。
+  const handoverHeading = await page.getByRole('heading', { level: 1 }).innerText()
+  expect(handoverHeading, '接管者是相邻的对话').not.toBe(README)
+  expect(Object.values(HEADINGS['zh-CN']), 'h1 是一段对话的标题').toContain(handoverHeading)
+
+  // 再点回原对话 tab → 又切回转录(两处的「让位」语义一致)。
+  await clickTab(page, HEADINGS['zh-CN'].weekly)
+  await expect(page.locator('.transcript')).toHaveCount(1)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(HEADINGS['zh-CN'].weekly)
+})
+
+test('对话窗体⑥:对话 tab 上的「拆出」钮可点、Enter 即把该对话拆成悬浮窗体(WCAG 2.5.7)', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const slot = page.locator('.tab-slot').nth(1)
+  const title = await slot.locator('.conversation-tab__label').innerText()
+
+  const pop = slot.locator(CHAT_TAB_POP)
+  await expect(pop, '每一枚对话 tab 都带一个拆出按钮').toHaveCount(1)
+  // 可访问名含对应标题(图标按钮必须带 aria-label,不能只靠图形传达含义)。
+  expect(await pop.getAttribute('aria-label'), '可访问名含对应标题').toContain(title)
+  // 该钮**不在 Tab 序里**:键盘等价通路是快捷键 Ctrl/Cmd+Shift+M(见 regions.spec)。
+  await expect(pop, '已移出 Tab 序').toHaveAttribute('tabindex', '-1')
+  await pop.focus()
+  await expect(pop, '可键盘聚焦(程序化)').toBeFocused()
+  await page.keyboard.press('Enter')
+
+  await expect(page.locator(`${CHAT_PANEL}[data-mode="floating"]`), 'Enter 即拆成悬浮对话窗体').toHaveCount(1)
+  await expect(page.locator(TAB, { hasText: title }), '条上不再有它').toHaveCount(0)
+  await expect(page.locator('.workspace-live')).toContainText('拆出')
+  // 焦点交给新窗体的标题栏(键盘操作者不丢位置)。
+  await expect(page.locator(`${CHAT_PANEL}[data-mode="floating"] .chat-panel__meta`)).toBeFocused()
+})
+
+// 输入坞的焦点环:全局 :focus-visible 给的是**外扩** 3px 的环,而输入框住在
+// `.textarea-sizer { overflow: hidden }` 里、两者盒子逐值相等 —— 环画在输入框身上会整条被裁掉,
+// 只剩四个圆角处逃出的小楔形(实测强差异像素仅 327 个,四条边的中点全无变化),键盘用户看不出
+// 哪个输入框被聚焦。修法是把环改画在**输入坞容器**上(与 .conversation-search 同一条既有做法),
+// 且容器必须落在任何裁切祖先之内 —— 这两件事都是机械可判定的,故在这里锁死。
+test('输入坞焦点环:画在容器上、输入框自身无环,且不被任何裁切祖先切掉(区域与悬浮窗体两处)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 聚焦输入框后,量三件事:容器的环、输入框自身的环、以及「环的外扩量是否落在所有裁切祖先之内」。
+  const audit = async (selector: string): Promise<{ ring: string; textareaRing: string; clipMargin: number }> =>
+    page.locator(selector).evaluate(async (form) => {
+      const textarea = form.querySelector('textarea')
+      if (!(textarea instanceof HTMLTextAreaElement)) throw new Error(`找不到输入框:${selector}`)
+      textarea.focus()
+      // 实测:`focus()` 之后**同步**读 computed box-shadow 会读到尚未落定的中间值
+      // (`rgba(0,0,0,0.2) 0px 2px 8px 0px, oklab(0 0 0 / 0) 0px 0px 0px 0px` —— 静置态只有一条阴影,
+      // 读到的却被补成了两条、第二条是透明的零值)。本仓没有给 .composer-form 声明过渡,
+      // 具体成因未查明;等一拍再读可稳定拿到落定值,故按此处置。
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const rect = form.getBoundingClientRect()
+      // 外扩环会被任何 overflow 非 visible 的祖先裁掉,故取「容器到各裁切祖先内缘」的最小距离。
+      let clipMargin = Number.POSITIVE_INFINITY
+      let node: HTMLElement | null = form.parentElement
+      while (node !== null) {
+        const style = getComputedStyle(node)
+        if (style.overflow !== 'visible' || style.overflowX !== 'visible' || style.overflowY !== 'visible') {
+          const outer = node.getBoundingClientRect()
+          clipMargin = Math.min(clipMargin, rect.left - outer.left, rect.top - outer.top, outer.right - rect.right, outer.bottom - rect.bottom)
+        }
+        node = node.parentElement
+      }
+      return {
+        ring: getComputedStyle(form).boxShadow,
+        textareaRing: getComputedStyle(textarea).boxShadow,
+        clipMargin: Number.isFinite(clipMargin) ? clipMargin : Number.POSITIVE_INFINITY,
+      }
+    })
+
+  const docked = await audit('.conversation-panel .composer-form')
+  expect(docked.ring, '环画在输入坞容器上').toContain('0px 0px 0px 3px')
+  expect(docked.textareaRing, '输入框自身不再画环(否则与容器叠成双层)').toBe('none')
+  expect(docked.clipMargin, '外扩 3px 的环完整落在裁切祖先之内').toBeGreaterThanOrEqual(3)
+
+  // 拆出一段对话:悬浮窗体里的输入坞(同一个组件、另一种宿主)同样成立。
+  await page.locator('.tab-pop').first().click()
+  const floating = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
+  await expect(floating).toHaveCount(1)
+  const inPanel = await audit(`${CHAT_PANEL}[data-mode="floating"] .composer-form`)
+  expect(inPanel.ring, '悬浮窗体里的环同样画在容器上').toContain('0px 0px 0px 3px')
+  expect(inPanel.clipMargin, '不被窗体的 overflow:hidden 圆角面裁掉').toBeGreaterThanOrEqual(3)
+})
+
+// tab 上的状态徽标:既不许把标题压成 0 宽,也**不许自己被截断**。
+// 前半条是「看不出是哪段对话」;后半条是语义问题 —— 英文 "Response complete" 截成 "Response…"
+// 会被读成进行态,而它表达的恰恰是**已完成**,截短等于把语义读反(WCAG 1.4.1:这枚徽标存在的
+// 唯一理由就是用文字表意,截到只剩省略号等于理由落空)。两个宽度各验一次:密(6 个 tab)与疏。
+for (const width of [1280, 1600]) {
+  test(`tab 状态徽标 @${width}:标题不被压没,徽标不被截断,且不压到相邻 tab`, async ({ page }) => {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await login(page)
+    await waitForStable(page)
+
+    // 常规态里 roadmap / launch 是「已完成且未看过」,带上文字徽标。
+    const badged = page.locator('.conversation-tab:has(.tab-badge)')
+    await expect(badged.first(), '条上存在带徽标的 tab').toBeVisible()
+
+    const rows = await badged.evaluateAll((tabs) => tabs.map((tab) => {
+      const label = tab.querySelector('.conversation-tab__label')
+      const badge = tab.querySelector('.tab-badge')
+      if (!(label instanceof HTMLElement) || !(badge instanceof HTMLElement)) return null
+      const tabRect = tab.getBoundingClientRect()
+      return {
+        title: label.textContent ?? '',
+        badgeText: badge.textContent ?? '',
+        labelWidth: label.getBoundingClientRect().width,
+        // scrollWidth > clientWidth ⟹ 文字被省略号截掉了。
+        badgeTruncated: badge.scrollWidth > badge.clientWidth + 1,
+        badgeRightBeyondTab: badge.getBoundingClientRect().right - tabRect.right,
+      }
+    }))
+    for (const row of rows) {
+      expect(row, '徽标节点结构完整').not.toBeNull()
+      if (row === null) continue
+      console.log(`[tab badge @${width}] ${JSON.stringify(row)}`)
+      expect(row.labelWidth, `标题「${row.title}」不被徽标压没`).toBeGreaterThanOrEqual(40)
+      expect(row.badgeTruncated, `徽标「${row.badgeText}」不被截断`).toBe(false)
+      expect(row.badgeRightBeyondTab, `徽标「${row.badgeText}」不越过本 tab 右缘(否则压到相邻 tab)`).toBeLessThanOrEqual(1)
+    }
+  })
+}

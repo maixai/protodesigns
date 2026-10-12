@@ -414,3 +414,95 @@ union ConversationSearchHit {
   title: { reason: "title"; sessionId: string; title: string; },
   body: { reason: "body"; sessionId: string; title: string; snippet: string; turnId: string; },
 }
+
+// ---- 工作台的窗体布局:区域(surface)、窗体与内容 ----
+//
+// 心智模型(与 VS Code / IntelliJ 一致):
+//   · **区域是容器,tab 组属于区域,不属于窗体** —— 一块区域持有它那串成员窗体的 id(即它的 tab 条);
+//   · **窗体**只持有「几何 + 归属 + 内容引用」,不持有 tab 列表;
+//   · 窗体的内容是**通用**的(由判别联合表达),不得假设它一定是文件;
+//   · 浮动窗口(popout)不属于任何区域。
+//
+// 区域树**不递归**表达:本仓契约约定「被引用的类型会内联进自包含的 schema」,递归会无限展开。
+// 故用**扁平数组 + parentId 邻接表**,层级由载体推导。
+// 所有布局操作都带 surfaceId —— 区域切分(一块区域沿右 / 下缘再切出子区域,每块各有自己的
+// tab 条)正是靠它落地的;根区域恒存在(parentId 为 null),非根的空区域由载体摘除。
+
+// 区域在父区域里的排布方向(row 横排 / column 竖排);它表达**本区域排布子区域**的方向。
+enum SurfaceAxisId {
+  row,
+  column,
+}
+
+@summary("Surface")
+@jsonSchema
+model Surface {
+  id: string;
+  // 父区域 id;根区域为 null(根与「空 id」是两回事,故用 null 而非空串)。
+  parentId: string | null;
+  axis: SurfaceAxisId;
+  // 在父区域里占的权重(与兄弟按比例分配空间;分隔线拖动即改它)。
+  weight: int32;
+  // 区域内的窗体 id 列表 = tab 条的顺序。**floating 窗体的 id 不出现在这里**(见不变量)。
+  members: string[];
+  // 当前激活的窗体 id。空串 = 无;非空时必须 ∈ members(不变量)。
+  activeId: string;
+}
+
+// 窗体内容的判别联合:窗体是**通用容器**,内容由 kind 区分。本单元只用到 file
+// (文件 / 对话两种都已用上),故窗体不得假设内容一定是文件。
+@summary("WindowContent")
+@jsonSchema
+union WindowContent {
+  file: { kind: "file"; path: string; },
+  chat: { kind: "chat"; sessionId: string; },
+}
+
+// 窗体的位置:floating(自有矩形,不属于任何区域)/ docked(属于某区域)。
+enum WindowPlacementId {
+  floating,
+  docked,
+}
+
+// 窗体的呈现:normal / maximized。**maximized × floating 互斥**(popout 出来的组不能被最大化)。
+enum WindowViewId {
+  normal,
+  maximized,
+}
+
+// 窗体的几何(fixed 定位的视口坐标)。
+model WindowRect {
+  x: float32;
+  y: float32;
+  width: float32;
+  height: float32;
+}
+
+// 一个窗体:几何 + 归属 + 内容引用(**不持有 tab 列表**)。
+// visible 隐藏 ≠ 销毁:关掉只是把 visible 置假,placement / rect / view 原样留着,
+// 再点回来即按原样恢复(与「关闭 ≠ 删除」同源)。
+@summary("WorkspaceWindow")
+@jsonSchema
+model WorkspaceWindow {
+  id: string;
+  content: WindowContent;
+  placement: WindowPlacementId;
+  view: WindowViewId;
+  visible: boolean;
+  rect: WindowRect;
+}
+
+// 一个 (Agent, 项目) 域内的整块工作区布局:区域 + 窗体 + 焦点 + 最近打开。
+// windows 是**数组,顺序即前后层序**(靠后者在上)—— 不用自增 z:自增在多区域下语义会崩,
+// 且本仓层级只有 4 档 token,就地写数值违反「禁止 magic number」。
+@summary("WorkspaceLayout")
+@jsonSchema
+model WorkspaceLayout {
+  surfaces: Surface[];
+  windows: WorkspaceWindow[];
+  // 当前聚焦的窗体 id;空串 = 无(F6 / Esc 的落点)。
+  focus: string;
+  // 「最近打开」的窗体 id(新的在前,按 id 去重、限量)。关闭 ≠ 删除:关掉的仍留在这里供找回。
+  // 它是**显式的历史** —— 层序数组顺序会被置顶打乱,推不出「谁最近开过」。
+  recent: string[];
+}

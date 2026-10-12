@@ -1,6 +1,8 @@
 <script setup lang="ts">
-// 文件面板:覆盖在转录区之上的一块(不是可拖拽的浮动窗口 —— MDI 那套已被现代界面放弃;
-// 「已打开未显示」由文件栏的 tab 承担,所以面板只有「显示 / 不显示」两态)。
+// 文件面板:同一份内容与同一套头部控件,按 `mode` 以**两种形态**呈现 ——
+//   · `floating`:**固定定位的悬浮窗体**(不占 tab),可拖动 / 可缩放,几何由本组件持有;
+//   · `docked`:**停靠在区域内容区**里的一块(占一个 tab),填满内容区,几何由容器给出、不可拖动。
+// 两种形态之间的转换(双击标题栏 / 头部按钮)由页面接到 windows 的 float/dock 操作上。
 //
 // 呈现方式(调研依据写在下方各处):
 //   · 默认**整个文件 + 变更标记**,而不是只看 diff 片段 —— matklad 那篇被广泛引用的分析认为
@@ -14,22 +16,28 @@
 //     (Reviewable 的文档明确写「窗口变窄时并排自动转为统一,反之亦然」);
 //   · 换行开关:长行不横向滚动。
 //
-// a11y:面板是**非模态**对话框(不写 aria-modal,不圈定焦点);其内容区是文件栏那个 tablist 的
-// tabpanel(文件栏与转录区**各自**有一个 tablist 与 tabpanel,互不冲突)。待确认文件的
-// 「允许 / 拒绝」与转录里的确认卡同源同动作(同一个 ConfirmationRequest、同一个处理函数)。
+// a11y:悬浮态是**非模态**对话框(不写 aria-modal,不圈定焦点),停靠态是内容区里的 `region`;
+// 其内容区是文件栏那个 tablist 的 tabpanel(文件栏与转录区**各自**有一个 tablist 与 tabpanel,
+// 互不冲突)。待确认文件的「允许 / 拒绝」与转录里的确认卡同源同动作(同一个 ConfirmationRequest、
+// 同一个处理函数)。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NSkeleton } from 'naive-ui'
 import type { FileLine } from '../contracts/generated/file-content'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
-import type { FileDisplayItem, FilePanelState, FileWindowRect } from '../data/open-files'
-import { buildDisplayItems } from '../data/open-files'
+import type { WindowRect } from '../contracts/generated/workspace-window'
+import type { FileDisplayItem, FilePanelState } from '../data/windows'
+import { buildDisplayItems } from '../data/windows'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
   state: FilePanelState
   path: string
+  // 呈现模式:**floating** = 固定定位的浮窗(可拖动 / 可缩放,几何由本组件持有);
+  // **docked** = 停靠在区域内容区里的一块(填满内容区、不可拖动 / 缩放,几何由容器给出)。
+  // 同一份内容与同一套头部控件在两种模式下复用,故两种模式的观感一致。
+  mode: 'floating' | 'docked'
   // 文件所属项目:打开集跨项目,面板上必须写清出处(路径单独不再唯一)。
   projectName: string
   // 文件在该会话里的状态芯片(与文件栏 / 文件树同源同值)—— 由页面派生后传入。
@@ -40,13 +48,18 @@ const props = defineProps<{
   confirmationOutcome: 'allowed' | 'rejected' | null
   // 这个文件的窗口几何(由页面按 (Agent, 项目) 分域保存)。传 null = 该文件还没被摆过位置,
   // 用默认几何。窗口状态**不属于组件**:切项目 / 切文件再回来要按原样恢复,故几何存在域里。
-  initialRect: FileWindowRect | null
-  // 层序:多个窗口并存时谁在上。聚焦置顶由页面决定,组件只如实呈现。
-  zIndex: number
+  initialRect: WindowRect | null
   // 本窗口是否当前聚焦(视觉上加一层强调描边,便于多窗口下认出焦点在哪)。
   isFocused: boolean
   // 级联序号:同时可见的窗口依次小偏移错开,避免完全重叠(窗口管理器的惯例)。
   cascade: number
+  // **拆出跟手**(视图状态,由页面在拖拽期间给出):非 null 时窗体用**默认尺寸**、左上角落在
+  // 这个点(指针 − 抓取偏移已在页面算好),并在每次变化时直接改写几何(零过渡)。它只在
+  // 「从 tab 条上向下拖出」这一次手势里非 null;手势结束(或撤销)即置回 null。
+  followPoint?: { x: number; y: number } | null
+  // **FLIP 的来源矩形**(屏幕坐标):挂载时先把窗体「退」到它,再过渡回自身落点。
+  // 拆出时 = 被拖的 tab 的矩形;吸附停靠时 = 悬浮窗最后所在的矩形。reduced-motion 下整段跳过。
+  flipFrom?: WindowRect | null
 }>()
 
 const emit = defineEmits<{
@@ -54,9 +67,22 @@ const emit = defineEmits<{
   retry: []
   resolve: [allowed: boolean]
   // 几何落定(拖动 / 缩放 / 方向键结束、双击复位)时上报;null = 已回到默认几何。
-  'rect-change': [rect: FileWindowRect | null]
+  'rect-change': [rect: WindowRect | null]
   // 在窗口内按下指针 / 聚焦它 → 页面据此置顶(「点谁谁在上」)。
   focus: []
+  // 悬浮 → 停靠(双击标题栏 / 头部按钮)。带**当前几何**:页面据此把吸附过的悬浮窗矩形
+  // 当作停靠面板的 FLIP 来源(非拖拽通路传 null = 不做 FLIP)。
+  // 拖拽落点**不走这里** —— 拖动期间只报 drag-move / drag-end,落点由页面统一裁决。
+  dock: [rect: WindowRect | null]
+  // 停靠 → 悬浮(双击标题栏 / 头部按钮)。
+  float: []
+  // 拖动中的**指针视口坐标**:组件只报事实,顶部条 / 区域边缘 / 区域内部一律由页面裁决
+  // (与拖 tab 那套手势共用页面里同一个落点解析器)。
+  'drag-move': [pointer: { x: number; y: number }]
+  // 拖动松手时的指针视口坐标:页面据此决定「停靠回条上 / 沿边切分 / 并入某区域 / 保持悬浮」。
+  'drag-end': [pointer: { x: number; y: number }]
+  // 拖动被取消(Esc / 指针被系统打断):页面据此收起任何落点预览。
+  'drag-cancel': []
 }>()
 
 const { t } = useI18n()
@@ -70,6 +96,13 @@ const isWrap = ref(false)
 const expandedFolds = ref<Set<number>>(new Set())
 const rootRef = ref<HTMLElement | null>(null)
 const canSideBySide = ref(true)
+
+// 停靠模式:填满区域内容区,不能拖动 / 缩放(几何由容器给出),标题栏双击 / 头部按钮做「还原悬浮」。
+const isDocked = computed(() => props.mode === 'docked')
+// 标题栏的悬停提示随模式变化:两种模式下双击的含义不同。
+const headerHint = computed(() => (isDocked.value ? t.value.workspace.filePanel.headerHintDocked : t.value.workspace.filePanel.headerHint))
+// 模式切换按钮的文案:悬浮时提示「停靠」,停靠时提示「悬浮」。
+const placementLabel = computed(() => (isDocked.value ? t.value.workspace.filePanel.float : t.value.workspace.filePanel.dock))
 
 // 内容变了(换文件 / 重试)就复位折叠与新文件的视图 —— 折叠状态属于「这一次看这个文件」。
 watch(() => [props.path, props.state] as const, () => {
@@ -170,6 +203,17 @@ function unchangedLabel(count: number): string {
 const statAdded = computed(() => t.value.workspace.filePanel.addedStat.replace('{count}', String(content.value?.addedCount ?? 0)))
 const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.replace('{count}', String(content.value?.removedCount ?? 0)))
 
+// 跟手(拆出):非 null 时窗体用**默认尺寸**、左上角落在该点,且每次变化直接改写几何(零过渡)。
+// 从非 null 变回 null = 跟手结束 → 把落定几何上报,页面记进当前分域。
+watch(() => props.followPoint ?? null, (next, previous) => {
+  if (next !== null) {
+    const base = panelRect.value ?? defaultRect()
+    panelRect.value = clampRectForMove({ ...base, x: next.x, y: next.y })
+    return
+  }
+  if ((previous ?? null) !== null) emitRect()
+})
+
 let observer: ResizeObserver | undefined
 
 function measureWidth(): void {
@@ -206,6 +250,9 @@ const panelRect = ref<PanelRect | null>(null)
 const isPanelDragging = ref(false)
 const isPanelResizing = ref(false)
 const headerRef = ref<HTMLElement | null>(null)
+// FLIP 的 transform 位移(挂载时先「退」到来源矩形,再过渡回自身落点)。'' = 无位移。
+const flipStyle = ref('')
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 // 视口度量:外边距取自 --dl-space-6,视口尺寸变化时自增 nonce 驱动默认几何重算。
 const viewportNonce = ref(0)
@@ -238,7 +285,9 @@ function defaultRect(): PanelRect {
   const columnMax = resolveLength('--workspace-column-max') || 768
   const gutter = resolveLength('--workspace-gutter') || 0
   const w = Math.min(columnMax + 2 * gutter, box.width - 2 * margin)
-  const composer = document.querySelector('.composer-form')
+  // 只认**停靠区**(根区域内容区)里的那个输入坞 —— 输入坞现在属于对话窗体,悬浮的对话窗体
+  // 也会各带一个;不限定范围就会命中 DOM 里第一个(可能正是某个悬浮窗的)。
+  const composer = document.querySelector('#conversation-panel-body .composer-form')
   const composerRect = composer instanceof HTMLElement ? composer.getBoundingClientRect() : null
   const center = composerRect === null ? box.width / 2 : composerRect.left + composerRect.width / 2
   // 顶边:站点头之下、**且不压住对话面板的会话头(tab 条)** —— 浮动窗口盖住应用自己的导航行是硬伤。
@@ -264,12 +313,42 @@ const effectiveRect = computed<PanelRect>(() => panelRect.value ?? defaultRect()
 
 // 显式几何以**一整串 cssText** 绑定(而不是逐条属性对象):一次性整体写入,避免逐条补丁
 // 在连续调整时丢掉某一条(实测过)。面板固定在视口坐标系里。
+// 层序**不由这里给**:同一层窗口共用 --dl-z-overlay(见 .file-panel),前后关系由 DOM 顺序
+// (即页面按数组顺序 v-for)表达 —— 靠后者在上。逐窗写数会撞上「禁止就地写 magic number」。
+// **停靠模式不写几何**:它填满区域内容区,尺寸由容器给出(见 .file-panel--docked)。
+// FLIP 的位移与几何共用这一个通道(同样是本条自己的状态,不是字面量视觉值)。
 const panelStyle = computed<string>(() => {
+  const flip = flipStyle.value === '' ? '' : `transform:${flipStyle.value}`
+  if (isDocked.value) return flip
   const rect = effectiveRect.value
-  // 层序**叠加在浮层档之上**(--dl-z-overlay = 200):窗口之间的高低只需在浮层档内部区分,
-  // 直接写 1/2/3 会把窗口压到顶栏(< 100)之下 —— 实测拖到页面顶部就点不动了。
-  return [`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`, `z-index:calc(var(--dl-z-overlay) + ${props.zIndex})`].join(';')
+  const geometry = [`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`].join(';')
+  return flip === '' ? geometry : `${geometry};${flip}`
 })
+
+// 当前几何(契约形状),供页面把「吸附前的悬浮矩形」当作停靠面板 FLIP 的来源。
+function currentWindowRect(): WindowRect | null {
+  const rect = panelRect.value
+  if (rect === null) return null
+  return { x: rect.x, y: rect.y, width: rect.w, height: rect.h }
+}
+
+// FLIP:先把窗体**退**到来源矩形(此刻不加过渡 —— 与目标状态同帧写入,浏览器不会从中途补间),
+// 下一帧起再过渡回自身落点。只动 transform,不碰任何布局属性。
+// reduced-motion 下**整段跳过**:位移是纯装饰,不做才是尊重用户偏好(状态切换照旧发生)。
+function playFlip(): void {
+  const from = props.flipFrom ?? null
+  const element = rootRef.value
+  if (from === null || element === null) return
+  if (window.matchMedia(REDUCED_MOTION_QUERY).matches) return
+  const rect = element.getBoundingClientRect()
+  const dx = Math.round(from.x - rect.x)
+  const dy = Math.round(from.y - rect.y)
+  if (dx === 0 && dy === 0) return
+  flipStyle.value = `translate(${dx}px, ${dy}px)`
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => { flipStyle.value = '' })
+  })
+}
 
 // 当前几何 = 有效几何(权威来源,不回读 DOM —— DOM 更新是异步的,连续按键回读会丢步)。
 function currentRect(): PanelRect {
@@ -350,11 +429,6 @@ function clampRect(rect: PanelRect): PanelRect {
   return clampRectForResize(rect)
 }
 
-function resetPanelGeometry(): void {
-  panelRect.value = null
-  emitRect()
-}
-
 // 把当前几何上报给页面(由页面按分域保存)—— 只在**落定时**上报,不在拖动 / 缩放的每一帧上报。
 function emitRect(): void {
   const rect = panelRect.value
@@ -372,7 +446,10 @@ function isHeaderControl(target: EventTarget | null): boolean {
 }
 
 function onHeaderPointerDown(event: PointerEvent): void {
+  if (!event.isPrimary) return
   if (event.button !== 0) return
+  // 停靠模式没有拖拽(几何由容器给出)。
+  if (isDocked.value) return
   // 标题栏里的按钮(视图切换 / 换行 / 关闭)不算拖拽手柄。
   if (isHeaderControl(event.target)) return
   const rect = currentRect()
@@ -399,17 +476,39 @@ function onHeaderPointerMove(event: PointerEvent): void {
     headerRef.value?.setPointerCapture(event.pointerId)
   }
   // 拖动 = 纯平移:宽高取自 dragBase(拖拽开始时的那一份),全程不参与钳制的计算。
+  // 直接改写几何(不挂过渡)—— 跟手阶段零过渡。
   panelRect.value = clampRectForMove({ ...dragBase, x: dragBase.x + dx, y: dragBase.y + dy })
+  // 只报事实:把指针视口坐标交给页面判定落点(顶部条 / 区域边缘 / 区域内部)——组件不再自己裁决。
+  emit('drag-move', { x: event.clientX, y: event.clientY })
 }
 
-function endHeaderDrag(event: PointerEvent): void {
+// 拖动结束:commit=true(指针抬起)→ 先把落定几何写回(页面据此取 FLIP 来源 / 记住位置),
+// 再把指针坐标交给页面统一裁决;commit=false(被取消)→ 报取消,页面收起落点预览。
+function endHeaderDrag(event: PointerEvent, commit: boolean): void {
   if (event.pointerId !== dragPointerId) return
   if (headerRef.value?.hasPointerCapture(event.pointerId) === true) headerRef.value.releasePointerCapture(event.pointerId)
+  const wasDragging = isPanelDragging.value
   isDragPending = false
   isPanelDragging.value = false
   dragBase = null
   dragPointerId = -1
   emitRect()
+  if (!wasDragging) return
+  if (commit) emit('drag-end', { x: event.clientX, y: event.clientY })
+  else emit('drag-cancel')
+}
+
+// 取消本次拖动(Escape / 指针被系统打断):几何回到按下时的那一份,不做任何迁移。
+function cancelHeaderDrag(): void {
+  if (!isDragPending && !isPanelDragging.value) return
+  if (headerRef.value?.hasPointerCapture(dragPointerId) === true) headerRef.value.releasePointerCapture(dragPointerId)
+  if (dragBase !== null && isPanelDragging.value) panelRect.value = dragBase
+  const wasDragging = isPanelDragging.value
+  isDragPending = false
+  isPanelDragging.value = false
+  dragBase = null
+  dragPointerId = -1
+  if (wasDragging) emit('drag-cancel')
 }
 
 // 拖动期间只走 transform / 直接改几何(不加任何过渡 —— 本仓设计语言的可动效白名单只有
@@ -434,7 +533,34 @@ function onHeaderKeydown(event: KeyboardEvent): void {
 
 function onHeaderDoubleClick(event: MouseEvent): void {
   if (isHeaderControl(event.target)) return
-  resetPanelGeometry()
+  // 双击标题栏 = 在「悬浮 ↔ 停靠」之间切换(见两条转换的语义)。头部另有等价的原生按钮,
+  // 供键盘 / 单指针无障碍通路使用(WCAG 2.5.7 要求拖动类动作有非拖动的替代)。
+  togglePlacement()
+}
+
+// 悬浮 ↔ 停靠:由标题栏双击与头部按钮共同触发。两条路都是**非拖拽通路**(WCAG 2.5.7:
+// 凡靠拖动手势完成的功能都要有非拖动的替代)。停靠时带上当前几何 —— 页面据此做吸附方向的 FLIP。
+function togglePlacement(): void {
+  if (isDocked.value) emit('float')
+  else emit('dock', currentWindowRect())
+}
+
+// 复位几何:回到默认几何(居中 + 按级联序号错开)。把本组件持有的几何清空即可 ——
+// effectiveRect 自动回落到 defaultRect(),同时把 null 上报给页面,页面存在域里的那份也一并清掉
+// (否则切域再切回来会恢复成复位前的位置)。
+function resetGeometry(): void {
+  panelRect.value = null
+  emitRect()
+}
+
+// 拖动中的 Escape:放弃本次拖动、几何回到按下时的那一份(不吸附、不迁移)。
+// 用**捕获阶段**监听:页面也在 document 上处理 Escape(它会关掉当前悬浮窗),捕获先于冒泡,
+// 且我们 preventDefault 后页面的处理器会据此让过(见 workspace-page 的 onFilePanelEscape)。
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  if (!isDragPending && !isPanelDragging.value) return
+  event.preventDefault()
+  cancelHeaderDrag()
 }
 
 // ---- 缩放:四边是可访问的分隔条(APG Window Splitter),四角是 44×44 的指针目标 ----
@@ -584,20 +710,37 @@ onMounted(() => {
   measureJumpReserve()
   // 挂载后再重算一次默认几何:首帧求值时页面样式可能尚未就绪,自定属性会解析成 0。
   viewportNonce.value += 1
-  // 该文件在本分域里被摆过位置 → 按原样恢复(切项目 / 切文件回来是同一个位置)。
+  const follow = props.followPoint ?? null
   const stored = props.initialRect
-  if (stored !== null) panelRect.value = clampRect({ x: stored.x, y: stored.y, w: stored.width, h: stored.height })
+  if (follow !== null) {
+    // 刚从 tab 条上拆出来:用**默认尺寸**、左上角落在指针给出的点上(抓取偏移已在页面扣掉),
+    // 于是窗体不会在拆出的一瞬间跳到别处。
+    panelRect.value = clampRectForMove({ ...defaultRect(), x: follow.x, y: follow.y })
+  } else if (stored !== null) {
+    // 该文件在本分域里被摆过位置 → 按原样恢复(切项目 / 切文件回来是同一个位置)。
+    panelRect.value = clampRect({ x: stored.x, y: stored.y, w: stored.width, h: stored.height })
+  } else if (!isDocked.value) {
+    // 没摆过位置的**悬浮**窗体:把挂载时算出的默认几何**锁定为显式几何**。
+    // 级联偏移由层序(数组顺序)给出,而焦点会重排层序 —— 若默认几何每次渲染都重算,
+    // 点一个窗口就会让其它窗口整体跳位。窗口管理器里「点谁谁在上」不该挪动别人,
+    // 故这里把首次算出的几何固定下来(之后视口变化只做**钳制**,不再重算默认值)。
+    panelRect.value = defaultRect()
+  }
   measureWidth()
+  // FLIP 要在几何 / 尺寸落定、且元素已在 DOM 里之后量,故放在最后。
+  playFlip()
   if (rootRef.value !== null && typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(() => measureWidth())
     observer.observe(rootRef.value)
   }
   window.addEventListener('resize', onViewportResize)
+  document.addEventListener('keydown', onDocumentKeydown, true)
 })
 
 onBeforeUnmount(() => {
   observer?.disconnect()
   window.removeEventListener('resize', onViewportResize)
+  document.removeEventListener('keydown', onDocumentKeydown, true)
 })
 </script>
 
@@ -605,11 +748,12 @@ onBeforeUnmount(() => {
   <section
     ref="rootRef"
     class="file-panel"
-    :class="{ 'is-moving': isPanelDragging || isPanelResizing }"
-    role="dialog"
+    :class="{ 'is-moving': isPanelDragging || isPanelResizing, 'file-panel--docked': isDocked }"
+    :role="isDocked ? 'region' : 'dialog'"
     :aria-label="t.workspace.filePanel.label"
     :data-status="state.status"
     :data-view="effectiveView"
+    :data-mode="mode"
     :data-default-geometry="panelRect === null ? 'true' : 'false'"
     :style="panelStyle"
     :data-focused="isFocused ? 'true' : 'false'"
@@ -631,11 +775,12 @@ onBeforeUnmount(() => {
       tabindex="0"
       role="group"
       :aria-label="t.workspace.filePanel.headerLabel"
-      :title="`${t.workspace.filePanel.headerHint} · ${t.workspace.filePanel.moveHint}`"
+      :title="isDocked ? headerHint : `${headerHint} · ${t.workspace.filePanel.moveHint}`"
       @pointerdown="onHeaderPointerDown"
       @pointermove="onHeaderPointerMove"
-      @pointerup="endHeaderDrag"
-      @pointercancel="endHeaderDrag"
+      @pointerup="endHeaderDrag($event, true)"
+      @pointercancel="endHeaderDrag($event, false)"
+      @lostpointercapture="endHeaderDrag($event, false)"
       @dblclick="onHeaderDoubleClick"
       @keydown="onHeaderKeydown"
     >
@@ -673,7 +818,14 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <button type="button" class="file-panel__toggle" :aria-pressed="isWrap" :title="t.workspace.filePanel.wrap" @click="isWrap = !isWrap">{{ t.workspace.filePanel.wrap }}</button>
-        <button type="button" class="file-panel__close" :aria-label="t.workspace.filePanel.close" @click="emit('close')"><span aria-hidden="true">✕</span></button>
+        <!-- 复位几何的**原生按钮**:从前这个能力只挂在「双击标题栏」上,而双击现已改指
+             停靠 / 悬浮,故它必须另有一个入口;做成按钮同时补上了键盘可达(旧手势鼠标专属)。
+             停靠态不渲染 —— 那时的几何由区域内容区给出,没有「默认几何」可复位。 -->
+        <button v-if="!isDocked" type="button" class="file-panel__reset" :aria-label="t.workspace.filePanel.resetGeometry" :title="t.workspace.filePanel.resetGeometry" @click="resetGeometry"><DliIcon name="sync" size="sm" /></button>
+        <!-- 悬浮 ↔ 停靠的**原生按钮**:标题栏双击是鼠标通路,这里给键盘 / 单指针一条等价通路
+             (WCAG 2.5.7:凡靠拖动手势完成的功能都要有非拖动替代);图标纯装饰,语义由 aria-label 承担。 -->
+        <button type="button" class="file-panel__placement" :aria-label="placementLabel" :title="placementLabel" @click="togglePlacement()"><DliIcon :name="isDocked ? 'window' : 'grid'" size="sm" /></button>
+        <button type="button" class="file-panel__close" :aria-label="isDocked ? t.workspace.filePanel.closeTab : t.workspace.filePanel.close" @click="emit('close')"><span aria-hidden="true">✕</span></button>
       </div>
     </header>
 
@@ -759,6 +911,8 @@ onBeforeUnmount(() => {
          方向键调整、Shift 大步长、Home/End 到最小 / 最大。四角是 44×44 的指针目标(本仓触达下限;
          Apple 建议桌面 20pt≈27px、触屏 28pt≈37px,这里取更严的 44),纯指针便利入口、不占 Tab 序。
          可见抓手可以很细:四边只有一条发丝线宽的可视暗示,角上什么都不画(完全透明)。 -->
+    <!-- 缩放手柄只在**悬浮**模式存在:停靠时几何由区域内容区给出,没有可调整的自由尺寸。 -->
+    <template v-if="!isDocked">
     <button
       v-for="handle in resizeHandles"
       :key="handle.edge"
@@ -790,6 +944,7 @@ onBeforeUnmount(() => {
       @pointerup="endResize"
       @pointercancel="endResize"
     />
+    </template>
   </section>
 </template>
 
@@ -805,11 +960,43 @@ onBeforeUnmount(() => {
    (抽屉在窄屏抬到 modal 档,见 workspace-page)。这一层只做定位与容器查询,「面」在下一层。 */
 .file-panel {
   position: fixed;
-  /* 层序由 props.zIndex 逐窗口给出(见 panelStyle)—— 多窗口时「谁在上」是状态,不是常量。 */
+  /* 整层窗口共用浮层档;前后关系由 **DOM 顺序**(页面按数组顺序渲染,靠后者在上)决定。 */
   z-index: var(--dl-z-overlay);
   /* 头部按**自身宽度**(容器查询)决定紧凑程度:面板窄时收成图标分段 + 去掉芯片与统计,
      于是「头部内部元素不换行」在任何宽度都成立。 */
   container-type: inline-size;
+  /* FLIP:拆出 / 吸附时窗体从来源矩形滑到自身落点 —— 只有 transform 有过渡(动效白名单);
+     几何属性(left / top / width / height)全程没有过渡,跟手时由 .is-moving 一并关掉。 */
+  transition: transform var(--dl-duration-base) var(--dl-ease-standard);
+}
+
+/* 停靠模式:不再是浮层,而是**填满区域内容区**的一块(由页面放进转录取位里)。
+   它因此不参与层序(不给 z-index)、不可拖动 / 缩放;「面」也随之为**贴边**的形态 ——
+   去掉圆角 / 阴影 / 描边,只在上缘画一条分界线(与转录区自身的上边界同一套层级语言,
+   于是停靠的文件与转录在内容区里读作同一块)。 */
+.file-panel--docked {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: 0;
+}
+
+.file-panel--docked .file-panel__surface {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  border-block-start: var(--dl-border-width) solid var(--dl-border-base);
+}
+
+/* 停靠态的标题栏不是拖拽手柄(几何由容器给出):光标回到默认,抓手记号也退场。 */
+.file-panel--docked .file-panel__meta {
+  cursor: default;
+}
+
+.file-panel--docked .file-panel__grip {
+  display: none;
 }
 
 /* 「面」:底色 / 描边 / 圆角 / 阴影,以及**滚轮隔离**。
@@ -826,6 +1013,16 @@ onBeforeUnmount(() => {
   box-shadow: var(--dl-shadow-lg);
   overflow: hidden;
   overscroll-behavior: contain;
+  /* 悬浮 ↔ 停靠的**状态切换动效**:两种状态住在不同的容器里(浮层 ↔ 区域内容区的流内块),
+     跨容器做 FLIP 需要手工做 First/Last 两次测量,且要同步两棵 DOM 树 —— 复杂度与失败面都不小,
+     故改用「入场动效」作替代:切换会让窗体重新挂载,于是这一段**纯 opacity + 极轻位移**的入场
+     正好覆盖两种切换方向(动效白名单之内,不碰任何布局属性)。 */
+  animation: file-panel-enter var(--dl-duration-base) var(--dl-ease-standard);
+}
+
+@keyframes file-panel-enter {
+  from { opacity: 0; transform: translateY(var(--dl-space-1)); }
+  to { opacity: 1; transform: none; }
 }
 
 /* 拖动 / 缩放期间**不加过渡**(跟手)。本仓设计语言的可动效白名单只有 transform / opacity,
@@ -1009,12 +1206,16 @@ onBeforeUnmount(() => {
 
 .file-panel__view:focus-visible,
 .file-panel__toggle:focus-visible,
+.file-panel__reset:focus-visible,
+.file-panel__placement:focus-visible,
 .file-panel__close:focus-visible {
   box-shadow: var(--dl-focus-ring);
 }
 
-/* 关闭钮:32px 图标钮(与头部控件同档)。 */
-.file-panel__close {
+/* 关闭钮 / 复位几何钮 / 悬浮↔停靠钮:32px 图标钮(与头部控件同档)。 */
+.file-panel__close,
+.file-panel__reset,
+.file-panel__placement {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -1039,6 +1240,13 @@ onBeforeUnmount(() => {
     display: none;
   }
 
+  /* 窄面板下也收起「复位几何」:这一档标题栏已经放不下全部控件,再多一枚就会把
+     「整个文件」推进左上角缩放手柄的命中区(实测 375 下该钮点不动)。此时窗体本就接近
+     满屏,复位几何没有意义 —— 与同档隐去 chip / stats / 视图文字是同一条取舍。 */
+  .file-panel__reset {
+    display: none;
+  }
+
   .file-panel__meta {
     gap: var(--dl-space-1);
   }
@@ -1052,7 +1260,9 @@ onBeforeUnmount(() => {
   }
 }
 
-.file-panel__close:hover {
+.file-panel__close:hover,
+.file-panel__reset:hover,
+.file-panel__placement:hover {
   color: var(--dl-text-primary);
   background: var(--dl-bg-hover);
 }
@@ -1383,6 +1593,15 @@ onBeforeUnmount(() => {
   .file-panel__view,
   .file-panel__toggle {
     transition: none;
+  }
+  /* 降级:入场动效压到 0.01ms(位移与缩放去掉,状态切换照旧发生;不用 0 是为了让 transitionend
+     类的收尾逻辑仍能触发)。FLIP 的 transform 过渡同理(JS 侧在 reduced-motion 下整段跳过,
+     这里再兜一层)。 */
+  .file-panel__surface {
+    animation-duration: 0.01ms;
+  }
+  .file-panel {
+    transition-duration: 0.01ms;
   }
 }
 </style>

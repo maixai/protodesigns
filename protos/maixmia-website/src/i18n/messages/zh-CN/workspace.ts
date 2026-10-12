@@ -85,6 +85,9 @@ export const workspace = {
     explore: { title: '一起推敲想法', body: '我准备做一个每周自动汇总项目进展的 Agent，帮我明确它的输入和输出。' },
   },
   inputLabel: '给 Mia 的消息',
+  // 输入框按**会话**可区分:读屏要能告知「正在给哪段对话打字」。{name} 由载体替换为会话标题;
+  // 无标题时回落到 inputLabel。
+  inputLabelOf: '与「{name}」对话',
   placeholder: '描述你的任务，或接着聊…',
   inputHint: 'Enter 发送 · Shift+Enter 换行',
   stop: '停止生成',
@@ -157,8 +160,8 @@ export const workspace = {
   sessionStatus: {
     new: '新会话',
     streaming: '响应中',
-    awaiting: '等待交互',
-    completed: '响应完成',
+    awaiting: '待确认',
+    completed: '已完成',
     idle: '等待对话',
   },
   // 运行遥测的具体动作文案:mock 给出键(statusDetail)，载体按此解析 —— 不允许「处理中」这类模糊词。
@@ -215,22 +218,60 @@ export const workspace = {
     empty: '双击左侧文件,即可在这里打开',
     menuEmpty: '还没有打开过文件',
     // tab 的 title(悬停可读):路径 + 打开方式。文件名是技术标识,两种语言共用同一写法。
+    // ---- 向下拖出为悬浮窗体 / 拖回条上吸附 ----
+    // tab 上的「拆出」按钮(拖拽之外的非拖拽通路,WCAG 2.5.7);{name} 由载体替换为文件名。
+    popOut: '把 {name} 拆出为悬浮窗口',
+    // 「拆出」钮已移出 Tab 序(见组件注释),键盘等价通路改由快捷键承担。title 刻意写成
+    // **中英双语**:无论界面语言是哪一种,悬停都能读到动作与快捷键。
+    popOutTitle: '把 {name} 拆出为悬浮窗口 · Ctrl/Cmd+Shift+M — Pop {name} out as a floating window',
+    // 拖动中的落点播报(role="status"):说清「现在松手会发生什么」。
+    tearOut: '已拆出 {name},松手即成为悬浮窗口',
+    tearAttach: '已把 {name} 放回标签栏',
+    dockTarget: '松手将把 {name} 停靠回标签栏',
+    // 悬浮窗体拖到条上时的提示徽标文案(必须与吸附手势的实际结果一致)。
+    dockHint: '在此处松手可以最大化并重新占用这个 Tab 位置',
+    // 「显示一个已经打开的窗体」(点文件树 / 最近关闭)时的播报:动效只是冗余强化,
+    // 真正承载信息的是这条文字与「区域切到了那一项」本身(WCAG:信息不得只由动效承载)。
+    revealAnnounce: '已切换到「{name}」',
+  },
+  // 对话窗体(区域成员里的一个对话被拆出为悬浮窗体后的外观):标题栏 / 关闭 / 落点提示。
+  // 对话与文件走**同一条**窗体机制,故 tab 上的「拆出」按钮与拖拽播报**复用 fileBar 的文案**
+  // ({name} 由载体填会话标题);只有「落点提示」另给一条 —— 文件那条的「最大化」用在对话上不贴切
+  // (对话没有最大化这个态,它只是停靠回条上占一个 Tab)。
+  chatWindow: {
+    label: '对话窗口',
+    close: '关闭对话窗口',
+    headerLabel: '对话标题栏',
+    headerHint: '拖动标题栏移动窗口 · 拖到顶部标签栏可停靠',
+    dock: '停靠回标签栏',
+    dockHint: '在此处松手可以把这段对话停靠回这个 Tab 位置',
   },
   // 文件面板:默认呈现**整个文件 + 变更标记**(不是只看 diff 片段),可切到统一 / 并排 diff。
   // 行级标记用形状而非仅颜色区分(新增 + / 删除 − / 修改 ~),词级高亮标出真正改动的字词。
   filePanel: {
     label: '文件面板',
     close: '关闭文件面板',
+    // 停靠态的 ✕ 关的是**这个文件的 tab**(面板占据的是区域内容区,隐藏窗口没有可见效果,
+    // 而且会让「区域仍在渲染它、tab 却标记为不可见」自相矛盾);悬浮态才是隐藏窗体。
+    closeTab: '关闭该文件标签',
     viewLabel: '查看方式',
     viewFile: '整个文件',
     viewUnified: '统一 diff',
     viewSide: '并排 diff',
     sideUnavailable: '窗口太窄,并排 diff 已自动降级为统一 diff',
     wrap: '自动换行',
-    // 标题栏(同时是拖拽手柄):可访问名 + 悬停提示。
+    // 标题栏(悬浮时同时是拖拽手柄):可访问名 + 悬停提示。两种模式下双击的含义不同,故两句提示。
     headerLabel: '文件标题栏',
-    headerHint: '拖动标题栏移动窗口 · 双击标题栏复位',
+    headerHint: '拖动标题栏移动窗口 · 双击标题栏停靠到内容区',
+    headerHintDocked: '双击标题栏还原为悬浮窗口',
     moveHint: '方向键移动窗口',
+    // 悬浮 ↔ 停靠的原生按钮(标题栏上的等价键盘通路):按钮文案随当前模式变化。
+    dock: '停靠到内容区',
+    float: '悬浮为独立窗口',
+    resetGeometry: '复位窗口位置与大小',
+    // 状态切换的播报文案(role="status")。
+    dockedAnnounce: '{name} 已停靠到内容区',
+    floatedAnnounce: '{name} 已还原为悬浮窗口',
     // 缩放手柄(APG Window Splitter):四条边的可访问名 + 键盘提示。
     resizeRight: '调整面板宽度(右缘)',
     resizeLeft: '调整面板宽度(左缘)',
@@ -255,9 +296,30 @@ export const workspace = {
     emptyTitle: '无法预览这个文件',
     emptyBody: '这是一个二进制文件，工作台只预览文本内容。',
   },
+  // ---- 区域切分:把 tab 拖到某个区域的边缘,沿该边切出一个新区域;区域之间是可拖动的分隔线 ----
+  regions: {
+    // 分隔线(APG Window Splitter)的可访问名与键盘提示。
+    resizeSeparator: '调整区域大小',
+    resizeHint: '方向键调整 · Home / End 到最小 / 最大',
+    // 拖 tab 到另一个区域时的落点提示(与吸附提示同一套语言):沿边 = 切分,内部 = 并入。
+    splitRight: '松手在此区域右侧新建区域',
+    splitBottom: '松手在此区域下方新建区域',
+    mergeHint: '松手并入这个区域',
+    splitAnnounce: '已把 {name} 切分到新区域',
+    mergeAnnounce: '已把 {name} 并入该区域',
+    // 区域成员被清空 → 该区域被摘除时的 role="status" 播报(根区域不可移除,故不会用到)。
+    regionClosed: '已关闭空区域',
+  },
+  // 引导页:根区域既无成员又无子区域 —— 右侧整块没有任何东西可显示时给出。与「空位占位」
+  // (那块区域只是没有活动成员)不是一回事,故文案独立,不复用 emptyTitle / emptyBody。
+  onboarding: {
+    // 等宽技术记号:本设计语言的科技感来自等宽字体承担的技术信息,不靠插画 / 渐变 / 发光。
+    mark: 'MIA / WORKSPACE',
+    title: '这里还没有打开的窗口',
+    body: '新建一段对话，或从下面的建议里挑一个开始。',
+  },
   // 工作台里的 Agent 名称:会话头副行显示当前会话归属的 Agent。
-  agents: {
-    planning: '规划助手',
+  agents: {    planning: '规划助手',
     research: '研究助手',
     writing: '写作助手',
   },

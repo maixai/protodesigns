@@ -10,16 +10,29 @@
 //
 // 组件是**受控的**:tabs / activePath / recent 由页面持有,组件只读并通过事件请求变更。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { FileTab } from '../data/open-files'
+import type { FileTab } from '../data/windows'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
-import { fileBaseName, fileTabKey } from '../data/open-files'
+import type { WindowRect } from '../contracts/generated/workspace-window'
+import { fileBaseName, fileTabKey } from '../data/windows'
+import { TEAR_OUT_KEYSHORTCUTS, isTearOutShortcut } from '../data/shortcuts'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
+
+// 拆出为悬浮窗体时交给页面的那一组几何:point = 窗体左上角应落到的点(已扣掉抓取偏移),
+// origin = 被拖的那个 tab 在屏幕上的矩形(FLIP 的来源)。页面按 windowId 处理,与内容无关。
+interface TabTearDetail {
+  key: string
+  point: { x: number; y: number }
+  origin: WindowRect
+}
 
 const props = defineProps<{
   tabs: FileTab[]
   // 当前**聚焦**的文件(条上的高亮 / roving tabindex 的落点)。
   activeKey: string
+  // 「显示一个已打开的窗体」时的提醒落点:与它同 key 的 tab 会短暂脉冲一次(见下方动画)。
+  // 由页面持有并在一拍后清空 —— 组件不持有这个状态,它只负责把这一帧画出来。
+  pulseKey?: string
   // 窗口**可见**的文件集合 —— 切换按钮的 aria-pressed 就是它(多窗口期可有多个同时按下)。
   visiblePaths: readonly string[]
   // 文件的状态芯片(新建 / 已改 / 待确认)。由页面按与文件树**同一条**规则派生后传入,
@@ -34,6 +47,16 @@ const emit = defineEmits<{
   close: [key: string]
   reorder: [order: string[]]
   'open-recent': [path: string]
+  // 非拖拽通路(WCAG 2.5.7):tab 上那枚按钮把该文件拆出为悬浮窗体。origin = 该 tab 的屏幕矩形,
+  // 供窗体做 FLIP 的来源(与鼠标拖出同一套结果)。
+  'tear-pop': [key: string, origin: WindowRect]
+  // 向下拖出:out = 判定为拆出(该 tab 从条上摘掉、内容成为悬浮窗体);move = 跟手位置;
+  // cancel = 指针回到条内,撤销拆出;end = 本次拖拽收尾(松手 / 取消)。
+  'tear-out': [detail: TabTearDetail]
+  // point = 窗体左上角该落到的点(跟手用);pointer = 指针的视口坐标(落点判定用 —— 两者差一个抓取偏移)。
+  'tear-move': [detail: { point: { x: number; y: number }; pointer: { x: number; y: number } }]
+  'tear-cancel': []
+  'tear-end': []
 }>()
 
 const { t } = useI18n()
@@ -61,6 +84,34 @@ function tabTitle(tab: FileTab): string {
 // 关闭钮的可访问名 = 「关闭 + 文件名」,多个关闭钮因此唯一可辨别(与会话 tab 同规则)。
 function closeLabel(tab: FileTab): string {
   return t.value.workspace.fileBar.closeFile.replace('{name}', `${fileBaseName(tab.path)}`)
+}
+
+// 「拆出」按钮的可访问名 = 「拆出 + 文件名」。它是拖拽之外的非拖拽通路(WCAG 2.5.7),
+// 故必须是一个真按钮(指针可点、Enter 可触发)。
+function popLabel(tab: FileTab): string {
+  return t.value.workspace.fileBar.popOut.replace('{name}', `${fileBaseName(tab.path)}`)
+}
+
+// 悬停 title:中英双语 + 快捷键(按钮已不在 Tab 序,快捷键是它的键盘通路)。
+function popTitle(tab: FileTab): string {
+  return t.value.workspace.fileBar.popOutTitle.replaceAll('{name}', `${fileBaseName(tab.path)}`)
+}
+
+// 「拆出」按钮的点击:把该 tab 的屏幕矩形一并交给页面(窗体 FLIP 的来源)。
+function emitPop(tab: FileTab): void {
+  const slot = tabsRef.value?.querySelector<HTMLElement>(`.file-tab[data-file-key="${CSS.escape(fileTabKey(tab))}"]`)?.closest('.file-tab-slot') ?? null
+  const rect = slot instanceof HTMLElement ? slot.getBoundingClientRect() : null
+  emit('tear-pop', fileTabKey(tab), rect === null
+    ? { x: 0, y: 0, width: 0, height: 0 }
+    : { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+}
+
+function onTabPop(event: MouseEvent, tab: FileTab): void {
+  const slot = event.currentTarget instanceof Element ? event.currentTarget.closest('.file-tab-slot') : null
+  const rect = slot instanceof HTMLElement ? slot.getBoundingClientRect() : null
+  emit('tear-pop', fileTabKey(tab), rect === null
+    ? { x: 0, y: 0, width: 0, height: 0 }
+    : { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
 }
 
 // ---- 溢出计算(与会话 tab 条同一套算法:等宽 + clamp,不出现半截 tab)----
@@ -167,6 +218,14 @@ function onTabsKeydown(event: KeyboardEvent): void {
     void nextTick(() => focusTab(moved))
     return
   }
+  // Ctrl/Cmd+Shift+M:把**聚焦的 tab** 拆出为悬浮窗体(其「拆出」钮已移出 Tab 序,这里是它的
+  // 键盘等价通路;WCAG 2.5.7 只要求存在非拖拽入口,不要求它落在 Tab 序里)。
+  if (isTearOutShortcut(event)) {
+    event.preventDefault()
+    const tab = list[index]
+    if (tab !== undefined) emitPop(tab)
+    return
+  }
   let next = index
   if (event.key === 'ArrowRight') next = (index + 1) % list.length
   else if (event.key === 'ArrowLeft') next = (index - 1 + list.length) % list.length
@@ -178,17 +237,40 @@ function onTabsKeydown(event: KeyboardEvent): void {
   if (nextTab !== undefined) focusTab(nextTab.path)
 }
 
-// ---- 拖拽排序(Pointer Events + setPointerCapture)----
+// ---- 拖拽:横向重排 + 向下拆出(两种手势共用同一次按下)----
+// 越过 DRAG_THRESHOLD_PX 后**先定轴向再锁定**,之后不再改 —— 拖到一半改向不会在两种手势之间
+// 来回跳,也就不会互相误触发。横向 = 重排(既有);向下 = 把该 tab 拆出为悬浮窗体。
+// 纵向那一支的元素会被从条上摘掉(收不到后续指针事件),故它在确认拆出时把 move / up 改挂到
+// document —— 这正是 Pointer Events 的既定做法。全程用 Pointer Events,不用 HTML5 drag-and-drop
+// (后者在拖动期间抑制键盘事件,Esc 取消会失效)。
 const DRAG_THRESHOLD_PX = 4
+// 越过 tab 条**下沿**这么多 → 判定为拆出;回到下沿以内这么多 → 撤销。两值之差构成迟滞带:
+// 在下沿附近微动不会反复拆出 / 收回,松手前始终可逆。
+const TEAR_DROP_DISTANCE = 24
+const TEAR_REATTACH_DISTANCE = 12
 const dragKey = ref('')
 const dragIndex = ref(-1)
 const dropIndex = ref(-1)
 const dragOffsetX = ref(0)
 let suppressClick = false
+let dragAxis: 'none' | 'x' | 'y' = 'none'
 let dragStartX = 0
+let dragStartY = 0
 let dragPointerId = -1
+let dragSlot: HTMLElement | null = null
 let slotLefts: number[] = []
 let slotWidth = 0
+// 拆出的几何基准(按下时量一次;一次拖拽期间 tab 条与 tab 都不动)。
+let stripBottom = 0
+let grabOffsetX = 0
+let grabOffsetY = 0
+let dragOrigin: WindowRect = { x: 0, y: 0, width: 0, height: 0 }
+// 本次拖拽是否拆出过(含撤销过的情形):决定松手时要不要通知页面收尾。
+let didTearOut = false
+// 当前是否处于拆出态(窗体已从条上摘掉、跟着指针走)。
+let tearActive = false
+// 我们自己释放过指针捕获 —— 随之而来的 lostpointercapture 不是「指针被系统打断」,忽略一次。
+let ignoreLostCapture = false
 
 function resetDrag(): void {
   dragKey.value = ''
@@ -196,26 +278,43 @@ function resetDrag(): void {
   dropIndex.value = -1
   dragOffsetX.value = 0
   dragPointerId = -1
+  dragSlot = null
   slotLefts = []
   slotWidth = 0
+  dragAxis = 'none'
+  tearActive = false
+  didTearOut = false
 }
 
 function onTabPointerDown(event: PointerEvent, index: number): void {
   suppressClick = false
+  // 只响应主指针(多指触摸时其余指针不参与本次手势)。
+  if (!event.isPrimary) return
   if (event.button !== 0) return
-  if (visibleTabs.value.length < 2) return
+  if (visibleTabs.value.length < 1) return
   const target = event.target
-  if (target instanceof Element && target.closest('.file-tab-close') !== null) return
+  // 关闭钮 / 拆出钮上按下不启动拖拽(它们各有自己的动作)。
+  if (target instanceof Element && (target.closest('.file-tab-close') !== null || target.closest('.file-tab-pop') !== null)) return
   const slot = event.currentTarget
   if (!(slot instanceof HTMLElement)) return
   const slots = Array.from(tabsRef.value?.querySelectorAll<HTMLElement>('.file-tab-slot') ?? [])
   if (slots.length !== visibleTabs.value.length) return
+  const rect = slot.getBoundingClientRect()
+  dragSlot = slot
   slotLefts = slots.map((element) => element.getBoundingClientRect().left)
-  slotWidth = slots[index]?.getBoundingClientRect().width ?? 0
+  slotWidth = rect.width
   dragStartX = event.clientX
+  dragStartY = event.clientY
   dragPointerId = event.pointerId
   dragIndex.value = index
   dropIndex.value = index
+  // 拆出的判定基准:tab 条的**下沿**(拖过它 24px 即拆出)、按下点相对本 tab 左上角的偏移
+  // (窗体初始位置据此算,否则会瞬移)、以及本 tab 的屏幕矩形(FLIP 的来源)。
+  const strip = tabsRef.value?.getBoundingClientRect()
+  stripBottom = strip?.bottom ?? rect.bottom
+  grabOffsetX = event.clientX - rect.left
+  grabOffsetY = event.clientY - rect.top
+  dragOrigin = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
 }
 
 function resolveDropIndex(pointerX: number): number {
@@ -229,21 +328,125 @@ function resolveDropIndex(pointerX: number): number {
 
 function onTabPointerMove(event: PointerEvent): void {
   if (dragIndex.value < 0 || event.pointerId !== dragPointerId) return
-  const delta = event.clientX - dragStartX
-  if (dragKey.value === '') {
-    if (Math.abs(delta) < DRAG_THRESHOLD_PX) return
+  // 纵向手势已交给 document 级处理器(元素会被摘掉,这里收不到事件)。
+  if (dragAxis === 'y') return
+  const dx = event.clientX - dragStartX
+  const dy = event.clientY - dragStartY
+  if (dragAxis === 'none') {
+    // 移动超过阈值才判定为拖拽;否则仍是点击(浏览器同款:轻微抖动不该变成拖动)。
+    if (Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return
     const dragged = visibleTabs.value[dragIndex.value]
     const slot = event.currentTarget
     if (dragged === undefined || !(slot instanceof HTMLElement)) return
-    slot.setPointerCapture(event.pointerId)
     dragKey.value = fileTabKey(dragged)
+    dragSlot = slot
+    // 轴向锁定:明确的**向下**意图(纵向分量占优)才是拆出,其余一律按重排。
+    dragAxis = dy > 0 && dy > Math.abs(dx) ? 'y' : 'x'
+    // 确认是拖拽,此刻才捕获指针 —— 捕获会把随后的 click 改派到捕获元素,普通点击(选中 tab)
+    // 就废了。纵向那一支会在拆出时主动释放它。
+    slot.setPointerCapture(event.pointerId)
+    if (dragAxis === 'y') {
+      addTearListeners()
+      evaluateTear(event)
+      return
+    }
   }
-  dragOffsetX.value = delta
+  dragOffsetX.value = dx
   dropIndex.value = resolveDropIndex(event.clientX)
+}
+
+// 指针相对 tab 条下沿的位置:判定拆出 / 撤销拆出。两处共用,阈值之差即迟滞带。
+function evaluateTear(event: PointerEvent): void {
+  const below = event.clientY - stripBottom
+  if (tearActive) {
+    if (below <= TEAR_REATTACH_DISTANCE) {
+      cancelTear()
+      return
+    }
+    // 跟手:窗体的左上角 = 指针 − 抓取偏移,由页面写进窗体几何(零过渡)。
+    emit('tear-move', {
+      point: { x: event.clientX - grabOffsetX, y: event.clientY - grabOffsetY },
+      pointer: { x: event.clientX, y: event.clientY },
+    })
+    return
+  }
+  if (below >= TEAR_DROP_DISTANCE) startTear(event)
+}
+
+// 判定为拆出:元素即将从 tab 条移到浮层 —— **先释放指针捕获**(搬走之后再 setPointerCapture
+// 会失去跟踪),再把 move / up / cancel 改挂到 document。
+function startTear(event: PointerEvent): void {
+  tearActive = true
+  didTearOut = true
+  if (dragSlot !== null && dragSlot.hasPointerCapture(event.pointerId)) {
+    ignoreLostCapture = true
+    dragSlot.releasePointerCapture(event.pointerId)
+  }
+  emit('tear-out', {
+    key: dragKey.value,
+    point: { x: event.clientX - grabOffsetX, y: event.clientY - grabOffsetY },
+    origin: dragOrigin,
+  })
+}
+
+function cancelTear(): void {
+  if (!tearActive) return
+  tearActive = false
+  emit('tear-cancel')
+}
+
+function addTearListeners(): void {
+  document.addEventListener('pointermove', onTearPointerMove)
+  document.addEventListener('pointerup', onTearPointerUp)
+  document.addEventListener('pointercancel', onTearPointerCancel)
+  document.addEventListener('lostpointercapture', onTearLostCapture)
+}
+
+function removeTearListeners(): void {
+  document.removeEventListener('pointermove', onTearPointerMove)
+  document.removeEventListener('pointerup', onTearPointerUp)
+  document.removeEventListener('pointercancel', onTearPointerCancel)
+  document.removeEventListener('lostpointercapture', onTearLostCapture)
+}
+
+function onTearPointerMove(event: PointerEvent): void {
+  if (event.pointerId !== dragPointerId || !event.isPrimary) return
+  evaluateTear(event)
+}
+
+function onTearPointerUp(event: PointerEvent): void {
+  if (event.pointerId !== dragPointerId) return
+  endTearDrag()
+}
+
+// 指针被系统取消(触摸被中断 / 指针离开窗口):撤销拆出并收尾。
+function onTearPointerCancel(event: PointerEvent): void {
+  if (event.pointerId !== dragPointerId) return
+  cancelTear()
+  endTearDrag()
+}
+
+function onTearLostCapture(event: PointerEvent): void {
+  // 自己主动释放捕获的那一次不是取消信号。
+  if (ignoreLostCapture) {
+    ignoreLostCapture = false
+    return
+  }
+  if (event.pointerId !== dragPointerId) return
+  cancelTear()
+  endTearDrag()
+}
+
+function endTearDrag(): void {
+  removeTearListeners()
+  if (didTearOut) emit('tear-end')
+  resetDrag()
 }
 
 function onTabPointerUp(event: PointerEvent): void {
   if (dragIndex.value < 0 || event.pointerId !== dragPointerId) return
+  // 纵向手势由 document 级处理器收尾。
+  if (dragAxis === 'y') return
   const slot = event.currentTarget
   if (slot instanceof HTMLElement && slot.hasPointerCapture(event.pointerId)) slot.releasePointerCapture(event.pointerId)
   const wasDragging = dragKey.value !== ''
@@ -265,6 +468,8 @@ function onTabPointerUp(event: PointerEvent): void {
 
 function cancelDrag(event?: PointerEvent): void {
   if (dragIndex.value < 0) return
+  // 纵向手势的取消走 onTearPointerCancel(它会撤销拆出并收尾)。
+  if (dragAxis === 'y') return
   if (event !== undefined) {
     const slot = event.currentTarget
     if (slot instanceof HTMLElement && slot.hasPointerCapture(event.pointerId)) slot.releasePointerCapture(event.pointerId)
@@ -278,6 +483,11 @@ function onDragKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || dragIndex.value < 0) return
   event.preventDefault()
   event.stopPropagation()
+  if (dragAxis === 'y') {
+    cancelTear()
+    endTearDrag()
+    return
+  }
   cancelDrag()
 }
 
@@ -401,10 +611,11 @@ onBeforeUnmount(() => {
           :data-file-key="fileTabKey(tab)"
           :data-file-path="tab.path"
           class="file-tab"
+          :data-pulsing="fileTabKey(tab) === pulseKey ? 'true' : undefined"
 
           :aria-pressed="visiblePaths.includes(fileTabKey(tab))"
           :tabindex="fileTabKey(tab) === tabStopKey ? 0 : -1"
-          :aria-actions="`file-close-${fileTabKey(tab)}`"
+          :aria-actions="`file-close-${fileTabKey(tab)} file-pop-${fileTabKey(tab)}`"
           :title="tabTitle(tab)"
           @click="onTabClick(fileTabKey(tab))"
           @focus="focusedKey = fileTabKey(tab)"
@@ -414,6 +625,24 @@ onBeforeUnmount(() => {
           <DliIcon class="file-tab__icon" name="fileText" size="sm" />
           <span class="file-tab__label">{{ fileBaseName(tab.path) }}</span>
           <span v-if="chipLabel(tab)" class="file-tab__chip" :data-state="stateOf(tab)">{{ chipLabel(tab) }}</span>
+        </button>
+        <!-- 「拆出」钮:拖拽之外的非拖拽通路(WCAG 2.5.7 —— 凡靠拖动手势完成的功能都要有
+             非拖动的等价入口)。它是**真按钮**(指针可点、Enter 可触发),图标纯装饰,
+             语义由 aria-label / title 承担;与关闭钮并排、同在悬停 / 聚焦时显现。
+             它**不在 Tab 序里**(tabindex=-1):键盘通路改由快捷键 Ctrl/Cmd+Shift+M 承担
+             (在 tab 条上按即把当前聚焦的 tab 拆出),故 tab 条上少一个重复的逐项停靠点。
+             title 为中英双语,悬停即可读到快捷键(见 aria-keyshortcuts)。 -->
+        <button
+          :id="`file-pop-${fileTabKey(tab)}`"
+          type="button"
+          class="file-tab-pop"
+          tabindex="-1"
+          :aria-keyshortcuts="TEAR_OUT_KEYSHORTCUTS"
+          :aria-label="popLabel(tab)"
+          :title="popTitle(tab)"
+          @click="onTabPop($event, tab)"
+        >
+          <DliIcon name="window" size="sm" />
         </button>
         <button
           :id="`file-close-${fileTabKey(tab)}`"
@@ -446,6 +675,9 @@ onBeforeUnmount(() => {
      脚本按本元素(裸条)的 clientWidth 算可用宽 —— 它已经是栏内容宽(左右内边距已让出)。 */
   --file-tab-min: 140px;
   --file-tab-max: 220px;
+  /* 文件 tab 右侧为**两枚**行内控件(拆出 / 关闭)恒常预留的槽宽 = 24 + 4 + 24 + 4 + 4。
+     恒常预留 → 悬停时两钮显现不产生任何重排(与会话 tab 的关闭钮同一条规矩)。 */
+  --file-tab-reserved: calc(2 * var(--dl-icon-lg) + 3 * var(--dl-space-1));
 }
 
 /* 文件图标:区分「这是文件」而不是对话(项目标识已随分域删除 —— 那个区分的是项目,不是类型)。 */
@@ -478,6 +710,8 @@ onBeforeUnmount(() => {
 
 /* 单个文件 tab:与会话 tab 同一档尺寸(紧凑导航行档 32px,横向 tab 条的任何宽度都保持此档)。 */
 .file-tab {
+  /* position: relative —— 提醒脉冲的环画在 ::after 上,需要一个定位上下文。 */
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -485,14 +719,17 @@ onBeforeUnmount(() => {
   gap: var(--dl-space-2);
   block-size: var(--workspace-nav-control-size);
   padding-inline-start: var(--dl-space-3);
-  /* 右内边距恒常预留关闭钮的槽(= 会话 tab 的同一取值),悬停出现时零重排。 */
-  padding-inline-end: var(--workspace-tab-reserved);
+  /* 右内边距恒常预留**两枚**行内控件(拆出 / 关闭)的槽,悬停显现时零重排。 */
+  padding-inline-end: var(--file-tab-reserved);
   border-radius: var(--dl-radius-md);
   color: var(--dl-text-secondary);
   font-size: var(--dl-font-size-sm);
   font-weight: 400;
   text-align: start;
-  touch-action: pan-y;
+  /* 本 tab 同时承担**横向重排**与**向下拆出**两种指针手势,故两个轴都交给指针事件 ——
+     否则纵向拖动会被浏览器当成滚动手势吞掉(拖出根本收不到 pointermove)。
+     条这一行本身不可滚,代价只是「手指落在 tab 上时不能拖动页面」。 */
+  touch-action: none;
   transition: transform var(--dl-duration-fast) var(--dl-ease-standard), background-color var(--dl-duration-fast) var(--dl-ease-standard);
 }
 
@@ -557,6 +794,41 @@ onBeforeUnmount(() => {
   background: var(--dl-accent-soft);
   color: var(--dl-text-primary);
   font-weight: 500;
+}
+
+/* 「拆出」钮:与关闭钮同尺寸(24×24 密集行内控件档)、同显现规则,排在关闭钮**左侧**
+   (关闭钮是行尾那一枚,拆出钮让开一个图标宽 + 一档间隙)。它是拖拽之外的非拖拽通路,
+   但**不进 Tab 顺序**(tabindex=-1)——键盘通路改由快捷键 Ctrl/Cmd+Shift+M 承担,
+   WCAG 2.5.7 要求的是「存在非拖拽入口」,不要求在 Tab 序里。图标走三级文字色,悬停 / 聚焦提到一级。 */
+.file-tab-pop {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: calc(var(--dl-space-1) + var(--dl-icon-lg) + var(--dl-space-1));
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--dl-icon-lg);
+  block-size: var(--dl-icon-lg);
+  border-radius: var(--dl-radius-pill);
+  color: var(--dl-text-tertiary);
+  opacity: 0;
+  transition: opacity var(--dl-duration-fast) var(--dl-ease-standard), color var(--dl-duration-fast) var(--dl-ease-standard), background-color var(--dl-duration-fast) var(--dl-ease-standard);
+}
+
+.file-tab-slot:hover .file-tab-pop,
+.file-tab-slot:focus-within .file-tab-pop {
+  opacity: 1;
+}
+
+.file-tab-pop:hover,
+.file-tab-pop:focus-visible {
+  color: var(--dl-text-primary);
+  background: var(--dl-bg-hover);
+}
+
+.file-tab-pop:focus-visible {
+  box-shadow: var(--dl-focus-ring);
 }
 
 /* 关闭钮:与会话 tab 的关闭钮同尺寸(24×24 密集行内控件档),悬停 / 聚焦出现。 */
@@ -789,10 +1061,40 @@ onBeforeUnmount(() => {
     transition: none;
   }
 
+  .file-tab-pop,
+  .file-tab-close {
+    transition: none;
+  }
+
   .file-tab:active,
   .file-bar__trigger:active:not(:disabled),
   .file-bar__row:active {
     transform: none;
   }
+}
+
+/* 「显示一个已打开的窗体」时的提醒(与 conversation-switcher 同款、同一套依据):
+   一次性短脉冲,随后回落为静态选中态;只动 opacity(本仓动效白名单)。
+   WCAG 2.3.1 硬线 1 秒内闪光 ≤3 次 → 只闪一次;900ms 与页面的 PULSE_MS 必须一致。 */
+.file-tab[data-pulsing='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-accent);
+  pointer-events: none;
+}
+
+/* 降级是**替换**而非删除:reduced-motion 下不做淡入淡出,那条静态强调描边仍出现 900ms。 */
+@media (prefers-reduced-motion: no-preference) {
+  .file-tab[data-pulsing='true']::after {
+    animation: file-tab-attention 900ms var(--dl-ease-standard) 1 both;
+  }
+}
+
+@keyframes file-tab-attention {
+  0% { opacity: 0; }
+  30% { opacity: 1; }
+  100% { opacity: 0; }
 }
 </style>

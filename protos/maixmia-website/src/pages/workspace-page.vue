@@ -459,7 +459,8 @@ async function loadFileContent(path: string): Promise<void> {
   if (!layout.value.windows.some((win) => win.id === path)) return
   const next: FilePanelState = !result.ok
     ? { status: 'error' }
-    : (result.value.lines.length === 0 ? { status: 'empty' } : { status: 'ready', content: result.value })
+    // 「无法预览」由契约的 kind 判定(而不是 lines 为空):图片同样没有变更行,但它**要**渲染。
+    : (result.value.kind === 'binary' ? { status: 'empty' } : { status: 'ready', content: result.value })
   fileContents.value = { ...fileContents.value, [path]: next }
 }
 function contentOf(path: string): FilePanelState {

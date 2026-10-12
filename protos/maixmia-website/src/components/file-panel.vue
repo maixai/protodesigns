@@ -19,19 +19,35 @@
 //     (Reviewable 的文档明确写「窗口变窄时并排自动转为统一,反之亦然」);
 //   · 换行开关:长行不横向滚动。
 //
+// 顶部一条分段控件切换**三档视图**,同一份内容在同一栏里就地换形态:
+//   · 渲染 —— Markdown 按 Markdown 渲染(含 mermaid 图)/ HTML 走 sandbox iframe / 图片直接显示 /
+//     其余文本类型给等宽预览。**只读** —— 只读态是「看」的默认,故在显眼处给一枚「编辑」入口,
+//     点了切到源码态并把焦点交给编辑器。
+//   · 源码 —— CodeMirror 6,可编辑、带语法高亮(语言映射见 data/file-language.ts)。
+//   · 变更 —— 既有的「整个文件 / 统一 diff / 并排 diff」三段,原样保留,只是收进这一档之下。
+//
+// 形态依据(调研结论):业界成熟词汇是 Obsidian 的 Source / Live Preview / Reading View 三态;
+// VS Code 用户在 microsoft/vscode#301686 里明确要求「在**同一个 tab** 里用一个按钮切换阅读与
+// 编辑」(原话抱怨 split pane 笨重、预览入口太隐蔽)→ 单栏切换是主流诉求。本原型因此**不做**
+// Live Preview / WYSIWYG,只做「源码可编辑 + 渲染只读」。
+//
+// 视图可用性由契约的 kind 决定:image 只有渲染态(没有可编辑的文本),binary 走「无法预览」空态。
+//
 // a11y:悬浮态是**非模态**对话框(不写 aria-modal,不圈定焦点),停靠态是内容区里的 `region`;
 // 其内容区是文件栏那个 tablist 的 tabpanel(文件栏与转录区**各自**有一个 tablist 与 tabpanel,
 // 互不冲突)。待确认文件的「允许 / 拒绝」与转录里的确认卡同源同动作(同一个 ConfirmationRequest、
 // 同一个处理函数)。
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NSkeleton } from 'naive-ui'
-import type { FileLine } from '../contracts/generated/file-content'
+import type { FileKindId, FileLine } from '../contracts/generated/file-content'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { WindowRect } from '../contracts/generated/workspace-window'
 import type { FileDisplayItem, FilePanelState } from '../data/windows'
 import { buildDisplayItems } from '../data/windows'
+import { enhanceMermaidDiagrams, renderMarkdown } from '../data/file-render'
 import { useI18n } from '../i18n'
+import { useCodeEditor } from '../composables/use-code-editor'
 import { useWindowFrame } from '../composables/use-window-frame'
 import WindowFrame from './window-frame.vue'
 import DliIcon from './dl-icon.vue'
@@ -98,11 +114,74 @@ const SIDE_BY_SIDE_MIN_WIDTH = 640
 const PANEL_MIN_W = 320
 const PANEL_MIN_H = 200
 
+// 「变更」档里的三段展示方式(整个文件 / 统一 diff / 并排 diff)。
 type ViewMode = 'file' | 'unified' | 'side'
 const viewMode = ref<ViewMode>('file')
+// 顶部三档视图。默认落在**渲染** —— 单一规则,不按文件类型变:看是默认意图,编辑是显式动作。
+type Pane = 'render' | 'source' | 'change'
+const pane = ref<Pane>('render')
 const isWrap = ref(false)
 const expandedFolds = ref<Set<number>>(new Set())
 const canSideBySide = ref(true)
+
+const content = computed(() => (props.state.status === 'ready' ? props.state.content : null))
+const lines = computed<FileLine[]>(() => content.value?.lines ?? [])
+// 图片的来源(仅 kind === image 非空):原型无后端,契约里给的是 data URL。
+const contentUrl = computed(() => content.value?.contentUrl ?? '')
+// 呈现类别决定「有哪些视图可用」。binary 走「无法预览」空态(没有内容可渲染);
+// image 只有渲染态 —— 图片没有可编辑的文本,故没有源码态,也就没有「编辑」入口。
+const kind = computed<FileKindId | null>(() => content.value?.kind ?? null)
+const paneOptions = computed<Pane[]>(() => {
+  if (kind.value === null || kind.value === 'binary') return []
+  if (kind.value === 'image') return ['render']
+  return ['render', 'source', 'change']
+})
+
+// 编辑作用于**内存里的 source**:刷新即重置,与原型其余部分同一口径。
+// 注意它**不重算「变更」档的 diff 标记** —— 那些标记来自 mock 的下发(它表达的是「相对上一次
+// 改动」),编辑只是把人这台机器上的当前内容改掉;界面也不得暗示「变更已更新」。
+const sourceDraft = ref('')
+// 渲染态的容器(标记为只读):mermaid 图在 HTML 落到 DOM 之后就地渲染。
+const renderHost = ref<HTMLElement | null>(null)
+const editorHost = ref<HTMLElement | null>(null)
+const renderedHtml = ref('')
+
+// 内容变了(换文件 / 重试)就复位折叠、草稿与视图 —— 这些都属于「这一次看这个文件」。
+watch(() => [props.path, props.state] as const, () => {
+  expandedFolds.value = new Set()
+  sourceDraft.value = content.value?.source ?? ''
+  refreshRender()
+}, { immediate: true })
+
+// Markdown 渲染 + 清洗(管线与安全模型见 data/file-render.ts);其余类型不产生 HTML。
+function refreshRender(): void {
+  renderedHtml.value = kind.value === 'markdown' ? renderMarkdown(sourceDraft.value) : ''
+}
+
+async function enhanceCurrent(): Promise<void> {
+  if (pane.value !== 'render' || kind.value !== 'markdown') return
+  const host = renderHost.value
+  if (host === null) return
+  await enhanceMermaidDiagrams(host, t.value.workspace.filePanel.diagramFailed)
+}
+
+onMounted(() => { void enhanceCurrent() })
+// 源码态改过之后回到渲染态,渲染的必须是**改过之后**的内容(两态共用同一份 source)。
+watch([sourceDraft, pane], () => {
+  if (pane.value === 'render') refreshRender()
+})
+watch(renderedHtml, () => { void enhanceCurrent() }, { flush: 'post' })
+
+// 挂载编辑器:返回值(聚焦 / 取值等句柄)本轮不再需要,故不接;
+// 「切档自动聚焦」已按无障碍取舍去掉(焦点不该被意外移动),故这里只做实例化。
+useCodeEditor({
+  host: editorHost,
+  getText: () => sourceDraft.value,
+  getLanguage: () => content.value?.language ?? 'text',
+  getPath: () => props.path,
+  getWrap: () => isWrap.value,
+  onChange: (value) => { sourceDraft.value = value },
+})
 
 // 停靠模式:填满区域内容区,不能拖动 / 缩放(几何由容器给出),标题栏双击 / 头部按钮做「还原悬浮」。
 const isDocked = computed(() => props.mode === 'docked')
@@ -110,6 +189,16 @@ const isDocked = computed(() => props.mode === 'docked')
 const headerHint = computed(() => (isDocked.value ? t.value.workspace.filePanel.headerHintDocked : t.value.workspace.filePanel.headerHint))
 // 模式切换按钮的文案:悬浮时提示「停靠」,停靠时提示「悬浮」。
 const placementLabel = computed(() => (isDocked.value ? t.value.workspace.filePanel.float : t.value.workspace.filePanel.dock))
+
+// 三档视图的图标与文案。图标只在**宽档**用于辅助识别(窄档保留文字,见 style 里的说明),
+// 故 aria-label 一律给出完整语义(图标按钮不靠图形传达含义)。
+const PANE_ICON: Record<Pane, 'presentation' | 'code' | 'table'> = { render: 'presentation', source: 'code', change: 'table' }
+
+function paneLabel(option: Pane): string {
+  if (option === 'render') return t.value.workspace.filePanel.paneRender
+  if (option === 'source') return t.value.workspace.filePanel.paneSource
+  return t.value.workspace.filePanel.paneChange
+}
 
 // 悬浮 ↔ 停靠:由标题栏双击与头部按钮共同触发。两条路都是**非拖拽通路**(WCAG 2.5.7:
 // 凡靠拖动手势完成的功能都要有非拖动的替代)。停靠时带上当前几何 —— 页面据此做吸附方向的 FLIP。
@@ -141,14 +230,6 @@ const frame = useWindowFrame({
     dragCancel: () => emit('drag-cancel'),
   },
 })
-
-// 内容变了(换文件 / 重试)就复位折叠与新文件的视图 —— 折叠状态属于「这一次看这个文件」。
-watch(() => [props.path, props.state] as const, () => {
-  expandedFolds.value = new Set()
-})
-
-const content = computed(() => (props.state.status === 'ready' ? props.state.content : null))
-const lines = computed<FileLine[]>(() => content.value?.lines ?? [])
 
 // 展示项:每行,或一段被折叠的未变更行。
 const items = computed<FileDisplayItem[]>(() => buildDisplayItems(lines.value, expandedFolds.value))
@@ -253,6 +334,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
     :role="isDocked ? 'region' : 'dialog'"
     :aria-label="t.workspace.filePanel.label"
     :data-status="state.status"
+    :data-pane="pane"
     :data-view="effectiveView"
     :data-mode="mode"
     :data-default-geometry="frame.hasExplicitRect.value ? 'false' : 'true'"
@@ -275,29 +357,30 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
         </span>
       </div>
       <div class="file-panel__tools">
-        <div class="file-panel__views" role="group" :aria-label="t.workspace.filePanel.viewLabel">
-          <button type="button" class="file-panel__view" :aria-pressed="viewMode === 'file'" :aria-label="t.workspace.filePanel.viewFile" :title="t.workspace.filePanel.viewFile" @click="viewMode = 'file'">
-            <DliIcon class="file-panel__view-icon" name="fileText" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewFile }}</span>
-          </button>
-          <button type="button" class="file-panel__view" :aria-pressed="viewMode === 'unified'" :aria-label="t.workspace.filePanel.viewUnified" :title="t.workspace.filePanel.viewUnified" @click="viewMode = 'unified'">
-            <DliIcon class="file-panel__view-icon" name="code" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewUnified }}</span>
-          </button>
+        <!-- 顶部三档视图:渲染 | 源码 | 变更。原生按钮 + aria-pressed(键盘可达、状态可读);
+             窄容器下按既有做法收成图标(可访问名由 aria-label 承担)。 -->
+        <div class="file-panel__modes" role="group" :aria-label="t.workspace.filePanel.paneLabel">
           <button
+            v-for="option in paneOptions"
+            :key="option"
             type="button"
-            class="file-panel__view"
-            :aria-pressed="viewMode === 'side'"
-            :aria-label="t.workspace.filePanel.viewSide"
-            :disabled="!canSideBySide"
-            :title="canSideBySide ? t.workspace.filePanel.viewSide : t.workspace.filePanel.sideUnavailable"
-            @click="viewMode = 'side'"
+            class="file-panel__mode"
+            :data-pane="option"
+            :aria-pressed="pane === option"
+            :aria-label="option === 'source' ? t.workspace.filePanel.sourceHint : paneLabel(option)"
+            :title="option === 'source' ? t.workspace.filePanel.sourceHint : paneLabel(option)"
+            @click="pane = option"
           >
-            <DliIcon class="file-panel__view-icon" name="table" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewSide }}</span>
+            <DliIcon class="file-panel__mode-icon" :name="PANE_ICON[option]" size="sm" /><span class="file-panel__mode-label">{{ paneLabel(option) }}</span>
           </button>
         </div>
         <!-- 换行开关:宽档是**文字钮**,最窄档(≤559px)收成图标钮 —— 见下方 @container 的说明。
+             渲染态不渲染它:那一档没有「长行」这回事(渲染出来的 HTML 自己换行),摆了也不产生
+             任何效果,那就是一枚死控件。源码与变更两档共用它(编辑器走 lineWrapping)。
              收窄后可见文字消失,**可访问名由 aria-label 承担**(与可见文字同一条词条),
              aria-pressed 的状态语义不变,仍是原生 button(键盘可达)。 -->
         <button
+          v-if="pane !== 'render'"
           type="button"
           class="file-panel__toggle"
           :aria-pressed="isWrap"
@@ -346,8 +429,55 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
         <h2>{{ t.workspace.filePanel.emptyTitle }}</h2>
         <p>{{ t.workspace.filePanel.emptyBody }}</p>
       </div>
+      <!-- ---- 渲染档:各类型按自己的方式呈现,**一律只读** ---- -->
+      <template v-else-if="pane === 'render'">
+        <!-- 本档**只读**,且**没有**第二枚「编辑」入口 —— 唯一的编辑入口就是标题栏分段控件里的
+             「源码」档(带 code 图标 + 「源码 · 可编辑」提示)。依据:PatternFly 的 inline-edit
+             指南把铅笔开关**内联放在 header 里**;Linear / Notion / Attio 的对照也被总结成
+             「**两个并列的编辑按钮本身就是异味**,一流产品收敛成一个清晰模型」;而在只读的阅读
+             视图里摆一枚实心主按钮,会把「读」这个首要动作的视觉主次整个压翻。
+             另:本档也不吸顶任何工具行 —— 正文之上不再压一条色带。 -->
+        <!-- 图片:contain(不拉伸、不裁切),src 来自契约的 contentUrl。 -->
+        <div v-if="kind === 'image'" class="file-render file-render--image">
+          <img class="file-render__image" :src="contentUrl" :alt="t.workspace.filePanel.imageAlt.replace('{name}', path)" />
+        </div>
+        <!-- Markdown:markdown-it 渲染 + DOMPurify 清洗**之后**才注入;mermaid 图在注入后就地渲染
+             (动态加载 + 严格安全级 + 二次清洗,见 data/file-render.ts 的安全模型)。 -->
+        <div v-else-if="kind === 'markdown'" ref="renderHost" class="file-render file-render--markdown" v-html="renderedHtml" />
+        <!-- HTML:内容放进 **sandbox 的 iframe** —— script 可以跑(演示页本来就要跑),但**不给**
+             allow-same-origin,源因此是不透明的:iframe 里的脚本读不到本页的 localStorage、也调不了
+             同源已鉴权的接口(n8n CVE-2026-65597 正是缺了这一条)。 -->
+        <iframe v-else-if="kind === 'html'" class="file-render file-render__frame" :srcdoc="sourceDraft" sandbox="allow-scripts" :title="t.workspace.filePanel.htmlPreview" />
+        <!-- 其余文本类型:等宽纯文本预览(不做过度渲染)。插值天然转义,不走 v-html。 -->
+        <pre v-else class="file-render file-render--text">{{ sourceDraft }}</pre>
+      </template>
+      <!-- ---- 源码档:CodeMirror 6,可编辑、带语法高亮(语言映射见 data/file-language.ts) ---- -->
+      <div v-else-if="pane === 'source'" ref="editorHost" class="file-panel__editor" />
+      <!-- ---- 变更档:既有的「整个文件 / 统一 diff / 并排 diff」三段原样保留,收在这一档之下 ---- -->
+      <template v-else>
+        <div class="file-panel__subtools">
+          <div class="file-panel__views" role="group" :aria-label="t.workspace.filePanel.viewLabel">
+            <button type="button" class="file-panel__view" :aria-pressed="viewMode === 'file'" :aria-label="t.workspace.filePanel.viewFile" :title="t.workspace.filePanel.viewFile" @click="viewMode = 'file'">
+              <DliIcon class="file-panel__view-icon" name="fileText" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewFile }}</span>
+            </button>
+            <button type="button" class="file-panel__view" :aria-pressed="viewMode === 'unified'" :aria-label="t.workspace.filePanel.viewUnified" :title="t.workspace.filePanel.viewUnified" @click="viewMode = 'unified'">
+              <DliIcon class="file-panel__view-icon" name="code" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewUnified }}</span>
+            </button>
+            <button
+              type="button"
+              class="file-panel__view"
+              :aria-pressed="viewMode === 'side'"
+              :aria-label="t.workspace.filePanel.viewSide"
+              :disabled="!canSideBySide"
+              :title="canSideBySide ? t.workspace.filePanel.viewSide : t.workspace.filePanel.sideUnavailable"
+              @click="viewMode = 'side'"
+            >
+              <DliIcon class="file-panel__view-icon" name="table" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.viewSide }}</span>
+            </button>
+          </div>
+        </div>
       <!-- ---- 整个文件 / 统一 diff:一列,行号 + 变更标记 + (词级高亮的)正文 ---- -->
-      <div v-else-if="effectiveView !== 'side'" class="file-lines">
+      <div v-if="effectiveView !== 'side'" class="file-lines">
         <template v-for="(item, index) in items" :key="index">
           <!-- 折叠段:整个文件视图下是可展开的按钮;统一 diff 下退成静态分隔(不可交互,故是 div)。 -->
           <button v-if="item.kind === 'fold' && effectiveView === 'file'" type="button" class="file-line__fold" @click="expandFold(item.start)">
@@ -390,6 +520,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
           </div>
         </template>
       </div>
+      </template>
     </div>
   </WindowFrame>
 </template>
@@ -487,8 +618,11 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   gap: var(--dl-space-1);
 }
 
-/* 视图切换 = 分段控件:三个原生按钮 + aria-pressed(键盘可达、状态可读)。 */
-.file-panel__views {
+/* 分段控件:一组互斥取值的原生按钮 + aria-pressed(键盘可达、状态可读)。两处共用同一套样式 ——
+   标题栏里的**三档视图**(渲染 / 源码 / 变更)与内容区里的**变更三段**(整个文件 / 统一 diff /
+   并排 diff)。后者住在内容区、不进标题栏的宽度预算,窄面板下才不会把标题栏控件挤进角手柄命中区。 */
+.file-panel__views,
+.file-panel__modes {
   display: inline-flex;
   align-items: center;
   gap: var(--dl-space-1);
@@ -497,9 +631,10 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   border-radius: var(--dl-radius-md);
 }
 
-/* 视图切换的按钮是**横排的密集行内控件**(分段控件),走「密集行内的控件」这一档(24px):
+/* 分段控件的按钮是**横排的密集行内控件**(分段控件),走「密集行内的控件」这一档(24px):
    横向排布下 WCAG 2.5.8 的间距判据天然成立,故这一档不属于「独立控件」。 */
-.file-panel__view {
+.file-panel__view,
+.file-panel__mode {
   min-block-size: var(--dl-space-6);
   padding-inline: var(--dl-space-2);
   border-radius: var(--dl-radius-sm);
@@ -518,12 +653,14 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
 }
 
 .file-panel__view:hover:not(:disabled),
+.file-panel__mode:hover,
 .file-panel__toggle:hover {
   background: var(--dl-bg-hover);
   color: var(--dl-text-primary);
 }
 
 .file-panel__view[aria-pressed='true'],
+.file-panel__mode[aria-pressed='true'],
 .file-panel__toggle[aria-pressed='true'] {
   background: var(--dl-accent-soft);
   color: var(--dl-text-primary);
@@ -536,6 +673,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
 }
 
 .file-panel__view:focus-visible,
+.file-panel__mode:focus-visible,
 .file-panel__toggle:focus-visible,
 .file-panel__reset:focus-visible,
 .file-panel__placement:focus-visible,
@@ -558,9 +696,10 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   font-size: var(--dl-font-size-xs);
 }
 
-/* 视图切换的分段控件在宽面板上带文字、在窄面板上收成图标(容器查询),两种形态都凭
+/* 分段控件在宽面板上带文字、在窄面板上收成图标(容器查询),两种形态都凭
    aria-label / title 保留语义。「自动换行」同一条路:宽档文字钮、最窄档图标钮。 */
 .file-panel__view-icon,
+.file-panel__mode-icon,
 .file-panel__toggle-icon {
   display: none;
   color: inherit;
@@ -593,11 +732,13 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
      这里收掉三处内边距并把可见文字换成图标,工具行回到 236px 以内;又因识别区是 flex: 1,
      剩余空白被它吸收,工具行**右对齐到内容盒右缘**(= 320 − 44),于是整行既避开 NE(276..320)
      也避开 NW(0..44)。左上角的 gutter 与那把 44px 预留都**不是**可以挪的东西,故不动。 */
-  .file-panel__views {
+  .file-panel__views,
+  .file-panel__modes {
     padding: 0;
   }
 
-  .file-panel__view {
+  .file-panel__view,
+  .file-panel__mode {
     padding-inline: var(--dl-space-1);
   }
 
@@ -616,6 +757,10 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   .file-panel__view-icon {
     display: inline-flex;
   }
+
+  /* 三档视图在这一档**保留可见文字**(渲染 / 源码 / 变更各两字):内容区里的变更三段已经收成
+     图标,若这里也收成图标,同一面板里就会出现两组互相看不懂的三图标 —— 且两者的字形本就
+     有重合(code / table)。文字组在最小窗宽下也放得下(实测 320 时标题栏仍有富余)。 */
 }
 
 .file-panel__close:hover,
@@ -677,7 +822,6 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding-block: var(--dl-space-2);
 }
 
 .file-panel__state {
@@ -698,12 +842,254 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   justify-self: start;
 }
 
+/* ---- 档内小工具行(渲染态的「编辑」/ 变更态的三段视图)----
+   它住在**内容区**里并吸顶:标题栏的宽度预算不动(窄面板才不会把控件挤进角手柄命中区),
+   横向也跟着吸左,长行 diff 横向滚动时控件不会跟着跑掉。 */
+.file-panel__subtools {
+  position: sticky;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  z-index: var(--dl-z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--dl-space-2);
+  width: fit-content;
+  max-width: 100%;
+  padding: var(--dl-space-2) var(--workspace-gutter);
+  background: var(--dl-bg-base);
+}
+
+/* ---- 渲染档:各类型按自己的方式呈现 ---- */
+.file-render {
+  color: var(--dl-text-primary);
+}
+
+/* 纯文本预览:等宽 + 保留换行(不做过度渲染)。 */
+.file-render--text {
+  margin: 0;
+  padding: var(--dl-space-2) var(--workspace-gutter);
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-sm);
+  line-height: var(--dl-line-snug);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 图片:contain —— 完整看得见,不拉伸、不裁切。 */
+.file-render--image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  block-size: 100%;
+  padding: var(--dl-space-4) var(--workspace-gutter);
+}
+
+.file-render__image {
+  max-inline-size: 100%;
+  max-block-size: 100%;
+  object-fit: contain;
+}
+
+/* HTML 预览:沙箱 iframe 撑满内容区,自己内部滚动(源是不透明的,拿不到它的内容高度)。 */
+.file-render__frame {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  border: 0;
+  background: var(--dl-bg-elevated);
+}
+
+/* Markdown:阅读列宽 + 克制的排印。正文行高 1.7、段间距 1.5em、一律左对齐(中文排版硬约束)。 */
+.file-render--markdown {
+  max-inline-size: calc(var(--dl-measure) + 2 * var(--workspace-gutter));
+  padding: var(--dl-space-2) var(--workspace-gutter) var(--dl-space-6);
+  font-size: var(--dl-font-size-sm);
+  line-height: var(--dl-line-body);
+  overflow-wrap: break-word;
+}
+
+.file-render--markdown :deep(h1),
+.file-render--markdown :deep(h2),
+.file-render--markdown :deep(h3) {
+  margin-block: var(--dl-space-6) var(--dl-space-2);
+  font-weight: 600;
+  line-height: var(--dl-line-tight);
+}
+
+.file-render--markdown :deep(h1) {
+  font-size: var(--dl-font-size-xl);
+}
+
+.file-render--markdown :deep(h2) {
+  font-size: var(--dl-font-size-lg);
+}
+
+.file-render--markdown :deep(h3) {
+  font-size: var(--dl-font-size-md);
+}
+
+.file-render--markdown :deep(p) {
+  margin-block: 0 var(--dl-para-gap);
+}
+
+.file-render--markdown :deep(ul),
+.file-render--markdown :deep(ol) {
+  margin-block: 0 var(--dl-para-gap);
+  padding-inline-start: var(--dl-space-6);
+}
+
+.file-render--markdown :deep(li) {
+  margin-block-end: var(--dl-space-1);
+}
+
+.file-render--markdown :deep(a) {
+  color: var(--dl-accent);
+}
+
+.file-render--markdown :deep(code) {
+  padding: 0 var(--dl-space-1);
+  border-radius: var(--dl-radius-sm);
+  background: var(--dl-bg-sunken);
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+}
+
+.file-render--markdown :deep(pre) {
+  margin-block: 0 var(--dl-para-gap);
+  padding: var(--dl-space-3);
+  border-radius: var(--dl-radius-md);
+  background: var(--dl-bg-sunken);
+  overflow: auto;
+}
+
+.file-render--markdown :deep(pre code) {
+  padding: 0;
+  background: none;
+}
+
+.file-render--markdown :deep(blockquote) {
+  margin-block: 0 var(--dl-para-gap);
+  padding-inline-start: var(--dl-space-3);
+  border-inline-start: var(--dl-space-1) solid var(--dl-border-strong);
+  color: var(--dl-text-secondary);
+}
+
+.file-render--markdown :deep(table) {
+  margin-block: 0 var(--dl-para-gap);
+  border-collapse: collapse;
+  font-size: var(--dl-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-render--markdown :deep(th),
+.file-render--markdown :deep(td) {
+  padding: var(--dl-space-1) var(--dl-space-3);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  text-align: start;
+}
+
+.file-render--markdown :deep(hr) {
+  margin-block: var(--dl-space-6);
+  border: 0;
+  border-block-start: var(--dl-border-width) solid var(--dl-border-base);
+}
+
+.file-render--markdown :deep(img) {
+  max-inline-size: 100%;
+}
+
+/* mermaid 图与它的降级:单块渲染失败只把那一块退回成代码块 + 一行说明,面板不白屏。 */
+.file-render__diagram {
+  display: flex;
+  justify-content: center;
+  margin-block: var(--dl-space-4);
+}
+
+.file-render__diagram svg {
+  max-inline-size: 100%;
+  block-size: auto;
+}
+
+.file-render--markdown :deep(pre.is-mermaid-failed) {
+  border-inline-start: var(--dl-space-1) solid var(--dl-warning);
+}
+
+.file-render__fallback {
+  margin-block: var(--dl-space-2) 0;
+  font-size: var(--dl-font-size-xs);
+  color: var(--dl-text-secondary);
+}
+
+/* ---- 源码档:编辑器撑满内容区(内部自己滚)----
+   焦点环画在**容器**上并向内收:面板的圆角裁切会把外扩的环整条剪掉(本仓既有教训)。 */
+.file-panel__editor {
+  block-size: 100%;
+  overflow: hidden;
+}
+
+.file-panel__editor:focus-within {
+  box-shadow: inset var(--dl-focus-ring);
+}
+
+/* 语法高亮的 token 类(类名来自 data/file-language.ts 的 HighlightStyle)。CodeMirror 产出的
+   span 不在 Vue 的作用域里,故必须走 :deep 才命中。颜色一律引用语义角色 token,深浅通用。 */
+.file-panel__editor :deep(.cm-dl-keyword) {
+  color: var(--dl-accent);
+}
+
+.file-panel__editor :deep(.cm-dl-string) {
+  color: var(--dl-success);
+}
+
+.file-panel__editor :deep(.cm-dl-comment) {
+  color: var(--dl-text-tertiary);
+  font-style: italic;
+}
+
+.file-panel__editor :deep(.cm-dl-number) {
+  color: var(--dl-highlight);
+}
+
+.file-panel__editor :deep(.cm-dl-variable) {
+  color: var(--dl-text-primary);
+}
+
+.file-panel__editor :deep(.cm-dl-type) {
+  color: var(--dl-info);
+}
+
+.file-panel__editor :deep(.cm-dl-property) {
+  color: var(--dl-warning);
+}
+
+.file-panel__editor :deep(.cm-dl-operator) {
+  color: var(--dl-text-secondary);
+}
+
+.file-panel__editor :deep(.cm-dl-heading) {
+  color: var(--dl-text-primary);
+  font-weight: 600;
+}
+
+.file-panel__editor :deep(.cm-dl-link) {
+  color: var(--dl-accent);
+}
+
+.file-panel__editor :deep(.cm-dl-strong) {
+  font-weight: 600;
+}
+
+.file-panel__editor :deep(.cm-dl-emphasis) {
+  font-style: italic;
+}
+
 /* 行:最小宽度取内容宽(max-content),于是不换行时整块可横向滚动、每行不被压窄。
    横向内边距 = 侧向 gutter —— 代码左缘因此与消息正文左缘对齐(内容仍是阅读列宽)。 */
 .file-lines {
   display: flex;
   flex-direction: column;
   min-inline-size: max-content;
+  padding-block: var(--dl-space-2);
   padding-inline: var(--workspace-gutter);
   font-family: var(--dl-font-mono);
   font-size: var(--dl-font-size-sm);
@@ -816,6 +1202,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-content: start;
+  padding-block: var(--dl-space-2);
   padding-inline: var(--workspace-gutter);
   font-family: var(--dl-font-mono);
   font-size: var(--dl-font-size-sm);
@@ -864,6 +1251,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
 
 @media (prefers-reduced-motion: reduce) {
   .file-panel__view,
+  .file-panel__mode,
   .file-panel__toggle {
     transition: none;
   }

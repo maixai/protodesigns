@@ -500,6 +500,15 @@ function onTabClick(key: string): void {
   emit('select', key)
 }
 
+// **双击 tab = 把该 tab 表示的页面拆出为悬浮窗体**:与 tab 上那枚拆出钮、快捷键
+// Ctrl/Cmd+Shift+M 走**同一条**通路(同一个 tear-pop、同一份来源矩形),只是多了一条指针入口。
+// 单击仍然照常选中(双击的第一次单击就是选中),不去加延迟判定躲开它 —— Obsidian / VS Code
+// 的 tab 双击同样是「升级 / 拆出」语义,后触发的拆出覆盖前一次选中是正常顺序。
+// 原有的非拖拽通路(拆出钮 + 快捷键)一条不动:WCAG 2.5.7 要求的是「存在等价通路」,不是「只有一条」。
+function onTabDblClick(event: MouseEvent, tab: FileTab): void {
+  onTabPop(event, tab)
+}
+
 function slotTransform(index: number): string | undefined {
   const tab = visibleTabs.value[index]
   if (tab === undefined) return undefined
@@ -618,6 +627,7 @@ onBeforeUnmount(() => {
           :aria-actions="`file-close-${fileTabKey(tab)} file-pop-${fileTabKey(tab)}`"
           :title="tabTitle(tab)"
           @click="onTabClick(fileTabKey(tab))"
+          @dblclick="onTabDblClick($event, tab)"
           @focus="focusedKey = fileTabKey(tab)"
         >
           <!-- 主标签 = **文件名**。分域之后整条只属一个项目,故**不再标项目** ——

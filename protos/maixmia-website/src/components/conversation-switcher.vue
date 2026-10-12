@@ -700,6 +700,14 @@ function onTabClick(session: ChatSession): void {
   emit('select', session)
 }
 
+// **双击 tab = 把这段对话拆出为悬浮窗体**:与 tab 上那枚拆出钮、快捷键 Ctrl/Cmd+Shift+M
+// 走**同一条**通路(同一个 tear-pop、同一份来源矩形),只是多了一条指针入口。单击仍照常选中
+// (双击的第一次单击就是选中),不加延迟判定去躲开 —— 与文件 tab、与 Obsidian / VS Code 的
+// tab 双击语义一致。原有非拖拽通路一条不动(WCAG 2.5.7 要求的是「存在等价通路」)。
+function onTabDblClick(event: MouseEvent, session: ChatSession): void {
+  onTabPop(event, session)
+}
+
 // 槽位的位移:被拖的跟随指针(轻微抬升),其余让位(让出 / 让入一格)。只用 transform。
 // 纵向拆出那一支不做重排预览 —— 被拖的 tab 会从条上摘掉,其余不必让位。
 function slotTransform(index: number): string | undefined {
@@ -892,6 +900,7 @@ onBeforeUnmount(() => {
           :aria-controls="panelId"
           :title="tabTitle(tab)"
           @click="onTabClick(tab)"
+          @dblclick="onTabDblClick($event, tab)"
           @focus="focusedTabId = tab.id"
         >
           <!-- 前导状态槽:恒定 16px 占位,槽宽不随状态变化 —— 呼吸灯出现 / 消失时标签不位移。

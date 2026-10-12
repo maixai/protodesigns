@@ -327,6 +327,19 @@ export const workspace = {
     // merely hiding the window has no visible effect and leaves the region rendering a hidden member);
     // only the floating form hides the window.
     closeTab: 'Close this file tab',
+    // Top three-way view: rendered (read-only presentation) / source (editable) / changes (the existing diffs).
+    paneLabel: 'Display mode',
+    paneRender: 'Rendered',
+    paneSource: 'Source',
+    paneChange: 'Changes',
+    // The rendered view is read-only, so it offers an explicit way into editing.
+    // The Source segment is the **only** edit entry, so its hint says so.
+    sourceHint: 'Source · editable',
+    // Alt text for images and the accessible name of the HTML preview frame.
+    imageAlt: 'Image: {name}',
+    htmlPreview: 'HTML preview',
+    // Shown when a single mermaid diagram fails to render (that block falls back to its source).
+    diagramFailed: 'This diagram could not be rendered, so its source is shown instead.',
     viewLabel: 'View',
     viewFile: 'Whole file',
     viewUnified: 'Unified diff',

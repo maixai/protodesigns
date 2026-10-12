@@ -210,6 +210,14 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
         { id: 'wr-main', path: 'src/main.ts', kind: 'file', state: 'created' },
         { id: 'wr-notes', path: 'notes', kind: 'directory', state: 'none' },
         { id: 'wr-week-40', path: 'notes/2026-W40.md', kind: 'file', state: 'created' },
+        // 渲染样张目录:这四份是**演示用的样本文件**,用来让文件面板的三种视图各有用武之地 ——
+        // HTML 走 sandbox iframe、shell 与 apacheconf 走 legacy-modes 高亮、render-check 是
+        // 刻意含注入尝试的 Markdown(见 mocks/files.ts 的注释)。真实项目里它们会各自归位。
+        { id: 'wr-examples', path: 'examples', kind: 'directory', state: 'none' },
+        { id: 'wr-example-html', path: 'examples/report.html', kind: 'file', state: 'none' },
+        { id: 'wr-example-sh', path: 'examples/run-weekly.sh', kind: 'file', state: 'none' },
+        { id: 'wr-example-conf', path: 'examples/apache.conf', kind: 'file', state: 'none' },
+        { id: 'wr-example-md', path: 'examples/render-check.md', kind: 'file', state: 'none' },
         { id: 'wr-readme', path: 'README.md', kind: 'file', state: 'modified' },
         { id: 'wr-progress', path: 'progress.csv', kind: 'file', state: 'modified' },
         { id: 'wr-gitignore', path: '.gitignore', kind: 'file', state: 'none' },
@@ -265,7 +273,8 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
       // release-notes.md(knowledge)与 release-plan.csv(quarterly),等待期间其芯片变 pending。
       entries: [
         { id: 'pd-assets', path: 'assets', kind: 'directory', state: 'none' },
-        { id: 'pd-keyart', path: 'assets/key-art.png', kind: 'file', state: 'none' },
+        { id: 'pd-logo', path: 'assets/logo.svg', kind: 'file', state: 'none' },
+        { id: 'pd-deck', path: 'assets/release-deck.pdf', kind: 'file', state: 'none' },
         { id: 'pd-drafts', path: 'drafts', kind: 'directory', state: 'none' },
         { id: 'pd-drafts-v2', path: 'drafts/v2', kind: 'directory', state: 'none' },
         { id: 'pd-drafts-notes', path: 'drafts/v2/notes.md', kind: 'file', state: 'modified' },
@@ -291,13 +300,13 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
 // fileCount 是**打开前**检测到的文件数(readdir 的粗计数),与已打开项目树里的**条目数**
 // (Project.entryCount = ProjectSeed.entries.length)概念不同;但演示里两者指同一批内容,
 // 口径必须一致(否则会出现「候选说 9 个、打开后 13 条」的观感矛盾),故对应同一目录的候选项
-// 一律与该项目对齐:weekly-report 13 = entries.length,product-docs 7 = entries.length,
+// 一律与该项目对齐:weekly-report 18 = entries.length,product-docs 8 = entries.length,
 // knowledge-base 5 = entries.length。其余候选(api-server / design-tokens / notes / scratch)
 // 尚未打开,没有可对齐的项目,保持各自的检测值。
 const projectCandidates: ProjectCandidate[] = [
-  { path: '~/work/weekly-report', name: 'weekly-report', fileCount: 13, isGitRepo: true },
+  { path: '~/work/weekly-report', name: 'weekly-report', fileCount: 18, isGitRepo: true },
   { path: '~/work/knowledge-base', name: 'knowledge-base', fileCount: 5, isGitRepo: false },
-  { path: '~/work/product-docs', name: 'product-docs', fileCount: 7, isGitRepo: true },
+  { path: '~/work/product-docs', name: 'product-docs', fileCount: 8, isGitRepo: true },
   { path: '~/work/api-server', name: 'api-server', fileCount: 42, isGitRepo: true },
   { path: '~/work/design-tokens', name: 'design-tokens', fileCount: 18, isGitRepo: true },
   { path: '~/Documents/notes', name: 'notes', fileCount: 7, isGitRepo: false },

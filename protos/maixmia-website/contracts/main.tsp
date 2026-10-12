@@ -400,16 +400,45 @@ model FileLine {
   spans: FileInlineSpan[];
 }
 
+// 文件的呈现类别:决定面板**能提供哪些视图**(渲染 / 源码 / 变更),而不是它的扩展名。
+//   text     —— 纯文本 / 源码(等宽预览 + 可编辑源码 + 变更标记);
+//   markdown —— 渲染态按 Markdown 渲染(含 mermaid 图),源码态可编辑;
+//   html     —— 渲染态用 sandbox 的 iframe 预览,源码态可编辑;
+//   image    —— 只有渲染态(<img>),不可编辑、没有源码与变更视图;
+//   binary   —— 无法在 web 里呈现的二进制(pdf / 压缩包等),面板只给「无法预览」空态。
+// binary 是对「建议的四种取之集合」的补充:去掉它之后,「无法预览」这一态就没有任何一种
+// 文件能寻址到(图片此前正是用它占了这一态,图片可渲染之后必须有新的承载者)。
+enum FileKindId {
+  text,
+  markdown,
+  html,
+  image,
+  binary,
+}
+
 // 文件面板要渲染的一份文件内容。
-// language 只用于等宽展示(不做真语法高亮);confirmationId 是「待确认」文件对应的确认请求 id
-// —— 面板内的允许 / 拒绝因此与转录里的确认卡作用于同一个 ConfirmationRequest(非待确认时为空串)。
+// language 既用于等宽展示,也用于源码态的语法高亮(apacheconf / shell 走 legacy-modes);
+// confirmationId 是「待确认」文件对应的确认请求 id —— 面板内的允许 / 拒绝因此与转录里的确认卡
+// 作用于同一个 ConfirmationRequest(非待确认时为空串)。
 // 文件在**会话里的状态**(新建 / 已改 / 待确认)不进本契约:它与文件树的芯片同源,由载体的同一
 // 派生函数计算(允许确认后即时从 pending 变 modified),放进契约会成为对不上的第二个事实源。
+//
+// source / contentUrl 是**内容本体**,与 lines(变更标记)分开表达:
+//   · source   —— 该文件**当前**的真实内容,渲染态与源码态都读它。**不能**从 lines 拼出来:
+//                 diff 模型里 removed 行是**留在原地**的,按 lines 拼会把已删除的行当成现存内容。
+//                 lines 只服务「变更」视图(它表达的是「相对上一次改了什么」,不是「现在是什么」)。
+//   · contentUrl —— 仅 image 用(data URL 或资源路径);其余类型为空串。
+// 两者与 preview / confirmationId 同口径:必填 + 空串表示无(exactOptionalPropertyTypes 下
+// 可选字段处处别扭,见 ChatSession.preview 的注释)。
 @summary("FileContent")
 @jsonSchema
 model FileContent {
   path: string;
+  kind: FileKindId;
   language: string;
+  mime: string;
+  source: string;
+  contentUrl: string;
   addedCount: int32;
   removedCount: int32;
   confirmationId: string;

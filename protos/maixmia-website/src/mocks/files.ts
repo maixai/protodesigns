@@ -3,9 +3,17 @@
 // 与项目树的关系:树给的是「这个文件被改过」(state 芯片),这里给的是「改成什么样」——
 // 两者按同一个 path 对齐。内容一律**写实**(真实的 README / 工具函数 / CSV),不用 lorem。
 //
+// 三份事实各司其职,刻意不互相推导:
+//   · **source** —— 文件**当前**的真实内容,渲染态(渲染 / 图片 / 纯文本预览)与源码态
+//     (编辑器)都读它。它**不是**从 lines 拼出来的:diff 模型里 removed 行留在原地,
+//     按 lines 直接拼会把已删除的行当成现存内容(见 contracts/main.tsp 的注释)。
+//   · **lines** —— 相对上一次改动的**行级视图**,只服务「变更」这一档。
+//   · **kind / mime / contentUrl** —— 呈现类别与来源:kind 决定面板给哪几档视图,
+//     contentUrl 只有 image 用(原型无后端,图片走 data URL)。
+//
 // 变更标记的语义:数组即「当前文件的展示顺序」——未变更行与改动行按原位交错,removed 行保留在
 // 它原来的位置(因此在「整个文件」视图里也能看见被删掉的那行)。
-import type { FileContent, FileInlineSpan, FileLine, FileLineChangeId } from '../contracts/generated/file-content'
+import type { FileContent, FileInlineSpan, FileKindId, FileLine, FileLineChangeId } from '../contracts/generated/file-content'
 
 // 一行内容的紧凑写法:变更类型 + 文本 + (可选)修改前文本 + (可选)要高亮的子串。
 // 高亮用**子串**而不是字符下标书写 —— 后者极容易写错一位而静默失效。
@@ -38,6 +46,12 @@ function buildLines(specs: readonly LineSpec[]): FileLine[] {
   }))
 }
 
+// 无变更文件的行视图:整份内容都是「未变更」行。方向是 source → lines(仅此一处允许),
+// 与「不从 lines 拼 source」并不冲突 —— 无变更时两者本来就逐行相同。
+function unchangedLines(source: string): LineSpec[] {
+  return source.split('\n').map((text) => ({ change: 'none' as const, text }))
+}
+
 // 变更统计口径与 git 的 diffstat 一致:一行 modified 同时算一次增与一次删。
 function countChanges(lines: readonly FileLine[]): { added: number; removed: number } {
   let added = 0
@@ -49,18 +63,63 @@ function countChanges(lines: readonly FileLine[]): { added: number; removed: num
   return { added, removed }
 }
 
-// 一份种子文件:语言 + 行内容。
+// 一份种子文件:呈现类别 + 语言 / MIME + **当前内容** + (可选)变更行视图。
+// lines 缺省 = 整份内容都是未变更行(由 source 展开)。
 interface FileSeed {
+  kind: FileKindId
   language: string
-  lines: LineSpec[]
+  mime: string
+  source: string
+  lines?: LineSpec[]
 }
 
 // ---- 具体文件(explicit seeds)----
 // 只列「演示路径会走到」的文件;其余由 fallbackSeed 按扩展名生成,避免整棵树点开都是空壳。
 const FILE_SEEDS: Record<string, FileSeed> = {
-  // 默认项目 weekly-report:一份被改过的 README(三种变更标记齐全 + 一段足够长的未变更正文用于折叠)。
+  // 默认项目 weekly-report:一份被改过的 README(三种变更标记齐全 + 一段足够长的未变更正文用于折叠
+  // + 一段 **mermaid 时序图**用来演示渲染态里的图表)。
   'README.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    // 当前内容:与下面的 lines **逐行对齐**(removed 行不在其中)。
+    source: [
+      '# weekly-report',
+      '',
+      '把团队每周的项目进展汇总成一份可以直接发给团队的清单。',
+      '',
+      '## 快速开始',
+      '',
+      '```bash',
+      'npm install',
+      'npm run weekly -- --week 2026-W40',
+      '```',
+      '',
+      '## 输入',
+      '',
+      '脚本读取两个来源:',
+      '',
+      '- `notes/` 目录下本周的记录文件',
+      '- `progress.csv` 里各条线的完成度',
+      '',
+      '两者缺一时脚本会提示补齐,不猜测缺失的数据。',
+      '',
+      '## 流程',
+      '',
+      '```mermaid',
+      'sequenceDiagram',
+      '  participant U as 团队',
+      '  participant S as weekly 脚本',
+      '  U->>S: 传入周次 2026-W40',
+      '  S->>S: 读取 notes 与 progress.csv',
+      '  S-->>U: 生成行动清单',
+      '```',
+      '',
+      '## 输出',
+      '',
+      '- `notes/2026-W40.md` 的摘要段落',
+      '- 一份可直接粘贴到群里的行动清单',
+    ].join('\n'),
     lines: [
       { change: 'none', text: '# weekly-report' },
       { change: 'none', text: '' },
@@ -68,9 +127,11 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       { change: 'none', text: '' },
       { change: 'none', text: '## 快速开始' },
       { change: 'none', text: '' },
+      { change: 'none', text: '```bash' },
       { change: 'removed', text: 'npm start' },
       { change: 'added', text: 'npm install' },
       { change: 'added', text: 'npm run weekly -- --week 2026-W40' },
+      { change: 'none', text: '```' },
       { change: 'none', text: '' },
       { change: 'none', text: '## 输入' },
       { change: 'none', text: '' },
@@ -81,6 +142,17 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       { change: 'none', text: '' },
       { change: 'none', text: '两者缺一时脚本会提示补齐,不猜测缺失的数据。' },
       { change: 'none', text: '' },
+      { change: 'none', text: '## 流程' },
+      { change: 'none', text: '' },
+      { change: 'none', text: '```mermaid' },
+      { change: 'none', text: 'sequenceDiagram' },
+      { change: 'none', text: '  participant U as 团队' },
+      { change: 'none', text: '  participant S as weekly 脚本' },
+      { change: 'none', text: '  U->>S: 传入周次 2026-W40' },
+      { change: 'none', text: '  S->>S: 读取 notes 与 progress.csv' },
+      { change: 'none', text: '  S-->>U: 生成行动清单' },
+      { change: 'none', text: '```' },
+      { change: 'none', text: '' },
       { change: 'none', text: '## 输出' },
       { change: 'none', text: '' },
       { change: 'added', text: '- `notes/2026-W40.md` 的摘要段落' },
@@ -88,9 +160,165 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       { change: 'removed', text: '- 发给团队的通知草稿' },
     ],
   },
+  // HTML 模板:渲染态走 sandbox 的 iframe(里面的脚本可跑,但源是不透明的)。
+  'examples/report.html': {
+    kind: 'html',
+    language: 'html',
+    mime: 'text/html',
+    source: [
+      '<!doctype html>',
+      '<html lang="zh-CN">',
+      '  <head>',
+      '    <meta charset="utf-8" />',
+      '    <title>weekly-report · 封面</title>',
+      '    <style>',
+      '      body { margin: 0; padding: 32px; font-family: system-ui, sans-serif; background: #faf8f5; color: #221d18; }',
+      '      h1 { margin: 0 0 8px; font-size: 26px; }',
+      '      .meta { color: #756c63; font-size: 14px; }',
+      '      .row { display: flex; gap: 16px; margin-top: 24px; }',
+      '      .card { flex: 1; padding: 16px; border: 1px solid #e8e4dc; border-radius: 8px; background: #ffffff; }',
+      '    </style>',
+      '  </head>',
+      '  <body>',
+      '    <h1>2026-W40 进展汇总</h1>',
+      '    <p class="meta">生成时间:2026-10-08 · 生成人:weekly 脚本</p>',
+      '    <div class="row">',
+      '      <div class="card">登录流程 · 8 / 8</div>',
+      '      <div class="card">通知原型 · 5 / 6</div>',
+      '    </div>',
+      '    <script>',
+      "      document.querySelectorAll('.card').forEach((card) => { card.dataset.ready = 'true' })",
+      '    </script>',
+      '  </body>',
+      '</html>',
+    ].join('\n'),
+  },
+  // Shell 脚本:源码态靠 @codemirror/legacy-modes 的 shell 模式高亮(CodeMirror 6 自带解析器
+  // 并不覆盖 bash,legacy-modes 正是为这类语言准备的)。
+  'examples/run-weekly.sh': {
+    kind: 'text',
+    language: 'shell',
+    mime: 'text/x-shellscript',
+    source: [
+      '#!/usr/bin/env bash',
+      '# 汇总本周进展:读取 notes/ 与 progress.csv,输出可直接发出去的清单。',
+      'set -euo pipefail',
+      '',
+      'WEEK="${1:-}"',
+      '',
+      'if [[ -z "$WEEK" ]]; then',
+      '  echo "用法:run-weekly.sh --week 2026-W40" >&2',
+      '  exit 2',
+      'fi',
+      '',
+      'notes="notes/${WEEK}.md"',
+      'if [[ ! -f "$notes" ]]; then',
+      '  echo "缺少 $notes,先补齐本周记录。" >&2',
+      '  exit 3',
+      'fi',
+      '',
+      'awk -F, \'NR > 1 { printf "%-12s %s/%s\\n", $2, $3, $4 }\' progress.csv',
+    ].join('\n'),
+  },
+  // Apache 配置:同样走 legacy-modes(apacheconf 模式)。
+  'examples/apache.conf': {
+    kind: 'text',
+    language: 'apacheconf',
+    mime: 'text/x-apache-conf',
+    source: [
+      '# weekly-report 静态站点:只开只读文件服务,不做目录列表。',
+      'ServerTokens Prod',
+      'ServerSignature Off',
+      '',
+      '<VirtualHost *:443>',
+      '  ServerName weekly.example.com',
+      '  DocumentRoot /srv/weekly-report',
+      '',
+      '  <Directory /srv/weekly-report>',
+      '    Options -Indexes +FollowSymLinks',
+      '    AllowOverride None',
+      '    Require all granted',
+      '  </Directory>',
+      '',
+      '  ErrorLog ${APACHE_LOG_DIR}/weekly-error.log',
+      '  CustomLog ${APACHE_LOG_DIR}/weekly-access.log combined',
+      '</VirtualHost>',
+    ].join('\n'),
+  },
+  // 渲染检查样本:一份**刻意含注入尝试**的文档,用来验证渲染管线(Markdown → 清洗 → 注入 DOM)。
+  // 原始 HTML 在 markdown-it 的默认配置下被转义(html: false 是它的安全默认),清洗层是第二道;
+  // mermaid 产出的 SVG 是真正的第三方 HTML,清洗层在那里承担实质防护。
+  'examples/render-check.md': {
+    kind: 'markdown',
+    language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# 渲染检查',
+      '',
+      '这份文档用来核对工作台的渲染管线:Markdown → 清洗 → 注入 DOM。',
+      '',
+      '## 结构',
+      '',
+      '- 一段列表',
+      '- 一段 `行内代码`',
+      '',
+      '| 元素 | 期望 |',
+      '| --- | --- |',
+      '| 标题 | 渲染为 h1 |',
+      '| 列表 | 渲染为 ul |',
+      '',
+      '## 图表',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A[读取源文件] --> B[清洗]',
+      '  B --> C[注入 DOM]',
+      '```',
+      '',
+      '## 注入尝试',
+      '',
+      '下面两段都是恶意输入的样本,渲染后必须看不到可执行的脚本:',
+      '',
+      "<script>alert('xss')</script>",
+      '',
+      '<img src="x" onerror="alert(\'xss\')">',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  N["<script>alert(\'mermaid\')</script>"] --> M["<img src=x onerror=alert(\'mermaid\')>"]',
+      '```',
+      '',
+      '## 坏掉的图表',
+      '',
+      '这一段是**语法错**的 mermaid:它只该把自己退回成代码块 + 一行说明,不能让整块面板白屏。',
+      '',
+      '```mermaid',
+      '这不是一个图表定义',
+      '```',
+    ].join('\n'),
+  },
   // 工具函数:一个被改过的函数 + 一段新增的函数。
   'src/utils/format.ts': {
+    kind: 'text',
     language: 'typescript',
+    mime: 'text/typescript',
+    source: [
+      '// 周次与日期的互相换算。',
+      '',
+      'export function weekLabel(week: number): string {',
+      "  return `2026-W${String(week).padStart(2, '0')}`",
+      '}',
+      '',
+      'export function weekRange(week: number): string {',
+      '  const start = new Date(Date.UTC(2026, 0, 5 + (week - 1) * 7))',
+      '  const end = new Date(start.getTime() + 6 * 86_400_000)',
+      '  return `${isoDate(start)} – ${isoDate(end)}`',
+      '}',
+      '',
+      'function isoDate(date: Date): string {',
+      '  return date.toISOString().slice(0, 10)',
+      '}',
+    ].join('\n'),
     lines: [
       { change: 'none', text: '// 周次与日期的互相换算。' },
       { change: 'none', text: '' },
@@ -111,7 +339,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
   },
   // 新建文件:整份都是新增行。
   'src/main.ts': {
+    kind: 'text',
     language: 'typescript',
+    mime: 'text/typescript',
+    source: [
+      "import { createApp } from 'vue'",
+      "import { App } from './app'",
+      '',
+      'const app = createApp(App)',
+      "app.mount('#app')",
+    ].join('\n'),
     lines: [
       { change: 'added', text: "import { createApp } from 'vue'" },
       { change: 'added', text: "import { App } from './app'" },
@@ -121,7 +358,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'progress.csv': {
+    kind: 'text',
     language: 'csv',
+    mime: 'text/csv',
+    source: [
+      'week,track,done,total',
+      '2026-W39,登录流程,8,8',
+      '2026-W39,通知原型,5,6',
+      '2026-W39,知识库,0,5',
+      '2026-W40,演示准备,3,4',
+    ].join('\n'),
     lines: [
       { change: 'none', text: 'week,track,done,total' },
       { change: 'modified', text: '2026-W39,登录流程,8,8', previous: '2026-W39,登录流程,7,8', highlights: ['8'] },
@@ -131,7 +377,17 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'notes/2026-W40.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# 2026-W40',
+      '',
+      '本周完成登录流程与通知原型的演示条件。',
+      '',
+      '- 周五演示:一条完整任务路径',
+      '- 知识库整理:下周确认文档范围',
+    ].join('\n'),
     lines: [
       { change: 'added', text: '# 2026-W40' },
       { change: 'added', text: '' },
@@ -142,7 +398,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'src/components/layout/header/index.ts': {
+    kind: 'text',
     language: 'typescript',
+    mime: 'text/typescript',
+    source: [
+      '// 页面头部:标题 + 当前周次。',
+      '',
+      'export function renderHeader(title: string, week: number): string {',
+      "  return `<header><h1>${title}</h1>${weekLabel(week)}</header>`",
+      '}',
+    ].join('\n'),
     lines: [
       { change: 'none', text: '// 页面头部:标题 + 当前周次。' },
       { change: 'none', text: '' },
@@ -153,7 +418,21 @@ const FILE_SEEDS: Record<string, FileSeed> = {
   },
   // 写作助手 product-docs:「等待交互」确认请求的受影响文件(演示 pending 芯片与面板内的允许 / 拒绝)。
   'release-notes.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# 发布说明 · v2.4',
+      '',
+      '## 新增',
+      '',
+      '- 任务结果通知:任务结束后经浏览器或移动 App 触达',
+      '- 工作台内可直接看到 Agent 改过的文件',
+      '',
+      '## 修复',
+      '',
+      '- 通知未送达时,任务结果仍可在工作台找到',
+    ].join('\n'),
     lines: [
       { change: 'added', text: '# 发布说明 · v2.4' },
       { change: 'added', text: '' },
@@ -168,7 +447,15 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'release-plan.csv': {
+    kind: 'text',
     language: 'csv',
+    mime: 'text/csv',
+    source: [
+      'track,owner,plan,actual',
+      '产品,林一舟,发布 v2.4,v2.4 已发',
+      '增长,周洁,渠道复盘,渠道复盘',
+      '基建,陈默,通知服务,Q4 排期',
+    ].join('\n'),
     lines: [
       { change: 'none', text: 'track,owner,plan,actual' },
       { change: 'modified', text: '产品,林一舟,发布 v2.4,v2.4 已发', previous: '产品,林一舟,发布 v2.4,进行中', highlights: ['v2.4 已发'] },
@@ -177,7 +464,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'drafts/v2/notes.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# v2 草稿笔记',
+      '',
+      '发布说明先写「新增」,再写「修复」,最后附升级方式。',
+      '',
+      '语气保持克制,不写「重大升级」这类词。',
+    ].join('\n'),
     lines: [
       { change: 'none', text: '# v2 草稿笔记' },
       { change: 'none', text: '' },
@@ -187,7 +483,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'docs/index.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# 团队知识库',
+      '',
+      '先从最近两周最常被问到的五个问题开始整理。',
+      '',
+      '每篇文档补齐负责人与更新时间,并保留原始链接。',
+    ].join('\n'),
     lines: [
       { change: 'none', text: '# 团队知识库' },
       { change: 'none', text: '' },
@@ -197,7 +502,16 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'interviews/guide.md': {
+    kind: 'markdown',
     language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# 用户访谈提纲',
+      '',
+      '- 最近一次用这个功能是什么时候?',
+      '- 当时想解决什么问题?',
+      '- 哪一步让你停下来?',
+    ].join('\n'),
     lines: [
       { change: 'added', text: '# 用户访谈提纲' },
       { change: 'added', text: '' },
@@ -208,67 +522,71 @@ const FILE_SEEDS: Record<string, FileSeed> = {
   },
 }
 
+// ---- 图片种子 ----
+// 原型没有后端,图片用 **data URL**:省一次请求,且与「真实接口会给 contentUrl」同形。
+// 内容是一个可辨认的品牌记号(青瓷圆角方块 + 白色 M),不是占位灰块。
+const IMAGE_SEEDS: Record<string, string> = {
+  'assets/logo.svg': "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232e6f63'/%3E%3Cpath d='M9 23V9l7 9 7-9v14' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
+}
+
 // ---- fallback:按扩展名生成一份写实的短文件 ----
 // 目的是「点开任意文件都有内容」,而不是把整棵树的正文都手工写一遍。
 function fallbackSeed(path: string): FileSeed {
   const name = path.split('/').at(-1) ?? path
   if (name.endsWith('.md')) {
-    return {
-      language: 'markdown',
-      lines: [
-        { change: 'none', text: `# ${name.replace(/\.md$/, '')}` },
-        { change: 'none', text: '' },
-        { change: 'none', text: '这份文档记录当前的做法与待办,改动前请先在这里补一句背景。' },
-        { change: 'none', text: '' },
-        { change: 'none', text: '- 负责人:待补' },
-        { change: 'none', text: '- 更新日期:2026-10-08' },
-      ],
-    }
+    const source = [
+      `# ${name.replace(/\.md$/, '')}`,
+      '',
+      '这份文档记录当前的做法与待办,改动前请先在这里补一句背景。',
+      '',
+      '- 负责人:待补',
+      '- 更新日期:2026-10-08',
+    ].join('\n')
+    return { kind: 'markdown', language: 'markdown', mime: 'text/markdown', source }
   }
   if (name.endsWith('.csv')) {
     return {
+      kind: 'text',
       language: 'csv',
-      lines: [
-        { change: 'none', text: 'id,name,status' },
-        { change: 'none', text: '1,样例条目,进行中' },
-      ],
+      mime: 'text/csv',
+      source: ['id,name,status', '1,样例条目,进行中'].join('\n'),
     }
   }
   if (name.endsWith('.ts')) {
     return {
+      kind: 'text',
       language: 'typescript',
-      lines: [
-        { change: 'none', text: '// 模块入口。' },
-        { change: 'none', text: '' },
-        { change: 'none', text: 'export function run(): void {' },
-        { change: 'none', text: "  console.log('ready')" },
-        { change: 'none', text: '}' },
-      ],
+      mime: 'text/typescript',
+      source: ['// 模块入口。', '', 'export function run(): void {', "  console.log('ready')", '}'].join('\n'),
     }
   }
   if (name.endsWith('.json')) {
     return {
+      kind: 'text',
       language: 'json',
-      lines: [
-        { change: 'none', text: '{' },
-        { change: 'none', text: '  "version": 1,' },
-        { change: 'none', text: '  "enabled": true' },
-        { change: 'none', text: '}' },
-      ],
+      mime: 'application/json',
+      source: ['{', '  "version": 1,', '  "enabled": true', '}'].join('\n'),
     }
   }
+  if (name.endsWith('.html') || name.endsWith('.htm')) {
+    return { kind: 'html', language: 'html', mime: 'text/html', source: ['<!doctype html>', '<title>未命名页面</title>', '<p>这个页面还没有内容。</p>'].join('\n') }
+  }
+  if (name.endsWith('.sh') || name.endsWith('.bash')) {
+    return { kind: 'text', language: 'shell', mime: 'text/x-shellscript', source: ['#!/usr/bin/env bash', 'set -euo pipefail', ''].join('\n') }
+  }
+  if (name.endsWith('.conf')) {
+    return { kind: 'text', language: 'apacheconf', mime: 'text/x-apache-conf', source: ['# 服务配置。', 'ServerTokens Prod', ''].join('\n') }
+  }
   return {
+    kind: 'text',
     language: 'text',
-    lines: [
-      { change: 'none', text: name },
-      { change: 'none', text: '' },
-      { change: 'none', text: '（纯文本文件）' },
-    ],
+    mime: 'text/plain',
+    source: [name, '', '(纯文本文件)'].join('\n'),
   }
 }
 
-// 二进制文件:不能当文本展示,返回空行数组 —— 面板据此走「无法预览」的空态。
-const BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.woff', '.woff2']
+// 无法在 web 里呈现的二进制:不当文本展示,也不给任何视图 —— 面板据此走「无法预览」的空态。
+const BINARY_EXTENSIONS = ['.pdf', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2']
 
 function isBinary(path: string): boolean {
   const lower = path.toLowerCase()
@@ -279,9 +597,26 @@ function isBinary(path: string): boolean {
 // projectId 目前不参与查表(path 在演示数据里已唯一),保留入参是为了贴合真实接口形状。
 export function mockFileContent(projectId: string, path: string): Omit<FileContent, 'confirmationId'> {
   void projectId
-  if (isBinary(path)) return { path, language: 'binary', addedCount: 0, removedCount: 0, lines: [] }
+  // 图片:只有渲染态,内容在 contentUrl 里,没有源码与变更视图。
+  const imageUrl = IMAGE_SEEDS[path]
+  if (imageUrl !== undefined) {
+    return { path, kind: 'image', language: 'image', mime: 'image/svg+xml', source: '', contentUrl: imageUrl, addedCount: 0, removedCount: 0, lines: [] }
+  }
+  if (isBinary(path)) {
+    return { path, kind: 'binary', language: 'binary', mime: 'application/octet-stream', source: '', contentUrl: '', addedCount: 0, removedCount: 0, lines: [] }
+  }
   const seed = FILE_SEEDS[path] ?? fallbackSeed(path)
-  const lines = buildLines(seed.lines)
+  const lines = buildLines(seed.lines ?? unchangedLines(seed.source))
   const counts = countChanges(lines)
-  return { path, language: seed.language, addedCount: counts.added, removedCount: counts.removed, lines }
+  return {
+    path,
+    kind: seed.kind,
+    language: seed.language,
+    mime: seed.mime,
+    source: seed.source,
+    contentUrl: '',
+    addedCount: counts.added,
+    removedCount: counts.removed,
+    lines,
+  }
 }

@@ -8,6 +8,7 @@
 //   ④ 一个窗体至多属于一个区域。
 import { expect, test } from '@playwright/test'
 import type { WorkspaceLayout } from '../../src/contracts/generated/workspace-layout'
+import type { WindowRect } from '../../src/contracts/generated/workspace-window'
 import {
   MAIN_SURFACE,
   activateTab,
@@ -18,13 +19,16 @@ import {
   emptyLayout,
   fileMemberIds,
   floatWindow,
+  floatingWindowsIntersecting,
   focusWindow,
   hideWindow,
+  hideWindows,
   isMember,
   layoutViolations,
   memberWindows,
   openFloating,
   openTab,
+  rectsIntersect,
   reorderChatMembers,
   reorderFileMembers,
   reorderTabs,
@@ -405,4 +409,55 @@ test('对话与文件同域混装:一条不变量序列下 layoutViolations 恒�
   expect(layoutViolations(layout)).toEqual([])
   expect(chatMemberIds(layout, MAIN_SURFACE), '对话与文件的成员互不串位').toEqual([WEEKLY, ROADMAP])
   expect(fileMemberIds(layout, MAIN_SURFACE)).toEqual([PROGRESS])
+})
+
+// ============================================================================
+// 遮挡判定:显示一个**停靠**窗体前,让几何上挡住目标区域显示区的悬浮窗体让位
+// (根因:两层结构下停靠窗体抬不过浮层,只能让浮层让位)。
+// ============================================================================
+
+test('floatingWindowsIntersecting:相交 / 不相交 / 边贴边(面积 0)/ 已隐藏 / docked 一律按规则取舍', () => {
+  // 布局:README **停靠**在区域里(不该被返回),另开三个文件为悬浮窗体。
+  let layout = openTab(emptyLayout(), MAIN_SURFACE, { kind: 'file', path: README })
+  for (const id of ['overlap.md', 'outside.md', 'touching.md']) {
+    layout = openFloating(layout, { kind: 'file', path: id }, { x: 0, y: 0, width: 0, height: 0 })
+  }
+  const box: WindowRect = { x: 100, y: 100, width: 200, height: 200 }
+  const rects: Record<string, WindowRect> = {
+    // README 的实测矩与 box 完全重合 —— 但它是 docked,永不被返回。
+    [README]: { x: 100, y: 100, width: 200, height: 200 },
+    'overlap.md': { x: 250, y: 250, width: 100, height: 100 }, // 与 box 交叠 50×50
+    'outside.md': { x: 500, y: 500, width: 40, height: 40 }, // 完全在外
+    'touching.md': { x: 300, y: 100, width: 100, height: 100 }, // 左缘贴 box 右缘 → 面积 0
+  }
+  const rectOf = (id: string): WindowRect | null => rects[id] ?? null
+
+  expect(floatingWindowsIntersecting(layout, box, rectOf), '只返回相交的**可见悬浮**窗体').toEqual(['overlap.md'])
+  // 量不到几何的窗体(未渲染)不计入。
+  expect(floatingWindowsIntersecting(layout, box, () => null), '量不到几何 → 不计入').toEqual([])
+  // 已隐藏的浮窗不在渲染中,同样不算(它可能仍留着记忆的几何)。
+  expect(floatingWindowsIntersecting(hideWindow(layout, 'overlap.md'), box, rectOf), '已隐藏的浮窗不算').toEqual([])
+
+  // rectsIntersect 的边界语义:边贴边(面积 0)不算相交。
+  expect(rectsIntersect({ x: 0, y: 0, width: 10, height: 10 }, { x: 10, y: 0, width: 10, height: 10 }), '边贴边不算').toBe(false)
+  expect(rectsIntersect({ x: 0, y: 0, width: 11, height: 10 }, { x: 10, y: 0, width: 10, height: 10 }), '有一点重叠就算').toBe(true)
+})
+
+test('hideWindows:逐窗复用 hideWindow 的语义,只置 visible,原布局不被改动', () => {
+  let layout = openFloating(emptyLayout(), { kind: 'file', path: README }, { x: 11, y: 22, width: 300, height: 200 })
+  layout = openFloating(layout, { kind: 'file', path: PROGRESS }, { x: 5, y: 6, width: 320, height: 210 })
+  const hidden = hideWindows(layout, [README, PROGRESS])
+
+  expect(visibleWindows(hidden), '都收起了').toEqual([])
+  expect(hidden.focus, '焦点落在被收起的窗上 → 清空').toBe('')
+  // 只改 visible:几何 / 归属 / 内容一个不动(故重开即原样)。
+  const win = hidden.windows.find((item) => item.id === README)
+  expect(win?.placement).toBe('floating')
+  expect(win?.rect).toEqual({ x: 11, y: 22, width: 300, height: 200 })
+  expect(layoutViolations(hidden), '不变量恒为空').toEqual([])
+  // 原布局对象未被改动 —— 收起只返回新布局(与其它操作同一条不可变纪律)。
+  expect(visibleWindows(layout)).toHaveLength(2)
+  expect(layoutViolations(layout)).toEqual([])
+  // 空 ids 原样返回(不再造新对象)。
+  expect(hideWindows(layout, [])).toBe(layout)
 })

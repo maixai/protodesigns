@@ -20,7 +20,7 @@ import type { ChatRuntime } from '../data/chat-runtime'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
-import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, focusWindow, focusedWindow, hideWindow, layoutOf, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
+import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
@@ -455,12 +455,78 @@ function contentOf(path: string): FilePanelState {
 // 是「一个 open 入口 + 一个 reveal 语义」而不是每个入口各写一遍;而「点已打开项却又开一份」
 // 在 VS Code / IntelliJ / Zed 都是被反复公开抱怨的缺陷。VS Code 的 `workbench.editor.revealIfOpen`
 // 默认关,是为了不破坏「同文件并排对照」的工作流 —— 本原型没有这个诉求,故复用总是优先于新建。
+//
+// ---- 「显示某个**停靠**窗体」之前:让遮挡的悬浮窗体让位 ----
+//
+// 本仓是**两层**结构:应用外壳(区域 / 停靠面板)在第 1 层,悬浮窗体在第 2 层(--dl-z-overlay)
+// —— 停靠窗体无论怎么激活都在悬浮窗体**之下**,所以「把要显示的那个抬上来」在层序上不可能,
+// 只能让浮层让位。业界同理:
+//   · VS Code 的浮动窗口**默认并非 always-on-top**(要在标题栏显式点 Set Always on Top 才置顶),
+//     默认它只是普通窗口、会被主窗口盖住(官方文档 User interface → Floating windows);
+//   · 它的 issue #173696「Switch focus to the File window when you open/show a File」正是
+//     「点它就是**显示并聚焦**它」;
+//   · macOS 的窗口层级(NSWindow.Level)里普通文档窗口在 level 0、utility 浮层在 level 3 ——
+//     普通窗口**永远抬不到浮层之上**,真实产品的做法都是「浮层让位」。
+// 故:显示一个**停靠**窗体时,把**几何上与目标区域显示区相交**的悬浮窗体收起(visible = false)。
+// 只收相交的 —— 屏幕上别处、不相交的浮窗一动不动;一个都不相交时**不写布局**。
+// 收起只改 visible,不动 placement / rect / view,故 layoutViolations 恒为空;被收起的浮窗可由
+// 「文件」列表 / 最近关闭那条既有路径重新打开(openFloating 会把 visible 置回真)。
+//
+// 适用面 = 所有「显式显示某个**停靠**窗体」的动作(侧栏文件点击 / 双击 / Enter、最近关闭、
+// 文件栏下拉、点区域 tab 条上的文件 tab、点对话 tab)。目标本身是**悬浮**窗体时不适用 ——
+// 那条路是「置顶它」(focusWindow),已有的行为正确。
+
+// 某区域**显示区**的矩形(视口坐标):区域的内容面板 —— 悬浮窗体压住它即构成遮挡。
+// 量不到(该区域不在渲染中)返回 null,调用方据此安全降级(宁可少做,不可乱收)。
+function displayBoxOf(surfaceId: string): WindowRect | null {
+  const panel = document.querySelector<HTMLElement>(`.conversation[data-surface-id="${CSS.escape(surfaceId)}"] .conversation-panel`)
+  if (panel === null) return null
+  const rect = panel.getBoundingClientRect()
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+}
+
+// 某悬浮窗体此刻的**实测几何**(视口坐标):几何以 DOM 为准 —— 布局里的 win.rect 在「还没摆过位置」
+// 时是 {0,0,0,0},而真实几何由窗体组件按视口算出。量不到(该窗体没有渲染)返回 null。
+// 坐标与布局数据同为视口坐标系,可直接比较。
+function measuredWindowRect(id: string): WindowRect | null {
+  const win = layout.value.windows.find((item) => item.id === id)
+  if (win === undefined) return null
+  const selector = win.content.kind === 'chat'
+    ? `.chat-panel[data-session-id="${CSS.escape(id)}"]`
+    : `.file-panel[data-mode="floating"][data-file-path="${CSS.escape(id)}"]`
+  const element = document.querySelector<HTMLElement>(selector)
+  if (element === null) return null
+  const rect = element.getBoundingClientRect()
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+}
+
+// 「收起了几个遮挡的窗口」的播报文案({count} 由载体替换)。
+function occludedMessage(count: number): string {
+  return t.value.workspace.fileBar.occludedAnnounce.replace('{count}', String(count))
+}
+
+// 让挡住某区域显示区的悬浮窗体让位;返回收起个数(0 = 没有遮挡、未写布局)。
+// 只负责收与回答个数 —— 播报由调用方经页面**既有**的 role="status" 通道(.workspace-live /
+// announcePlacement)发出,不新造第二条 live region。
+function uncoverSurface(surfaceId: string): number {
+  const box = displayBoxOf(surfaceId)
+  if (box === null) return 0
+  const ids = floatingWindowsIntersecting(layout.value, box, measuredWindowRect)
+  if (ids.length === 0) return 0
+  patchLayout((current) => hideWindows(current, ids))
+  return ids.length
+}
+
 function revealWindow(path: string, fallback: (current: WorkspaceLayout) => WorkspaceLayout): void {
   const owner = surfaceOwning(layout.value, path)
   if (owner !== undefined) {
+    // 先让遮挡的悬浮窗体让位,再把这枚 tab 切到活动位(两层结构下停靠窗体抬不过浮层)。
+    const hidden = uncoverSurface(owner.id)
     patchLayout((current) => activateTab(current, owner.id, path))
     pulseWindow(path)
-    announcePlacement(t.value.workspace.fileBar.revealAnnounce.replace('{name}', windowLabel(path)))
+    const reveal = t.value.workspace.fileBar.revealAnnounce.replace('{name}', windowLabel(path))
+    // 两条信息合成一次播报:announcePlacement 是「后写覆盖先写」的单通道,分两次调用会丢掉前一条。
+    announcePlacement(hidden > 0 ? `${reveal} ${occludedMessage(hidden)}` : reveal)
     return
   }
   const existing = layout.value.windows.find((item) => item.id === path)
@@ -533,7 +599,10 @@ function ownerSurfaceIdOf(current: WorkspaceLayout, windowId: string): string {
   return surfaceOwning(current, windowId)?.id ?? rootId.value
 }
 function selectFileTab(id: string): void {
+  // 点 tab 条上的文件 tab = 显示它:先让遮挡的浮窗让位,再把它切到活动位。
+  const hidden = uncoverSurface(ownerSurfaceIdOf(layout.value, id))
   patchLayout((current) => activateTab(current, ownerSurfaceIdOf(current, id), id))
+  if (hidden > 0) announcePlacement(occludedMessage(hidden))
 }
 // 关闭一个文件 tab(≠ 删除):从条上撤下并隐藏其窗口;活动位交给**相邻成员**(closeTab 的统一规则)。
 // 摘空的那块区域随之后被移除(见 commitLayout)。
@@ -1308,7 +1377,12 @@ async function selectSession(surfaceId: string, target: ChatSession): Promise<vo
   if (isBusy.value) return
   openMenuSurfaceId.value = ''
   landingSessionId.value = target.id
+  // 点对话 tab = 显示它:先让遮挡这块区域的浮窗让位。目标本身是**悬浮**窗体时不适用 ——
+  // 那条路是「置顶它」,收起会把它自己也收掉。
+  const targetWin = layout.value.windows.find((item) => item.id === target.id)
+  const hidden = targetWin === undefined || targetWin.placement !== 'floating' ? uncoverSurface(surfaceId) : 0
   activateChat(surfaceId, target.id)
+  if (hidden > 0) announcePlacement(occludedMessage(hidden))
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
 }

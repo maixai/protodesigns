@@ -304,6 +304,42 @@ export function hideWindow(layout: WorkspaceLayout, windowId: string): Workspace
   }
 }
 
+// 两个视口坐标系矩形是否**相交**(面积 > 0:边贴边不算;零尺寸矩形永不相交)。
+export function rectsIntersect(a: WindowRect, b: WindowRect): boolean {
+  const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+  const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
+  return overlapX > 0 && overlapY > 0
+}
+
+// 与矩形 box **相交**的**可见**悬浮窗体 id(按数组顺序)。
+//
+// 判定几何以调用方**实测**为准(页面传 getBoundingClientRect 的结果):这里刻意**不读** win.rect
+// —— 它表达的是「记忆的几何」,尚未摆过位置的窗体其 rect 是 {0,0,0,0},而真实几何由窗体组件按视口
+// 算出,两者不是一回事。rectOf 返回 null = 该窗体此刻量不到几何(未渲染),不计入。
+// box 与 rectOf 的坐标同为视口坐标系,可直接比较。
+//
+// 它服务的是「显示一个**停靠**窗体前,让遮挡它的浮窗让位」:本仓是两层结构(应用外壳在第 1 层、
+// 悬浮窗体在第 2 层 --dl-z-overlay),停靠窗体无论怎么激活都在悬浮窗体之下,故只能让浮层让位。
+export function floatingWindowsIntersecting(
+  layout: WorkspaceLayout,
+  box: WindowRect,
+  rectOf: (windowId: string) => WindowRect | null,
+): string[] {
+  return layout.windows
+    .filter((win) => win.placement === 'floating' && win.visible)
+    .flatMap((win) => {
+      const rect = rectOf(win.id)
+      return rect !== null && rectsIntersect(rect, box) ? [win.id] : []
+    })
+}
+
+// 一并隐藏若干窗体(逐个复用 hideWindow 的语义:只置 visible 为假、焦点落在其中之一时清空)。
+// 不动 placement / rect / view,故收起后不变量恒为空;被收起的窗体可由「文件」列表 / 最近关闭
+// 那条既有路径重新打开(openFloating 会把 visible 置回真)。
+export function hideWindows(layout: WorkspaceLayout, ids: readonly string[]): WorkspaceLayout {
+  return ids.reduce((current, id) => hideWindow(current, id), layout)
+}
+
 // 某个窗体的几何落定 → 记进布局(关窗口 / 切域都不清几何;null = 回到默认几何)。
 export function setWindowRect(layout: WorkspaceLayout, windowId: string, rect: WindowRect | null): WorkspaceLayout {
   const win = layout.windows.find((item) => item.id === windowId)

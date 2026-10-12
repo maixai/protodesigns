@@ -4039,6 +4039,132 @@ test('文件树里点一个正在悬浮的文件:只把它置顶聚焦,不新增
   await expect(page.locator(FILE_TAB), '不占 tab').toHaveCount(0)
 })
 
+// ---- 显示一个**停靠**窗体时,让遮挡它的悬浮窗体让位 ----
+//
+// 用户报的缺陷:打开一个文件并**停靠**(用户口中的「最大化」)、再打开另一个文件(悬浮窗覆盖在
+// 界面上),这时点侧栏里第一个文件 —— 它有脉冲与播报,但内容仍被那个悬浮窗盖住。
+// 根因:本仓是两层结构(应用外壳第 1 层、悬浮窗体第 2 层 --dl-z-overlay),停靠窗体无论怎么激活
+// 都在悬浮窗体之下,只能让浮层让位。修法:显示一个停靠窗体时,把**几何上与目标区域显示区相交**的
+// 悬浮窗体收起(visible = false);只收相交的,别处的浮窗一动不动。
+
+// 区域**显示区**(内容面板)中心 elementFromPoint 的归属:
+//   'floating' = 命中某个悬浮窗体(.dl-window 且非 docked);
+//   'content'  = 命中区域内容节点之内、且不是任何悬浮窗体;
+//   其余为标签名 / 'no-panel' / 'null'。
+// 这是「动作完成后,目标区域显示区中心不得被任何悬浮窗体覆盖」这条不变量的机械判据。
+function panelCenterHit(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const panel = document.querySelector('.conversation[data-surface-id] .conversation-panel')
+    if (!(panel instanceof HTMLElement)) return 'no-panel'
+    const rect = panel.getBoundingClientRect()
+    const el = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    if (el === null) return 'null'
+    if (el.closest('.dl-window:not(.dl-window--docked)') !== null) return 'floating'
+    if (el.closest('.conversation-panel') !== null && el.closest('.conversation[data-surface-id]') !== null) return 'content'
+    return el.tagName
+  })
+}
+
+// 把一枚 tab 拖到区域**右缘带**里松手 → 沿该边切出一块子区域(与 regions.spec 同一手势)。
+async function dragFileTabToRightEdge(page: Page, tab: Locator): Promise<void> {
+  const tabBox = await tab.boundingBox()
+  const region = await page.locator('.conversation[data-surface-id]').first().boundingBox()
+  expect(tabBox, 'tab 有几何盒').not.toBeNull()
+  expect(region, '区域有几何盒').not.toBeNull()
+  if (tabBox === null || region === null) return
+  const strip = await page.locator('.file-tabs').boundingBox()
+  const stripBottom = (strip?.y ?? tabBox.y) + (strip?.height ?? tabBox.height)
+  await page.mouse.move(tabBox.x + tabBox.width / 2, tabBox.y + tabBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(tabBox.x + tabBox.width / 2, stripBottom + 60, { steps: 8 })
+  await page.mouse.move(region.x + region.width - 30, region.y + region.height / 2 - 120, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(120)
+}
+
+test('显示一个停靠窗体时遮挡它的悬浮窗让位:点侧栏文件后内容不再被盖住,且可从文件列表恢复', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // A:打开并**停靠**(用户口中的「最大化」)—— 它拥有一枚 tab,占据区域内容区。
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"][data-file-path="README.md"]`)).toHaveCount(1)
+  // B:再打开另一个文件 → 悬浮窗体,覆盖在界面上。
+  await clickFileRow(page, PROGRESS)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="progress.csv"]`)).toHaveCount(1)
+  // 前置:此时 A 的显示区中心**确实**被 B 盖住(否则这个用例证不了任何东西)。
+  await expect.poll(async () => panelCenterHit(page), { message: '前置:B 盖住了内容区中心' }).toBe('floating')
+
+  // 点侧栏里的 A → 显示它。
+  await clickFileRow(page, README)
+
+  // 不变量:动作完成后,区域显示区中心命中的必须是该区域的内容节点,**不是**任何悬浮窗体。
+  await expect.poll(async () => panelCenterHit(page), { message: 'A 的显示区中心不再被悬浮窗体覆盖' }).toBe('content')
+  // B 已被收起(收起 ≠ 删除 —— 见下)。
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '挡住它的浮窗已收起').toHaveCount(0)
+  // 两条信息在同一条 role=status 播报里:「已切换到 A」保留 + 「收起了几个遮挡的窗口」。
+  await expect(page.locator('.workspace-live')).toContainText('已切换到')
+  await expect(page.locator('.workspace-live')).toContainText('收起')
+
+  // 恢复路径:被收起的 B 从文件栏的「文件」列表重新打开(走 openFloating 把 visible 置回真)。
+  await openSwitcher(page)
+  await page.locator('.conversation-filter__option', { hasText: '文件' }).click()
+  await page.locator('.conversation-row[data-file-option]', { hasText: 'progress.csv' }).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="progress.csv"]`), '被收起的窗可重新打开').toHaveCount(1)
+})
+
+test('只收与目标区域相交的:别的区域上方的悬浮窗一动不动,也不写布局', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 切出一块新区域,README 停靠进**新区域**(被切走的那枚 tab 落在子区域里)。
+  await openDockedFile(page, README)
+  await dragFileTabToRightEdge(page, page.locator('.file-tab').first())
+  const panes = page.locator('.conversation[data-surface-id]')
+  await expect(panes, '两块区域').toHaveCount(2)
+  const filePane = panes.filter({ has: page.locator(`${FILE_PANEL}[data-mode="docked"]`) })
+  await expect(filePane, 'README 停靠在其中一块').toHaveCount(1)
+  const target = await filePane.locator('.conversation-panel').boundingBox()
+  expect(target, '目标区域显示区有几何盒').not.toBeNull()
+  if (target === null) return
+
+  // 开一个悬浮窗,并把它缩到最小宽度 —— 让它的几何**不与目标区域显示区相交**。
+  await clickFileRow(page, PROGRESS)
+  const floating = page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="progress.csv"]`)
+  await expect(floating).toHaveCount(1)
+  await floating.locator('.dl-window__resize--e').focus()
+  await page.keyboard.press('Home')
+  const box = await floating.boundingBox()
+  expect(box, '浮窗有几何盒').not.toBeNull()
+  if (box === null) return
+  const overlaps = box.x < target.x + target.width && box.x + box.width > target.x
+    && box.y < target.y + target.height && box.y + box.height > target.y
+  expect(overlaps, '前置:浮窗与目标区域显示区不相交').toBe(false)
+
+  // 点目标区域里 README 的 tab → 显示它。
+  await page.locator(`${FILE_TAB}[data-file-path="README.md"]`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"][data-file-path="README.md"]`)).toHaveCount(1)
+  // 不相交的浮窗**一动不动**;没有可收起的遮挡 → 不发收起播报(故也没有多余的写布局)。
+  await expect(floating, '不相交的浮窗没被收起').toHaveCount(1)
+  await expect(page.locator('.workspace-live'), '无遮挡 → 不写布局、不播报').not.toContainText('收起')
+})
+
+test('没有悬浮窗时不产生收起动作:点 tab 一切照旧', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await openDockedFile(page, README)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '没有悬浮窗').toHaveCount(0)
+  // 先把内容区让给一段对话(点对话 tab),再点回文件 tab。
+  await page.locator('.conversation-tab').first().click()
+  await expect(page.locator('.transcript:not(.transcript--placeholder)')).toHaveCount(1)
+  // uncoverSurface 只在**真的收起**时才写布局、才播报,故「播报未变」是「未写布局」的可观察等价量。
+  const before = await page.locator('.workspace-live').textContent()
+  await page.locator(`${FILE_TAB}[data-file-path="README.md"]`).click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"][data-file-path="README.md"]`)).toHaveCount(1)
+  await expect(page.locator('.workspace-live'), '无遮挡 → 无收起播报').toHaveText(before ?? '')
+})
+
 test('停靠态文件面板的 ✕ 关掉该文件的 tab:面板与 tab 一起消失,不留矛盾状态', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -4978,11 +5104,13 @@ test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟
   await dockLastFloating(page)
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
 
-  // 换会话(同项目、同 Agent = 同一分域)→ 悬浮窗与 tab 都不变。
+  // 换会话(同项目、同 Agent = 同一分域)→ 条上的 tab 不变。
+  // 注意:点对话 tab 属于「显示一个停靠窗体」的动作 —— 盖在区域上的悬浮窗会**让位收起**
+  // (见「遮挡让位」一组用例)。收起只改 visible,几何仍留在本域里,故下面切回来还能原样恢复。
   await clickTab(page, HEADINGS['zh-CN'].roadmap)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
-  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '换会话后分域不变').toHaveCount(1)
   await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '换会话后 tab 不变').toHaveCount(1)
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '盖在区域上的悬浮窗让位收起').toHaveCount(0)
 
   // 换项目(knowledge-base)—— 分域换成新的一对 → 条上与浮层里都不再有旧域的东西。
   // 新域没有会话 ⇒ 根区域既无成员又无子区域 ⇒ 引导页(没有转录,故不能等 role="log")。
@@ -5007,6 +5135,8 @@ test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟
   await waitForStable(page)
   await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '切回来旧域的 tab 原样恢复').toHaveCount(1)
   await expect(page.locator(FILE_TAB), '恢复的是旧域那一份,不掺新域').toHaveCount(1)
+  // 悬浮窗此前被「让位收起」,从侧栏重新打开它 → 回到本域记忆的几何(收起 ≠ 删除)。
+  await clickFileRow(page, README)
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '悬浮窗也原样恢复').toHaveCount(1)
   await expect.poll(async () => Math.round((await panelRectOf(page, README)).x), { message: '悬浮窗恢复的位置与原分域一致' }).toBe(Math.round(placed.x))
   const restored = await panelRectOf(page, README)

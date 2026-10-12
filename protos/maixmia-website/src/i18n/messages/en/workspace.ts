@@ -287,6 +287,10 @@ export const workspace = {
     // only redundant emphasis; the text plus the region actually switching carry the information
     // (WCAG: information must not be conveyed by motion alone).
     revealAnnounce: 'Switched to "{name}"',
+    // When a docked window is shown while a floating one covers its region, the covering windows are
+    // tucked away first (this repo's two-layer stacking can't lift a docked window above the overlay).
+    // {count} is replaced with how many were tucked away.
+    occludedAnnounce: 'Tucked away {count} floating window(s) that were covering this area',
   },
   // Conversation window (how a conversation looks once torn out of the tab strip into a floating window):
   // title bar / close / drop hint. Conversations share the **same** window mechanism as files, so the tab's

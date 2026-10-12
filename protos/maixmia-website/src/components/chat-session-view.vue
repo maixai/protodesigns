@@ -30,7 +30,6 @@ const emit = defineEmits<{
   regenerate: []
   retry: []
   resolve: [allowed: boolean]
-  'use-suggestion': [text: string]
   'update:draft': [value: string]
   'update:pinned': [value: boolean]
 }>()
@@ -159,7 +158,6 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
         :is-saving="runtime.isSaving"
         @retry="emit('retry')"
         @resolve="emit('resolve', $event)"
-        @use-suggestion="emit('use-suggestion', $event)"
         @regenerate="emit('regenerate')"
       />
     </div>

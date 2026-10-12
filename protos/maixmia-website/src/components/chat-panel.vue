@@ -61,7 +61,6 @@ const emit = defineEmits<{
   regenerate: []
   retry: []
   resolve: [allowed: boolean]
-  'use-suggestion': [text: string]
   'update:draft': [value: string]
   'update:pinned': [value: boolean]
 }>()
@@ -142,7 +141,6 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
         @regenerate="emit('regenerate')"
         @retry="emit('retry')"
         @resolve="emit('resolve', $event)"
-        @use-suggestion="emit('use-suggestion', $event)"
         @update:draft="emit('update:draft', $event)"
         @update:pinned="emit('update:pinned', $event)"
       />

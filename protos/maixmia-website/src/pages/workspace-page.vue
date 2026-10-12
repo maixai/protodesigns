@@ -1059,27 +1059,6 @@ function resetGenerations(): void {
   chatRuntimes.value = next
 }
 
-// ---- 建议卡 ----
-// 已有对话的空转录里点建议卡:填进该会话的草稿并聚焦(不新建)。
-async function useSuggestion(sessionId: string, text: string): Promise<void> {
-  patchRuntime(sessionId, (current) => ({ ...current, draft: text }))
-  await nextTick()
-  focusComposer(sessionId)
-}
-// 空位占位里点建议卡:**立即新建**一段对话,把文本填进草稿并聚焦。
-async function startFromSuggestion(surfaceId: string, text: string): Promise<void> {
-  if (isBusy.value) return
-  const created = await createSession(selectedProjectId.value)
-  if (!isAlive.value || !created.ok) return
-  sessions.value.unshift(created.value)
-  seedRuntime(created.value.id, text)
-  if (sessionStatus.value !== 'ready') sessionStatus.value = 'ready'
-  patchLayout((current) => activateChatAt(current, surfaceId, created.value.id))
-  landingSessionId.value = created.value.id
-  await nextTick()
-  focusComposer(created.value.id)
-}
-
 // ---- 装载与重装 ----
 // 让某段对话成为**指定区域**的活动成员(已在 → 只激活;被关掉过 → 补回;被拆出为悬浮 → 只置顶)。
 function activateChat(surfaceId: string, sessionId: string): void {
@@ -1679,7 +1658,6 @@ onBeforeUnmount(() => {
             <WorkspaceOnboarding
               class="guide-shell__body"
               @new-chat="newConversation(surfaceId)"
-              @use-suggestion="startFromSuggestion(surfaceId, $event)"
             />
           </div>
           <section
@@ -1800,7 +1778,6 @@ onBeforeUnmount(() => {
                   @regenerate="regenerate(activeChatOf(surfaceId))"
                   @retry="retrySession(activeChatOf(surfaceId))"
                   @resolve="resolveConfirmation(activeChatOf(surfaceId), $event)"
-                  @use-suggestion="useSuggestion(activeChatOf(surfaceId), $event)"
                   @update:draft="updateDraft(activeChatOf(surfaceId), $event)"
                   @update:pinned="updatePinned(activeChatOf(surfaceId), $event)"
                 />
@@ -1826,7 +1803,6 @@ onBeforeUnmount(() => {
                     :confirmation-outcome="null"
                     :follow-up="null"
                     :is-saving="false"
-                    @use-suggestion="startFromSuggestion(surfaceId, $event)"
                   />
                 </div>
               </div>
@@ -1889,7 +1865,6 @@ onBeforeUnmount(() => {
           @regenerate="regenerate(chatSessionIdOf(win))"
           @retry="retrySession(chatSessionIdOf(win))"
           @resolve="resolveConfirmation(chatSessionIdOf(win), $event)"
-          @use-suggestion="useSuggestion(chatSessionIdOf(win), $event)"
           @update:draft="updateDraft(chatSessionIdOf(win), $event)"
           @update:pinned="updatePinned(chatSessionIdOf(win), $event)"
         />

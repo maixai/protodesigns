@@ -292,10 +292,15 @@ for (const width of WIDTHS) {
         await expect.poll(() => page.getByRole('log').evaluate((element) => Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop))).toBeLessThanOrEqual(1)
         await expect(page.getByRole('button', { name: '回到底部' })).toHaveCount(0)
       } else {
-        const suggestions = page.locator('.suggestion-card')
-        await expect(suggestions).toHaveCount(3)
-        await suggestions.first().click()
-        await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toHaveValue('帮我把团队知识库整理工作拆成一周内可执行的计划。')
+        // 建议卡已下线:空位占位只剩问候语,没有任何可点的次级入口。
+        await expect(page.locator('.suggestion-card')).toHaveCount(0)
+        await expect(page.locator('.suggestions')).toHaveCount(0)
+        await expect(page.getByRole('log').getByRole('heading').first()).toBeVisible()
+        await expect(page.getByRole('log')).toContainText('一舟，今天一起完成什么？')
+        // 空位占位**没有输入坞**(见上方断言),故「输入框为空」改由「新对话不再被卡片预填」来验:
+        // 点区域 ＋ 建一段新会话 → 输入框必为空。这也替换了原先「点卡片 → 输入框出现建议正文」那条链。
+        await page.getByRole('button', { name: '新建对话', exact: true }).click()
+        await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toHaveValue('')
         await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
       }
     })
@@ -1368,7 +1373,10 @@ test('空态发送回到正常路由，切语言保留新对话', async ({ page 
   await page.goto('/#/workspace?s=empty')
   await waitForStable(page, 'empty')
   await expectEmptyAtTop(page)
-  await page.locator('.suggestion-card').first().click()
+  // 建议卡已下线:空态不再有「点卡片建会话并预填草稿」这条链。改用区域 ＋ 建一段空会话,
+  // 再直接在输入框里打字发送 —— 替换的只是选一段话的方式,意图(空态发送回到常规路由)不变。
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByRole('textbox').fill('帮我把团队知识库整理工作拆成一周内可执行的计划。')
   await page.getByRole('textbox').press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   await expect(page).toHaveURL(/#\/workspace$/)

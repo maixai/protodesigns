@@ -86,11 +86,6 @@ export const workspace = {
   loading: 'Loading conversation…',
   emptyTitle: 'Yizhou, what shall we work on?',
   emptyBody: 'Start with an idea. Tell Mia your goal, and we will work out the next step together.',
-  suggestions: {
-    plan: { title: 'Break down a task', body: 'Help me turn our team knowledge-base cleanup into a plan we can complete in one week.' },
-    write: { title: 'Organize meeting notes', body: 'I want to organize today’s project meeting notes. Start with a template for decisions and action items.' },
-    explore: { title: 'Explore an idea', body: 'I want to build an agent that summarizes project progress each week. Help me define its inputs and outputs.' },
-  },
   inputLabel: 'Message to Mia',
   // 每个输入框按会话可区分(见 zh-CN 同名键的说明);无标题时回落到 inputLabel。
   inputLabelOf: 'Message to "{name}"',
@@ -342,12 +337,10 @@ export const workspace = {
   // Onboarding page: the root region has neither members nor children, so the whole right side has
   // nothing to show. This is **not** the same as the empty-slot placeholder (where a region merely
   // has no active member), so the copy is separate and does not reuse emptyTitle / emptyBody.
+  // Only title / body / primary button: the body just points at "new conversation".
   onboarding: {
-    // Monospace technical mark: this language's sense of craft comes from the monospace type
-    // carrying technical information — no illustration, no gradient, no glow.
-    mark: 'MIA / WORKSPACE',
     title: 'Nothing open here yet',
-    body: 'Start a conversation, or pick one of the suggestions below.',
+    body: 'Start a conversation and tell Mia your goal.',
   },
   // Workspace agent names: the conversation-heading subtitle shows the session's owning agent.
   agents: {

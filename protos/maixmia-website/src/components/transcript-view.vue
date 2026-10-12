@@ -37,7 +37,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   retry: []
   resolve: [allowed: boolean]
-  'use-suggestion': [text: string]
   regenerate: []
 }>()
 
@@ -72,11 +71,6 @@ function formatMessageTime(timestamp: string): string {
     <div v-else-if="transcript.status === 'empty'" class="conversation-empty">
       <h2>{{ t.workspace.emptyTitle }}</h2>
       <p>{{ t.workspace.emptyBody }}</p>
-      <div class="suggestions">
-        <button v-for="(suggestion, key) in t.workspace.suggestions" :key="key" class="suggestion-card" @click="emit('use-suggestion', suggestion.body)">
-          <strong>{{ suggestion.title }}</strong><span>{{ suggestion.body }}</span>
-        </button>
-      </div>
     </div>
     <template v-else>
       <article
@@ -152,16 +146,12 @@ function formatMessageTime(timestamp: string): string {
 .conversation-empty h2 { font-size: var(--dl-font-size-xl); line-height: var(--dl-line-body); font-weight: 500; }
 .conversation-empty > p { color: var(--dl-text-secondary); }
 .retry-button { justify-self: start; }
-.suggestions { display: grid; gap: var(--dl-space-3); margin-top: var(--dl-space-4); }
-.suggestion-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--dl-space-2); text-align: left; padding: var(--dl-space-4); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); min-height: var(--dl-target-size); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
-.suggestion-card strong { font-size: var(--dl-font-size-md); font-weight: 500; }
-.suggestion-card > span:first-of-type { grid-row: 2; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
 /* 转录里的按钮沿用工作台既有按钮配方(与页面里的 .workspace-button 同值)——它们渲染在
    本组件里,拿不到页面那份 scoped 规则,故在此补一份最小集(基础 / 悬停 / 按压 / 禁用 / 焦点)。 */
 .workspace-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--dl-space-2); min-height: var(--dl-target-size); min-width: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); background: var(--dl-bg-elevated); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
-.suggestion-card:hover, .workspace-button:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
-.suggestion-card:active, .workspace-button:active { transform: translateY(var(--dl-lift-press)); }
-.workspace-button:focus-visible, .suggestion-card:focus-visible { box-shadow: var(--dl-focus-ring); }
+.workspace-button:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
+.workspace-button:active { transform: translateY(var(--dl-lift-press)); }
+.workspace-button:focus-visible { box-shadow: var(--dl-focus-ring); }
 .workspace-button:disabled, .workspace-button[aria-disabled='true'] { cursor: not-allowed; color: var(--dl-text-disabled); background: var(--dl-bg-sunken); transform: none; }
 /* 窄屏:头像降到 24px、间隙收到 8px、内边距收一档,头像不拉负边距(没有侧向留白可凸入)。 */
 @media (max-width: 1023px) {
@@ -170,6 +160,6 @@ function formatMessageTime(timestamp: string): string {
   .chat-message.user .message-avatar { margin-inline: var(--workspace-avatar-gap) 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .workspace-button:active, .suggestion-card:active { transform: none; }
+  .workspace-button:active { transform: none; }
 }
 </style>

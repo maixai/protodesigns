@@ -1247,6 +1247,12 @@ function reconcileLanding(): void {
   // 窗体**还不存在**(首屏:补成员是异步的 watcher)时照常放行,故首屏落点不受影响。
   const landingWin = layout.value.windows.find((item) => item.id === landing)
   if (landingWin !== undefined && !landingWin.visible) return
+  // 落点那段对话**已属于别的区域**时也不动它:本函数只负责「根区域该显示哪段对话」,不该把
+  // 用户刚搬进别处(切换器选择 / 拖拽)的那段拽回根区域。少了这道闸,「在子区域的下拉里选一段
+  // 尚在根区域的对话」会被本函数搬回根区域 —— 表现为「搬过去又弹回来」(更早的版本因为 dockWindow
+  // 只从目标区域过滤,同一处漏成了「同一段对话挂在两块区域」)。归属就是根区域时照常走既有逻辑。
+  const landingOwner = surfaceOwning(layout.value, landing)
+  if (landingOwner !== undefined && landingOwner.id !== surfaceId) return
   if (win === null || win.content.kind === 'chat') {
     activateChat(surfaceId, landing)
     return

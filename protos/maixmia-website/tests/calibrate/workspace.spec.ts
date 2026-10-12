@@ -6586,6 +6586,47 @@ test('同一对话不会同时挂在两块区域:把已在别处打开的对话�
   expect(issues, '不变量守卫未报错(无 console error)').toEqual([])
 })
 
+test('在新区域的下拉里选一段仍在根区域的对话:搬进新区域,且不被随后的重载搬回去', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const issues: string[] = []
+  page.on('console', (message) => { if (message.type() === 'error') issues.push(message.text()) })
+
+  // 先切出一块**子区域**(把第 2 枚 tab 拖到右缘):根区域仍留着其余对话。
+  await dragTabToRightEdge(page, page.locator('.tab-slot').nth(1))
+  const panes = page.locator('.conversation[data-surface-id]')
+  await expect(panes, '切出两块区域').toHaveCount(2)
+  const root = panes.nth(0)
+  const child = panes.nth(1)
+  const rootTitle = await root.locator(`${TAB}[aria-selected="true"] .conversation-tab__label`).innerText()
+
+  // 在**子区域**的下拉里点那段此刻仍属于**根区域**的对话。
+  // 它仍列在子区域的列表里 —— 被隐去的只有「本区域正在显示的那段」,不是「所有已打开的」。
+  // 注意菜单面板 id 是**按区域**的(根区域恰为 SWITCHER_PANEL,子区域带 surfaceId 后缀),
+  // 故这里取子区域自己的面板。
+  const childId = await child.getAttribute('data-surface-id')
+  const childPanel = page.locator(`#conversation-panel-${childId}`)
+  await child.locator(SWITCHER_TRIGGER).click()
+  await expect(childPanel).toBeVisible()
+  const row = childPanel.locator('.session-item', { hasText: rootTitle })
+  await expect(row, '根区域正在显示的那段仍列在子区域的列表里').toHaveCount(1)
+  await row.click()
+
+  // 它应当**搬**进子区域并成为活动成员。
+  await expect(child.locator(`${TAB}[aria-selected="true"]`), '搬进子区域并成为活动成员').toContainText(rootTitle)
+
+  // ⚠️ 关键在「之后」:选择任何会话都会触发一次工作区重载,重载末尾的 reconcileLanding 以
+  // **根区域**为落点 —— 少了归属闸,它会把刚搬走的这段拽回根区域。实测该反弹发生在点击后
+  // 约 400ms(150ms 时在新区域、550ms 时已回到根区域),故必须等重载落定再断言,
+  // 否则这条用例会「因为断言太早」而假绿。
+  await page.waitForTimeout(1500)
+  await expect(child.locator(TAB, { hasText: rootTitle }), '重载落定后仍留在子区域').toHaveCount(1)
+  await expect(root.locator(TAB, { hasText: rootTitle }), '根区域不再有它(是移动,不是复制)').toHaveCount(0)
+  await expect(page.locator(`${TAB}`, { hasText: rootTitle }), '全页同 id 的 tab 只有一枚').toHaveCount(1)
+  expect(issues, '不变量守卫未报错(无 console error)').toEqual([])
+})
+
 test('切换器的会话列表隐去本区域正在显示的那段;关掉它的 tab 后它回到列表', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)

@@ -758,7 +758,8 @@ function popOutTab(key: string, origin: WindowRect): void {
   void nextTick(() => {
     requestAnimationFrame(() => {
       if (popFlip.value?.key === key) popFlip.value = null
-      const meta = document.querySelector<HTMLElement>(`.file-panel[data-mode="floating"][data-file-path="${CSS.escape(key)}"] .file-panel__meta, .chat-panel[data-session-id="${CSS.escape(key)}"] .chat-panel__meta`)
+      // 标题栏是共用窗体壳(WindowFrame)里的一块,两类窗体共用它的类名;根类仍是各自的具体窗体。
+      const meta = document.querySelector<HTMLElement>(`.file-panel[data-mode="floating"][data-file-path="${CSS.escape(key)}"] .dl-window__meta, .chat-panel[data-session-id="${CSS.escape(key)}"] .dl-window__meta`)
       meta?.focus()
     })
   })

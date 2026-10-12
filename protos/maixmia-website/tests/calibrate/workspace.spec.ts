@@ -3921,7 +3921,7 @@ test('悬浮 ↔ 停靠:双击标题栏即停靠(加入成员、占据内容区�
   await clickFileRow(page, README)
   const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
   await expect(floating).toHaveCount(1)
-  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  const headerBox = await floating.locator('.dl-window__meta').boundingBox()
   expect(headerBox, '悬浮窗标题栏有几何盒').not.toBeNull()
   if (headerBox === null) return
   await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 48, 24)
@@ -3932,7 +3932,7 @@ test('悬浮 ↔ 停靠:双击标题栏即停靠(加入成员、占据内容区�
   await expect(page).toHaveScreenshot('workspace-file-window-floating-1280.png')
 
   // 双击标题栏(身份区,不是行尾控件)→ **停靠到区域内容区**。
-  await floating.locator('.file-panel__meta').dblclick({ position: { x: 120, y: 20 } })
+  await floating.locator('.dl-window__meta').dblclick({ position: { x: 120, y: 20 } })
   await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`), '停靠窗体在场').toHaveCount(1)
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '停靠后不再作为浮层渲染').toHaveCount(0)
   // 占一个 tab,且是活动项。
@@ -3947,7 +3947,7 @@ test('悬浮 ↔ 停靠:双击标题栏即停靠(加入成员、占据内容区�
     const rect = area.getBoundingClientRect()
     const el = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
     if (el === null) return 'null'
-    if (el.closest('.file-panel--docked') !== null) return 'docked'
+    if (el.closest('.dl-window--docked') !== null) return 'docked'
     if (el.closest('.transcript') !== null) return 'transcript'
     return el.tagName
   })
@@ -3966,7 +3966,7 @@ test('悬浮 ↔ 停靠:双击标题栏即停靠(加入成员、占据内容区�
   }
 
   // 双击停靠窗的标题栏 → **还原悬浮**:脱离成员(条上清空)、回到**记忆的悬浮几何**。
-  await page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__meta`).dblclick({ position: { x: 120, y: 20 } })
+  await page.locator(`${FILE_PANEL}[data-mode="docked"] .dl-window__meta`).dblclick({ position: { x: 120, y: 20 } })
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '还原为悬浮窗体').toHaveCount(1)
   await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`)).toHaveCount(0)
   await expect(page.locator(FILE_TAB), '脱离成员,条上不再有它').toHaveCount(0)
@@ -4127,6 +4127,8 @@ test('复位几何:标题栏的原生按钮把悬浮窗还原为默认落点,且
   await page.locator(`${FILE_PANEL}[data-mode="floating"] .file-panel__placement`).click()
   await expect(page.locator(`${FILE_PANEL}[data-mode="docked"]`)).toHaveCount(1)
   await expect(page.locator('.file-panel__reset'), '停靠态不渲染复位钮').toHaveCount(0)
+  // 停靠态的几何由区域内容区给出,没有可调整的自由尺寸 → 缩放手柄一枚都不渲染。
+  await expect(page.locator('.dl-window__resize'), '停靠态不渲染缩放手柄').toHaveCount(0)
 })
 
 for (const width of [375, 768, 1280, 1600]) {
@@ -4716,7 +4718,7 @@ test('文件面板标题栏:40px 薄头、内部不换行、内容区不小于�
   await waitForStable(page)
   await clickFileRow(page, README)
   const panel = page.locator(FILE_PANEL)
-  const header = panel.locator('.file-panel__meta')
+  const header = panel.locator('.dl-window__meta')
   const headerBox = await header.boundingBox()
   const panelBox = await panel.boundingBox()
   const bodyBox = await panel.locator('.file-panel__body').boundingBox()
@@ -4762,7 +4764,7 @@ test('文件面板拖动:位置改变、四边钳进转录区、双击复位默�
   await login(page)
   await waitForStable(page)
   await clickFileRow(page, README)
-  const header = page.locator('.file-panel__meta')
+  const header = page.locator('.dl-window__meta')
   const reset = await panelRectInArea(page)
   const area = await transcriptAreaRect(page)
   console.log(`[panel drag] 默认几何 ${JSON.stringify(reset)} / 视口 ${JSON.stringify(area)}`)
@@ -4862,7 +4864,7 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   const reset = await panelRectInArea(page)
 
   // ① 四角手柄实测 44×44(本仓触达下限);四边是 8px 的细条。
-  const corners = await page.locator('.file-panel__resize--corner').evaluateAll((elements) => elements.map((el) => {
+  const corners = await page.locator('.dl-window__resize--corner').evaluateAll((elements) => elements.map((el) => {
     const rect = el.getBoundingClientRect()
     return { w: rect.width, h: rect.height }
   }))
@@ -4872,11 +4874,11 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
     expect(corner.w, '角手柄宽 ≥44').toBeGreaterThanOrEqual(43.5)
     expect(corner.h, '角手柄高 ≥44').toBeGreaterThanOrEqual(43.5)
   }
-  const edgeBox = await page.locator('.file-panel__resize--e').boundingBox()
+  const edgeBox = await page.locator('.dl-window__resize--e').boundingBox()
   expect(edgeBox?.width ?? 0, '边条宽 ≈8').toBeLessThanOrEqual(9)
 
   // ② 分隔条的 ARIA:role / orientation / valuenow / min / max / controls。
-  const east = page.locator('.file-panel__resize--e')
+  const east = page.locator('.dl-window__resize--e')
   await expect(east).toHaveAttribute('role', 'separator')
   await expect(east).toHaveAttribute('aria-orientation', 'vertical')
   await expect(east).toHaveAttribute('aria-controls', 'file-panel-body')
@@ -4885,12 +4887,12 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   const nowBefore = Number(await east.getAttribute('aria-valuenow'))
   console.log(`[panel resize] E aria valuenow ${nowBefore} min 320 max ${Math.round(area.width - 2 * PANEL_MARGIN)}`)
   expect(Math.abs(nowBefore - reset.width), 'aria-valuenow = 当前宽').toBeLessThanOrEqual(0.5)
-  const south = page.locator('.file-panel__resize--s')
+  const south = page.locator('.dl-window__resize--s')
   await expect(south).toHaveAttribute('aria-orientation', 'horizontal')
   await expect(south).toHaveAttribute('aria-valuemax', String(Math.round(area.height - 2 * PANEL_MARGIN)))
 
   // ③ 拖四角:尺寸改变且在 min/max 内(临界值:最小 320×200,最大 = 转录区)。
-  const se = await page.locator('.file-panel__resize--se').boundingBox()
+  const se = await page.locator('.dl-window__resize--se').boundingBox()
   expect(se).not.toBeNull()
   if (se === null) return
   await dragFromTo(page, se.x + se.width / 2, se.y + se.height / 2, 120, 80)
@@ -4899,7 +4901,7 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   // ⑤ 的硬约束:缩放时高度可以变(压小是合法的),但**下缘不得越过「输入框之上」**。
   expect(Math.abs(bigger.width - (reset.width + 120)), 'SE 拖:宽 +120').toBeLessThanOrEqual(1)
   expect(bigger.y + bigger.height, 'SE 拖:下缘不越出视口').toBeLessThanOrEqual((await panelBottomLimit(page)) + 1)
-  const se2 = await page.locator('.file-panel__resize--se').boundingBox()
+  const se2 = await page.locator('.dl-window__resize--se').boundingBox()
   if (se2 === null) return
   await dragFromTo(page, se2.x + se2.width / 2, se2.y + se2.height / 2, -3000, -3000)
   // 把指针带回视口内并**显式再抬一次**:出界拖拽的 pointerup 可能送不到页面,
@@ -4909,7 +4911,7 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   const minimum = await panelRectInArea(page)
   console.log(`[panel resize] SE 拖到极限 → ${JSON.stringify(minimum)}`)
   await expectPanelRect(page, { width: PANEL_MIN_W, height: PANEL_MIN_H }, '缩到最小(320×200)')
-  const se3 = await page.locator('.file-panel__resize--se').boundingBox()
+  const se3 = await page.locator('.dl-window__resize--se').boundingBox()
   if (se3 === null) return
   await dragFromTo(page, se3.x + se3.width / 2, se3.y + se3.height / 2, 3000, 3000)
   // 把指针带回视口内并**显式再抬一次**:出界拖拽的 pointerup 可能送不到页面,
@@ -4952,7 +4954,7 @@ test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟
   // 一个**悬浮**窗(带自己的几何)+ 一个**停靠** tab(占条):两种归属都要按分域保存与恢复。
   await clickFileRow(page, README)
   const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
-  const header = floating.locator('.file-panel__meta')
+  const header = floating.locator('.dl-window__meta')
   const headerBox = await header.boundingBox()
   expect(headerBox, '悬浮窗标题栏有几何盒').not.toBeNull()
   if (headerBox !== null) await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 40, 20)
@@ -5099,7 +5101,7 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
     const rect = el.getBoundingClientRect()
     return { path: el.getAttribute('data-file-path'), x: Math.round(rect.x), y: Math.round(rect.y) }
   }))
-  const readmeBox = await panel(README).locator('.file-panel__meta').boundingBox()
+  const readmeBox = await panel(README).locator('.dl-window__meta').boundingBox()
   expect(readmeBox).not.toBeNull()
   if (readmeBox !== null) {
     await dragFromTo(page, readmeBox.x + readmeBox.width / 2, readmeBox.y + readmeBox.height / 2, 60, 40)
@@ -5120,7 +5122,7 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   //    而键盘与拖动共用同一套平移钳制,且完全不触发落点。
   const floor = await panelBottomLimit(page)
   const areaForClamp = await transcriptAreaRect(page)
-  const readmeHeader = panel(README).locator('.file-panel__meta')
+  const readmeHeader = panel(README).locator('.dl-window__meta')
   await readmeHeader.focus()
   await expect(readmeHeader).toBeFocused()
   for (let step = 0; step < 20; step += 1) await page.keyboard.press('Shift+ArrowRight')
@@ -5149,8 +5151,8 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
       return hit.tagName
     }, selector)
   }
-  await panel(README).locator('.file-panel__meta').focus()
-  await expect(panel(README).locator('.file-panel__meta')).toBeFocused()
+  await panel(README).locator('.dl-window__meta').focus()
+  await expect(panel(README).locator('.dl-window__meta')).toBeFocused()
   for (let step = 0; step < 8; step += 1) await page.keyboard.press('Shift+ArrowUp')
   // 横向也走键盘(Shift 大步长 64):小步拖拽在 webkit 上仍会中途停止投递(实测只走到 1/3),
   // 键盘路径确定且与拖拽共用同一套平移钳制。
@@ -5181,8 +5183,8 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   expect(await page.evaluate(() => document.activeElement?.id ?? ''), '未被覆盖时输入框仍可聚焦').toMatch(/^workspace-composer-/)
 
   // 把窗体推到**输入区纬度**:坞在第 1 层,故输入框中心的命中翻转为文件窗体(用户要的「能被文件窗体覆盖」)。
-  await panel(README).locator('.file-panel__meta').focus()
-  await expect(panel(README).locator('.file-panel__meta')).toBeFocused()
+  await panel(README).locator('.dl-window__meta').focus()
+  await expect(panel(README).locator('.dl-window__meta')).toBeFocused()
   for (let step = 0; step < 5; step += 1) await page.keyboard.press('Shift+ArrowDown')
   await expect.poll(async () => {
     const box = await panel(README).boundingBox()
@@ -5214,8 +5216,8 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   // 且不依赖指针,故用它把窗口推到视口上缘(这也正是「手柄被 chrome 盖住后仍能操作」的通路之一)。
   // 方向键的监听在**标题栏**上,故先把焦点交给它(条上按钮在前面的步骤里点过一次,此时它可能被
   // 别的窗口压住 —— 键盘路径本来就是为了绕开「被遮挡」而存在的通路,这里也用它)。
-  await panel(README).locator('.file-panel__meta').focus()
-  await expect(panel(README).locator('.file-panel__meta')).toBeFocused()
+  await panel(README).locator('.dl-window__meta').focus()
+  await expect(panel(README).locator('.dl-window__meta')).toBeFocused()
   for (let step = 0; step < 8; step += 1) await page.keyboard.press('Shift+ArrowUp')
   await expect.poll(async () => Math.round((await panelRectOf(page, README)).y), { message: '向上能到视口上缘内边距' }).toBe(PANEL_MARGIN)
   const afterUp = await panelRectOf(page, README)
@@ -5260,7 +5262,7 @@ test('文件面板:滚轮 / 横向滚动都隔离在面板内,不穿透到背后
     if ((await fold.count()) === 0) break
     await fold.click()
   }
-  const se = await page.locator('.file-panel__resize--se').boundingBox()
+  const se = await page.locator('.dl-window__resize--se').boundingBox()
   expect(se, '有 SE 角手柄').not.toBeNull()
   if (se !== null) await dragFromTo(page, se.x + se.width / 2, se.y + se.height / 2, -3000, -3000)
   await expectPanelRect(page, { width: PANEL_MIN_W, height: PANEL_MIN_H }, '缩到最小以制造溢出')
@@ -5283,7 +5285,7 @@ test('文件面板:滚轮 / 横向滚动都隔离在面板内,不穿透到背后
 
   // ② 面板外框也吃掉滚轮(内容不足一屏时,链条由这一层兜住 —— Chrome 144 起 overflow: hidden 的
   //    盒子也参与 overscroll)。面板根自身无溢出,「面」这一层才是承载它的盒子。
-  const surface = page.locator('.file-panel__surface')
+  const surface = page.locator('.dl-window__surface')
   const surfaceStyles = await surface.evaluate((element) => {
     const style = getComputedStyle(element)
     return {
@@ -5624,7 +5626,7 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
   await expect(page.locator(FILE_PANEL)).toBeVisible()
   // 默认不换行(white-space: pre),但面板默认宽度足够宽,最长行仍放得下 —— 把面板缩到最小宽度,
   // 内容区才真的出现横向可滚区,「守卫不误伤合法横向滚动」这条才有意义。
-  const corner = await page.locator('.file-panel__resize--se').boundingBox()
+  const corner = await page.locator('.dl-window__resize--se').boundingBox()
   expect(corner, '有 SE 角手柄').not.toBeNull()
   if (corner !== null) await dragFromTo(page, corner.x + corner.width / 2, corner.y + corner.height / 2, -3000, -3000)
   await expectPanelRect(page, { width: PANEL_MIN_W, height: PANEL_MIN_H }, '缩到最小以造出横向可滚区')
@@ -5637,7 +5639,7 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
       const style = getComputedStyle(element)
       return { selector, x: style.overscrollBehaviorX, y: style.overscrollBehaviorY }
     }
-    return ['.transcript', '.project-scroll', '#file-panel-body', '.file-panel__surface']
+    return ['.transcript', '.project-scroll', '#file-panel-body', '.dl-window__surface']
       .map(read)
       .filter((item): item is { selector: string; x: string; y: string } => item !== null)
   })
@@ -5801,7 +5803,7 @@ test('拆出的非拖拽通路:tab 上的按钮可点、Enter 即把该文件拆
   await expect(page.locator(FILE_TAB), '条上不再有它').toHaveCount(0)
   await expect(page.locator('.workspace-live')).toHaveText(/拆出.*README\.md/)
   // 焦点交给新窗体的标题栏(键盘操作者不丢位置)。
-  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"] .file-panel__meta`)).toBeFocused()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"] .dl-window__meta`)).toBeFocused()
 })
 
 test('吸附:悬浮窗体拖到顶部 tab 条上 → 整条高亮 + 落点提示(不遮挡命中区);移出即消失;松手停靠回条上', async ({ page }) => {
@@ -5812,7 +5814,7 @@ test('吸附:悬浮窗体拖到顶部 tab 条上 → 整条高亮 + 落点提示
   const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
   await expect(floating).toHaveCount(1)
 
-  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  const headerBox = await floating.locator('.dl-window__meta').boundingBox()
   const headingBox = await page.locator('.conversation-heading').boundingBox()
   expect(headerBox, '标题栏有几何盒').not.toBeNull()
   expect(headingBox, '顶部条有几何盒').not.toBeNull()
@@ -5880,7 +5882,7 @@ test('Escape 取消:拖出途中按 Esc 撤销拆出;悬浮窗体拖到条上按
   const floating = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
   await expect(floating, '停靠 → 悬浮').toHaveCount(1)
   const before = await panelRectOf(page, README)
-  const headerBox = await floating.locator('.file-panel__meta').boundingBox()
+  const headerBox = await floating.locator('.dl-window__meta').boundingBox()
   const headingBox = await page.locator('.conversation-heading').boundingBox()
   expect(headerBox, '标题栏有几何盒').not.toBeNull()
   expect(headingBox, '顶部条有几何盒').not.toBeNull()
@@ -5985,7 +5987,7 @@ test('对话窗体②③:向下拖对话 tab → 悬浮对话窗体(含着它自
   await expect(page.locator(TAB), '条上仍没有它').toHaveCount(SESSIONS_IN_DEFAULT_PROJECT - 1)
 
   // 抓住悬浮对话窗的标题栏拖到顶部条上松手 → 吸附停靠、占回一个 tab。
-  const headerBox = await chatPanel.locator('.chat-panel__meta').boundingBox()
+  const headerBox = await chatPanel.locator('.dl-window__meta').boundingBox()
   const headingBox = await page.locator('.conversation-heading').boundingBox()
   expect(headerBox, '标题栏有几何盒').not.toBeNull()
   expect(headingBox, '顶部条有几何盒').not.toBeNull()
@@ -6066,7 +6068,214 @@ test('对话窗体⑥:对话 tab 上的「拆出」钮可点、Enter 即把该�
   await expect(page.locator(TAB, { hasText: title }), '条上不再有它').toHaveCount(0)
   await expect(page.locator('.workspace-live')).toContainText('拆出')
   // 焦点交给新窗体的标题栏(键盘操作者不丢位置)。
-  await expect(page.locator(`${CHAT_PANEL}[data-mode="floating"] .chat-panel__meta`)).toBeFocused()
+  await expect(page.locator(`${CHAT_PANEL}[data-mode="floating"] .dl-window__meta`)).toBeFocused()
+})
+
+// 对话窗的最小尺寸与文件窗**不同**(输入坞需要高度),故不能共用文件窗的 200 那一档。
+const CHAT_PANEL_MIN_H = 320
+
+test('对话窗体⑦:悬浮对话窗与文件窗同一套缩放手柄 —— 四边可聚焦分隔条 / 四角 44×44 / SE 可见抓手,指针与键盘都能调尺寸', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 用「拆出」钮把一段对话拆成悬浮窗(非拖拽通路,落点确定)。
+  // 该钮移出了 Tab 序,故用程序化聚焦 + Enter(与对话窗体⑥ 同一条路径)。
+  const slot = page.locator('.tab-slot').first()
+  const pop = slot.locator(CHAT_TAB_POP)
+  await pop.focus()
+  await page.keyboard.press('Enter')
+  const chatPanel = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
+  await expect(chatPanel, '拆出为悬浮对话窗').toHaveCount(1)
+
+  const rectOf = (): Promise<Rect> =>
+    chatPanel.evaluate((element) => {
+      const b = element.getBoundingClientRect()
+      return { x: b.x, y: b.y, width: b.width, height: b.height }
+    })
+
+  // ① 8 枚手柄齐备:四边(可聚焦分隔条)+ 四角(44×44 指针目标)。
+  await expect(chatPanel.locator('.dl-window__resize'), '四边 + 四角共 8 枚').toHaveCount(8)
+  for (const edge of ['e', 'w', 'n', 's'] as const) {
+    await expect(chatPanel.locator(`.dl-window__resize--${edge}`), `${edge} 边在`).toHaveCount(1)
+  }
+  const corners = await chatPanel.locator('.dl-window__resize--corner').evaluateAll((elements) => elements.map((el) => {
+    const rect = el.getBoundingClientRect()
+    return { w: rect.width, h: rect.height }
+  }))
+  console.log(`[chat resize] 四角 ${JSON.stringify(corners)}`)
+  expect(corners.length, '四角齐备').toBe(4)
+  for (const corner of corners) {
+    expect(corner.w, '角手柄宽 ≥44').toBeGreaterThanOrEqual(43.5)
+    expect(corner.h, '角手柄高 ≥44').toBeGreaterThanOrEqual(43.5)
+  }
+  // 四边是放在窗体**外**的 8px 隐形命中区(与文件窗同款)。
+  const edgeBox = await chatPanel.locator('.dl-window__resize--e').boundingBox()
+  expect(edgeBox?.width ?? 0, '边条宽 ≈8').toBeLessThanOrEqual(9)
+
+  // ② 右下角(SE)有**可见的点阵抓手**,其余三角完全透明 —— 两个窗体长得一样。
+  await expect(chatPanel.locator('.dl-window__resize-grip'), '只有一枚可见抓手').toHaveCount(1)
+  await expect(chatPanel.locator('.dl-window__resize--se .dl-window__resize-grip'), '抓手挂在 SE 角上').toHaveCount(1)
+  await expect(chatPanel.locator('.dl-window__resize-grip'), '抓手纯装饰').toHaveAttribute('aria-hidden', 'true')
+  const gripPaint = await chatPanel.locator('.dl-window__resize-grip').evaluate((el) => {
+    const style = getComputedStyle(el)
+    return { image: style.backgroundImage, color: style.color, pointerEvents: style.pointerEvents }
+  })
+  console.log(`[chat resize] SE 抓手 ${JSON.stringify(gripPaint)}`)
+  expect(gripPaint.image, '与标题栏抓手同一套点阵画法').toContain('radial-gradient')
+  expect(gripPaint.pointerEvents, '抓手本身不吃指针(命中区是角手柄)').toBe('none')
+  // 其余三角没有抓手(完全透明)。
+  for (const corner of ['ne', 'nw', 'sw'] as const) {
+    await expect(chatPanel.locator(`.dl-window__resize--${corner} .dl-window__resize-grip`), `${corner} 角无抓手`).toHaveCount(0)
+  }
+
+  // ③ 分隔条的 ARIA(APG Window Splitter):role / 轴向 / 边界 / aria-controls 指向**对话**内容区。
+  const east = chatPanel.locator('.dl-window__resize--e')
+  await expect(east).toHaveAttribute('role', 'separator')
+  await expect(east).toHaveAttribute('aria-orientation', 'vertical')
+  await expect(east).toHaveAttribute('aria-controls', 'chat-panel-body')
+  await expect(east).toHaveAttribute('aria-valuemin', '320')
+  const south = chatPanel.locator('.dl-window__resize--s')
+  await expect(south).toHaveAttribute('role', 'separator')
+  await expect(south).toHaveAttribute('aria-orientation', 'horizontal')
+  // 最小高是**对话窗自己的 320**(不是文件窗的 200)—— 按窗体配置传入,不写死在共用层。
+  await expect(south).toHaveAttribute('aria-valuemin', String(CHAT_PANEL_MIN_H))
+  const nowBefore = Number(await east.getAttribute('aria-valuenow'))
+  expect(Math.abs(nowBefore - (await rectOf()).width), 'aria-valuenow = 当前宽').toBeLessThanOrEqual(1)
+
+  // ④ 指针:拖 SE 角改尺寸(右下角那枚可见抓手所在的角)。
+  const start = await rectOf()
+  const se = await chatPanel.locator('.dl-window__resize--se').boundingBox()
+  expect(se, 'SE 角有几何盒').not.toBeNull()
+  if (se === null) return
+  await dragFromTo(page, se.x + se.width / 2, se.y + se.height / 2, 120, 60)
+  const bigger = await rectOf()
+  console.log(`[chat resize] SE 拖 +120,+60 → ${JSON.stringify(bigger)}`)
+  expect(Math.abs(bigger.width - (start.width + 120)), 'SE 拖:宽 +120').toBeLessThanOrEqual(1)
+  expect(Math.abs(bigger.height - (start.height + 60)), 'SE 拖:高 +60').toBeLessThanOrEqual(1)
+
+  // ⑤ 指针:往左上拖到底 → 夹在 **320×320**(对话窗自己的下限)。
+  const se2 = await chatPanel.locator('.dl-window__resize--se').boundingBox()
+  expect(se2).not.toBeNull()
+  if (se2 === null) return
+  await dragFromTo(page, se2.x + se2.width / 2, se2.y + se2.height / 2, -3000, -3000)
+  // 把指针带回视口内并**显式再抬一次**:出界拖拽的 pointerup 可能送不到页面,
+  // 指针会一直处于按下态,下一次拖拽就再也收不到 move(webkit 实测)。
+  await page.mouse.move(640, 400)
+  await page.mouse.up()
+  await expect.poll(async () => {
+    const rect = await rectOf()
+    return `${Math.round(rect.width)}x${Math.round(rect.height)}`
+  }, { message: '拖到最小夹在 320×320' }).toBe(`320x${CHAT_PANEL_MIN_H}`)
+  console.log(`[chat resize] 拖到最小 → ${JSON.stringify(await rectOf())}`)
+
+  // ⑥ 键盘(WCAG 2.5.7 的非拖动通路):方向键 ±16、Shift ±64、Home / End 到最小 / 最大。
+  // 起点是刚才夹住的 320,故方向键那两步的结果是可预期的 320 + 16 + 64 = 400。
+  await east.focus()
+  await expect(east).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Shift+ArrowRight')
+  await expect.poll(async () => Math.round(Number(await east.getAttribute('aria-valuenow'))), { message: '方向键 16 + Shift 64 → 400' }).toBe(400)
+  await page.keyboard.press('Home')
+  await expect.poll(async () => Math.round(Number(await east.getAttribute('aria-valuenow'))), { message: 'Home 到最小宽' }).toBe(320)
+  await page.keyboard.press('End')
+  await expect.poll(async () => Math.round(Number(await east.getAttribute('aria-valuenow'))), { message: 'End 到最大宽' }).toBe(Math.round(1280 - 2 * PANEL_MARGIN))
+  // 键盘也是真的改了渲染尺寸(不只是 ARIA 变了)。
+  await expect.poll(async () => Math.round((await rectOf()).width), { message: '渲染宽跟着键盘走' }).toBe(Math.round(1280 - 2 * PANEL_MARGIN))
+  // 高度那条分隔条同样可键盘调整(Home → 对话窗的 320 下限)。
+  await south.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(async () => Math.round(Number(await south.getAttribute('aria-valuenow'))), { message: 'S:Home 到最小高' }).toBe(CHAT_PANEL_MIN_H)
+})
+
+// 标题栏控件的**命中区守卫**:窗宽收到允许的最小档时,标题栏的控件行会顶到右侧那条
+// 44px 的预留里 —— 若溢出,点击会被右下角(NE)的 44×44 角手柄接走,按钮「点了没反应」。
+//
+// 依据:`protodesign-baseline` ⑧ 的反模式**「假交互」**(按钮不可点),它的可机械判定形式就是
+//   「按钮矩形与角手柄的命中区相交 ⇒ elementFromPoint(按钮中心) 返回的不是它自己」。
+// 这里同时断言两条:① 命中点归自己(指针对);② 矩形与任何角手柄不相交(几何因)。
+// 触发工况:窗宽 = 该窗体允许的最小档(文件 320、对话 320);最严的是**视口 ≥1024**(侧向
+// gutter 40,内容盒最窄 = 320 − 40 − 44 = 236),≤1023(gutter 16)同样要过,故两档各跑一遍。
+// 前提:被审的窗体此刻必须**在层序最上**(它自己接指针)——故调用方一次只留一个悬浮窗。
+async function auditHeaderHitTargets(page: Page, panel: Locator, minWidth: number, condition: string): Promise<void> {
+  await panel.locator('.dl-window__resize--e').focus()
+  await page.keyboard.press('Home')
+  // 几何写入是同步的,但**容器查询**要等一次样式重算才跟上 —— 落定前取样会读到「窄档规则尚未
+  // 生效」的中间态(实测同一档差 4px)。等一拍再量,断言与日志才是确定的。
+  await page.waitForTimeout(150)
+  await expect.poll(async () => Math.round((await panel.boundingBox())?.width ?? 0), { message: `${condition}: 已收到最小窗宽` }).toBe(minWidth)
+
+  const audit = await panel.evaluate((root) => {
+    const box = root.getBoundingClientRect()
+    const corners = [...root.querySelectorAll('.dl-window__resize--corner')].map((el) => el.getBoundingClientRect())
+    return [...root.querySelectorAll('.dl-window__meta button')]
+      .filter((el) => el.getBoundingClientRect().width > 0)
+      .map((el) => {
+        const rect = el.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+        const owner = hit === null ? null : hit.closest('button')
+        return {
+          cls: el.className,
+          localRight: Number((rect.right - box.left).toFixed(1)),
+          self: owner === el,
+          hitBy: owner === el ? 'self' : String((owner ?? hit)?.className ?? 'null'),
+          overlapsCorner: corners.some((corner) => rect.right > corner.left && rect.left < corner.right && rect.bottom > corner.top && rect.top < corner.bottom),
+        }
+      })
+  })
+  console.log(`[header hit] ${condition} → ${JSON.stringify(audit)}`)
+  expect(audit.length, `${condition}: 标题栏里应有可见控件`).toBeGreaterThan(0)
+  for (const item of audit) {
+    expect(item.self, `${condition}: 「${item.cls}」的命中点没被别人接走(被 ${item.hitBy} 盖住)`).toBe(true)
+    expect(item.overlapsCorner, `${condition}: 「${item.cls}」的矩形不与任何角手柄的命中区相交`).toBe(false)
+  }
+  // 结构性判据:整行落在内容盒右缘之内(= 窗宽 − 44 的 NE 预留),这条比逐控件更早暴露溢出。
+  for (const item of audit) expect(item.localRight, `${condition}: 「${item.cls}」右缘不侵入 NE 预留`).toBeLessThanOrEqual(minWidth - 44 + 0.5)
+}
+
+test('标题栏在最小窗宽下仍可点:文件窗与对话窗的每一枚控件都不被角手柄的命中区盖住(反模式「假交互」的机械判据)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // ---- 文件窗:工具行最宽(视图分段 + 换行 + 复位 + 停靠 + 关闭),最容易顶进 NE 预留 ----
+  await clickFileRow(page, README)
+  const filePanel = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  await expect(filePanel).toHaveCount(1)
+  for (const width of [1280, 768] as const) {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await auditHeaderHitTargets(page, filePanel, PANEL_MIN_W, `文件窗 @${width}(gutter ${width >= 1024 ? 40 : 16})`)
+  }
+  // 不只是命中测试对:最小窗宽下**真的点一次关闭钮**,窗体消失(Playwright 的 click 自带
+  // 「命中点必须是目标元素」的可操作判定,故这一步同时是端到端的证明)。
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await filePanel.locator('.dl-window__resize--e').focus()
+  await page.keyboard.press('Home')
+  await expect.poll(async () => Math.round((await filePanel.boundingBox())?.width ?? 0), { message: '文件窗已收到最小宽' }).toBe(PANEL_MIN_W)
+
+  // 收窄**不删功能**:最窄档把「自动换行」的可见文字换成图标,但可访问名、aria-pressed 与
+  // 可操作性都不变(否则收窄就变成了静默砍功能)。
+  const wrapToggle = filePanel.locator('.file-panel__toggle')
+  await expect(wrapToggle.locator('.file-panel__toggle-label'), '最窄档隐去可见文字').toBeHidden()
+  await expect(wrapToggle.locator('.file-panel__toggle-icon'), '同一枚钮换成图标').toBeVisible()
+  await expect(wrapToggle, '隐去文字后仍有可访问名').toHaveAttribute('aria-label', '自动换行')
+  await expect(wrapToggle).toHaveAttribute('aria-pressed', 'false')
+  await wrapToggle.click()
+  await expect(wrapToggle, '最窄档仍可操作,状态语义不变').toHaveAttribute('aria-pressed', 'true')
+
+  await filePanel.locator('.file-panel__close').click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`), '最小窗宽下关闭钮真的能用').toHaveCount(0)
+
+  // ---- 对话窗:只有两枚图标钮,预期本来就过 —— 用同一条断言确认,不靠眼看 ----
+  const slot = page.locator('.tab-slot').first()
+  await slot.locator(CHAT_TAB_POP).focus()
+  await page.keyboard.press('Enter')
+  const chatPanel = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
+  await expect(chatPanel, '拆出为悬浮对话窗').toHaveCount(1)
+  for (const width of [1280, 768] as const) {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await auditHeaderHitTargets(page, chatPanel, PANEL_MIN_W, `对话窗 @${width}(gutter ${width >= 1024 ? 40 : 16})`)
+  }
 })
 
 // 输入坞的焦点环:全局 :focus-visible 给的是**外扩** 3px 的环,而输入框住在

@@ -266,6 +266,16 @@ export const workspace = {
     dock: 'Dock back onto the tab strip',
     dockHint: 'Release here to dock this conversation back onto the tab strip',
   },
+  // Window layer (shared by **every** floating window): accessible names for the resize handles
+  // (APG Window Splitter) plus the key hint. The wording is deliberately neutral ("window", not
+  // "panel") — file and conversation windows share the same handles.
+  windowFrame: {
+    resizeRight: 'Resize window width (right edge)',
+    resizeLeft: 'Resize window width (left edge)',
+    resizeBottom: 'Resize window height (bottom edge)',
+    resizeTop: 'Resize window height (top edge)',
+    resizeHint: 'Arrow keys to resize · Shift for a large step · Home/End for min/max',
+  },
   // The file panel shows the whole file with change markers by default (not just diff fragments),
   // and can switch to unified / side-by-side diff. Line markers use shapes, not colour alone
   // (added +, removed −, modified ~); word-level highlight marks what actually changed.
@@ -295,12 +305,6 @@ export const workspace = {
     // Placement-change announcements (role="status").
     dockedAnnounce: '{name} docked into the content area',
     floatedAnnounce: '{name} floated back as a separate window',
-    // Resize handles (APG Window Splitter): accessible names for the four edges plus the key hint.
-    resizeRight: 'Resize panel width (right edge)',
-    resizeLeft: 'Resize panel width (left edge)',
-    resizeBottom: 'Resize panel height (bottom edge)',
-    resizeTop: 'Resize panel height (top edge)',
-    resizeHint: 'Arrow keys to resize · Shift for a large step · Home/End for min/max',
     // Column headers of the side-by-side diff (left = before, right = after).
     oldLabel: 'Before',
     newLabel: 'After',

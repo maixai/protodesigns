@@ -210,7 +210,7 @@ async function openFloatingFile(page: Page, name: string): Promise<void> {
 // 按住悬浮窗体的**标题栏**、分多步拖到目标点(松手由调用方决定)。落在标题栏的识别区(非按钮)
 // 上,否则会被当成点按钮而不启动拖动。
 async function holdDragFloatingWindow(page: Page, name: string, toX: number, toY: number): Promise<void> {
-  const header = await page.locator(`.file-panel[data-mode="floating"][data-file-path="${name}"] .file-panel__meta`).boundingBox()
+  const header = await page.locator(`.file-panel[data-mode="floating"][data-file-path="${name}"] .dl-window__meta`).boundingBox()
   expect(header, '悬浮窗体标题栏有几何盒').not.toBeNull()
   if (header === null) return
   await page.mouse.move(header.x + 120, header.y + header.height / 2)
@@ -396,7 +396,7 @@ test('拆出钮已移出 Tab 序;快捷键 Ctrl/Cmd+Shift+M 即把聚焦的 tab 
   await expect(page.locator('.workspace-live')).toHaveText(/拆出.*README\.md/)
   // 拆出后焦点会（在下一帧）交给新窗体的标题栏。先等它落定再继续：否则那一次延迟聚焦会在
   // 满载时抢走下面刚放到对话 tab 上的焦点，快捷键就落到别处去了（不是靠等待掩盖，是等状态落定）。
-  await expect(page.locator('.file-panel[data-mode="floating"] .file-panel__meta')).toBeFocused()
+  await expect(page.locator('.file-panel[data-mode="floating"] .dl-window__meta')).toBeFocused()
 
   // 对话 tab 上也一样(同一个快捷键、同一条通路)。
   await expect(page.locator('.tab-slot')).not.toHaveCount(0)

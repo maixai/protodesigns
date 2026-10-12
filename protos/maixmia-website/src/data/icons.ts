@@ -164,6 +164,12 @@ export const ICONS = {
     paths: ['M12 5v14', 'M6 13l6 6 6-6'],
     circles: [],
   },
+  // 自动换行:两行文字,第二行向右绕回来并带一个左向箭头(业界通行的 wrap-text 几何)。
+  // 只在文件面板的**最窄容器档**用它替代可见文字,故它不经 toIconName(那条路走的是契约里的图标字符串)。
+  wrap: {
+    paths: ['M4 6h16', 'M4 11h12a3.5 3.5 0 0 1 0 7h-3', 'M16 15l-3 3 3 3', 'M4 18h4'],
+    circles: [],
+  },
 } as const satisfies Record<string, IconShape>
 
 export type IconName = keyof typeof ICONS

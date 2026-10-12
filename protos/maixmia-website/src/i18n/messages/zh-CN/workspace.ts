@@ -246,6 +246,16 @@ export const workspace = {
     dock: '停靠回标签栏',
     dockHint: '在此处松手可以把这段对话停靠回这个 Tab 位置',
   },
+  // 窗体层(**所有**悬浮窗体共用):缩放手柄(APG Window Splitter)的可访问名与键盘提示。
+  // 措辞刻意中性(「窗口」而非「面板」)—— 文件窗与对话窗共用同一套手柄,可访问名不能写成
+  // 文件面板专属的说法。
+  windowFrame: {
+    resizeRight: '调整窗口宽度(右缘)',
+    resizeLeft: '调整窗口宽度(左缘)',
+    resizeBottom: '调整窗口高度(下缘)',
+    resizeTop: '调整窗口高度(上缘)',
+    resizeHint: '方向键调整 · Shift 大步长 · Home/End 到最小/最大',
+  },
   // 文件面板:默认呈现**整个文件 + 变更标记**(不是只看 diff 片段),可切到统一 / 并排 diff。
   // 行级标记用形状而非仅颜色区分(新增 + / 删除 − / 修改 ~),词级高亮标出真正改动的字词。
   filePanel: {
@@ -272,12 +282,6 @@ export const workspace = {
     // 状态切换的播报文案(role="status")。
     dockedAnnounce: '{name} 已停靠到内容区',
     floatedAnnounce: '{name} 已还原为悬浮窗口',
-    // 缩放手柄(APG Window Splitter):四条边的可访问名 + 键盘提示。
-    resizeRight: '调整面板宽度(右缘)',
-    resizeLeft: '调整面板宽度(左缘)',
-    resizeBottom: '调整面板高度(下缘)',
-    resizeTop: '调整面板高度(上缘)',
-    resizeHint: '方向键调整 · Shift 大步长 · Home/End 到最小/最大',
     // 并排 diff 的两列标题(左 = 改动前,右 = 改动后)。
     oldLabel: '改动前',
     newLabel: '改动后',

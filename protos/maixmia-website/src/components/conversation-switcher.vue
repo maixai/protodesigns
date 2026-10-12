@@ -1038,6 +1038,9 @@ onBeforeUnmount(() => {
             <div v-if="sessionsStatus === 'loading'" class="conversation-loading" :aria-label="t.workspace.loading"><NSkeleton text :repeat="3" :animated="false" /></div>
             <p v-else-if="sessionsStatus === 'error'" class="conversation-hint">{{ t.workspace.sessionsError }}</p>
             <p v-else-if="sessionsStatus === 'empty'" class="conversation-hint">{{ t.workspace.sessionsEmpty }}</p>
+            <!-- 会话都在显示中时,列表会被过滤空(见 excludedSessionIds)—— 那是正常态,给一句说明,
+                 而不是留一片空白。它与 sessionsEmpty 不是一回事:那个是「这个项目还没有对话」。 -->
+            <p v-else-if="menuSessions.length === 0" class="conversation-hint">{{ t.workspace.sessionsAllDisplayed }}</p>
             <template v-else>
               <section v-if="awaitingSessions.length > 0" class="conversation-group">
                 <h2 class="conversation-group__title">{{ groupTitle(t.workspace.awaitingGroup, awaitingSessions.length) }}</h2>
@@ -1068,7 +1071,7 @@ onBeforeUnmount(() => {
                 >
                   <span class="session-title">{{ session.title }}</span>
                   <span v-if="session.preview" class="session-preview">{{ session.preview }}</span>
-                  <span class="session-meta"><time :datetime="session.updatedAt">{{ formatTime(session.updatedAt) }}</time><span v-if="session.id === activeId" class="session-current">{{ t.workspace.current }}</span></span>
+                  <span class="session-meta"><time :datetime="session.updatedAt">{{ formatTime(session.updatedAt) }}</time></span>
                 </button>
               </section>
             </template>
@@ -1666,10 +1669,6 @@ onBeforeUnmount(() => {
   color: var(--dl-text-secondary);
   font-size: var(--dl-font-size-xs);
   font-variant-numeric: tabular-nums;
-}
-
-.session-current {
-  color: var(--dl-accent);
 }
 
 .session-badge {

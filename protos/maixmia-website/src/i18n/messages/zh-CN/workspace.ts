@@ -75,7 +75,6 @@ export const workspace = {
   // 面板里的两个分组:置顶的「等待你」组(等在等你、且你还未打开过)与「本项目」组(其余会话)。
   awaitingGroup: '等待你 · {count}',
   projectGroup: '本项目 · {count}',
-  current: '当前对话',
   you: '你',
   assistant: 'Mia',
   transcript: '对话记录',
@@ -136,6 +135,8 @@ export const workspace = {
   errorBody: '演示连接暂时中断。重试后即可继续这段对话。',
   retry: '重试',
   sessionsEmpty: '这个项目还没有对话',
+  // 全部会话都在显示中(被切换器隐去)时的说明 —— 与 sessionsEmpty 不是一回事。
+  sessionsAllDisplayed: '这个项目的对话都已在显示中',
   sessionsError: '对话列表加载失败',
   sendError: '消息暂未发送，请重试。',
   invalidSession: '找不到这段对话',

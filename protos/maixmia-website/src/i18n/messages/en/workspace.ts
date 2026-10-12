@@ -82,7 +82,6 @@ export const workspace = {
   // and the "this project" group (everything else).
   awaitingGroup: 'Waiting on you · {count}',
   projectGroup: 'This project · {count}',
-  current: 'Current conversation',
   you: 'You',
   assistant: 'Mia',
   transcript: 'Conversation',
@@ -139,6 +138,9 @@ export const workspace = {
   errorBody: 'The demo connection was interrupted. Retry to continue this conversation.',
   retry: 'Retry',
   sessionsEmpty: 'This project has no conversations yet',
+  // Shown when every conversation is already on screen (and therefore hidden from this list) —
+  // a different situation from sessionsEmpty.
+  sessionsAllDisplayed: 'Every conversation in this project is already on screen',
   sessionsError: 'Unable to load conversations',
   sendError: 'Your message was not sent. Please try again.',
   invalidSession: 'Conversation not found',

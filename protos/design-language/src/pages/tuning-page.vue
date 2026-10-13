@@ -8,6 +8,7 @@ import AsyncStatesSection from '../components/sections/async-states-section.vue'
 import ColorRampSection from '../components/sections/color-ramp-section.vue'
 import ComponentSamplesSection from '../components/sections/component-samples-section.vue'
 import DoDontSection from '../components/sections/do-dont-section.vue'
+import IdentityColorSection from '../components/sections/identity-color-section.vue'
 import InteractionStatesSection from '../components/sections/interaction-states-section.vue'
 import MaterialsSection from '../components/sections/materials-section.vue'
 import MotionSection from '../components/sections/motion-section.vue'
@@ -39,6 +40,7 @@ const direction = CURRENT_DIRECTION
           <type-tuning-section />
           <color-ramp-section />
           <semantic-color-section />
+          <identity-color-section :direction-id="direction.id" />
           <role-token-section />
           <typography-section />
           <spacing-section />

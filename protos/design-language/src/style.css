@@ -69,6 +69,10 @@
   --dl-accent-subtle: var(--dl-accent-50);
   --dl-focus-ring: var(--dl-accent-600);
 
+  /* 标识色:当前生效的那一号。默认取 1 号,由 .dl-identity-N 绑定类改写。
+     组件只引用 --dl-identity,不碰 --dl-identity-N —— "选第几号色"留在 token 层。 */
+  --dl-identity: var(--dl-identity-1);
+
   --dl-highlight: var(--dl-highlight-600);
   --dl-highlight-subtle: var(--dl-highlight-50);
 
@@ -147,6 +151,24 @@
   --dl-accent-700: #245a50;
   --dl-accent-800: #1c453e;
   --dl-accent-900: #14312c;
+
+  /* --- 标识色 identity ---
+     用途:多项目并行时的归属标记(哪个 tab / 哪行侧栏 / 哪个悬浮窗属于哪个项目)。
+     是一组色相,不是一组语义色 —— 编号本身不承载含义,由使用方分配。
+     三条取值规则(依据见 design-language.md ④「标识色」):
+       ① 8 个色相在环上均布(相邻 ≥36°),整体避开强调色色相 ±25°,不会被读成"强调色";
+       ② 彩度统一压到强调色的约 3/4(Lab C*:浅色 ≤18 对强调色 24;深色 ≤17 对 22),
+          HSL 饱和度不是判据 —— 深蓝要拉到 41% 才够 C*=17,只看 HSL 会误判;
+       ③ 明度成阶梯(浅色 L* 34→55,深色 45→71,跨度 ≥20),去色后仍分得开。
+     对比度按**图形**阈值 3:1(WCAG 1.4.11)断言,不是文字的 4.5:1。 */
+  --dl-identity-1: #2c5568;
+  --dl-identity-2: #535572;
+  --dl-identity-3: #6a5b77;
+  --dl-identity-4: #7c5f76;
+  --dl-identity-5: #8d646b;
+  --dl-identity-6: #8b725a;
+  --dl-identity-7: #7d8263;
+  --dl-identity-8: #75896f;
 
   --dl-highlight-50: #fbf4e8;
   --dl-highlight-600: #8a6420;
@@ -231,6 +253,11 @@
   --dl-icon-lg: 24px;
   --dl-icon-stroke: 1.5px;
 
+  /* 标识色标记尺寸:两种标准形态。色条贴容器左缘、通高;色点用于列表行。
+     收在一处,避免每个组件各写一个 3px。 */
+  --dl-identity-bar-width: 3px;
+  --dl-identity-dot-size: 10px;
+
   /* 层级阶梯:浮层层序集中定义,禁止就地写 9999 —— 那样无法判断谁压谁 */
   --dl-z-base: 0;
   --dl-z-sticky: 100;
@@ -262,7 +289,10 @@
   --dl-page-active: rgba(236, 231, 223, 0.14);
 }
 
-:root[data-theme='dark'] [data-dl-dir='celadon'],
+/* 深色下的标识色:同样遵循"反转 + 提亮" —— 明度整体上移,彩度保持不变(仍是强调色的约 3/4)。
+   :not([data-dl-theme='light']) 让"局部强制浅色"能盖过全局深色,与局部强制深色对称;
+   不设该属性时行为与改动前完全一致。 */
+:root[data-theme='dark'] [data-dl-dir='celadon']:not([data-dl-theme='light']),
 [data-dl-theme='dark'][data-dl-dir='celadon'] {
   --dl-neutral-0: #1c1916;
   --dl-neutral-50: #14110e;
@@ -298,6 +328,16 @@
   --dl-info-50: #1c242b;
   --dl-info-600: #8fb0c9;
 
+  /* 标识色:深色下提亮(浅色 L* 34→55 提到 45→71),彩度不变。 */
+  --dl-identity-1: #4b7081;
+  --dl-identity-2: #70728e;
+  --dl-identity-3: #887a93;
+  --dl-identity-4: #9c8096;
+  --dl-identity-5: #b18a8f;
+  --dl-identity-6: #ae9880;
+  --dl-identity-7: #a5a88b;
+  --dl-identity-8: #a0b39a;
+
   --dl-text-on-accent: #10201c;
 
   /* 深色下阴影不承担层级,进一步减弱 */
@@ -305,6 +345,22 @@
   --dl-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
   --dl-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
+
+/* ===========================================================================
+ * 标识色绑定类:把 ramp 阶接到语义角色 --dl-identity 上。
+ *
+ * 组件的写法固定为两步 —— 外层给 class="dl-identity-N" 选号,内部样式只引用
+ * var(--dl-identity)。这样"选第几号色"这件事留在 token 层:换色号只改一个 class,
+ * 组件里没有一处 ramp 引用,与 §③ 的三层架构一致。
+ * ========================================================================= */
+.dl-identity-1 { --dl-identity: var(--dl-identity-1); }
+.dl-identity-2 { --dl-identity: var(--dl-identity-2); }
+.dl-identity-3 { --dl-identity: var(--dl-identity-3); }
+.dl-identity-4 { --dl-identity: var(--dl-identity-4); }
+.dl-identity-5 { --dl-identity: var(--dl-identity-5); }
+.dl-identity-6 { --dl-identity: var(--dl-identity-6); }
+.dl-identity-7 { --dl-identity: var(--dl-identity-7); }
+.dl-identity-8 { --dl-identity: var(--dl-identity-8); }
 
 /* ===========================================================================
  * 展示区块的通用外壳:十余个 section 组件复用同一套排版。
@@ -426,6 +482,17 @@ code {
 .dl-anti-hardcontrast {
   color: #000000;
   background: #ffffff;
+}
+
+/* 标识色填充整块区域:标识色只作容器边缘的细图形,填充会让它与强调色争夺"可操作"的语义 */
+.dl-anti-identity-fill {
+  color: var(--dl-text-on-accent);
+  background: var(--dl-identity);
+}
+
+/* 标识色当文字色:低彩度色相当正文,可读性与语义双失(文字该用 --dl-text-*) */
+.dl-anti-identity-text {
+  color: var(--dl-identity);
 }
 
 /* ---------------------------------------------------------------------------

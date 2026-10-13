@@ -174,6 +174,64 @@ for (const colorScheme of ['light', 'dark'] as const) {
   })
 }
 
+// 标识色对比度:标识色只作**图形**(色条 / 色点 / 描边),不承担正文,
+// 因此阈值取 WCAG 1.4.11 的图形标准 3:1,而不是文字的 4.5:1。
+// 深浅两套都要断言 —— 深色 block 漏配标识色时,图形会静默失去轮廓而测试照绿。
+// 与上面的文字断言同一套写法(逐对取 CSS 变量、在同一底色上核算)。
+async function collectIdentityContrast(page: Page): Promise<{ name: string; ratio: number }[]> {
+  return page.evaluate(() => {
+    const hexToRgb = (hex: string): [number, number, number] => {
+      const value = hex.replace('#', '').trim()
+      return [
+        Number.parseInt(value.slice(0, 2), 16),
+        Number.parseInt(value.slice(2, 4), 16),
+        Number.parseInt(value.slice(4, 6), 16),
+      ]
+    }
+    const luminance = (rgb: readonly [number, number, number]): number => {
+      const channel = (raw: number): number => {
+        const scaled = raw / 255
+        return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2])
+    }
+    const contrast = (foreground: string, background: string): number => {
+      const a = luminance(hexToRgb(foreground))
+      const b = luminance(hexToRgb(background))
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+    }
+
+    const STEPS = ['1', '2', '3', '4', '5', '6', '7', '8'] as const
+    const pairs: { name: string; fg: string; bg: string }[] = []
+    for (const element of Array.from(document.querySelectorAll('[data-dl-dir]'))) {
+      const style = getComputedStyle(element)
+      const surface = style.getPropertyValue('--dl-bg-base').trim()
+      const card = style.getPropertyValue('--dl-bg-elevated').trim()
+      for (const step of STEPS) {
+        // 直接在角色层上取 ramp 值:标识色是 ramp 阶,没有对应的语义角色。
+        const fg = style.getPropertyValue(`--dl-identity-${step}`).trim()
+        if (fg === '') continue
+        pairs.push({ name: `identity-${step} on bg-base`, fg, bg: surface })
+        pairs.push({ name: `identity-${step} on bg-elevated`, fg, bg: card })
+      }
+    }
+    return pairs.map((pair) => ({ ...pair, ratio: contrast(pair.fg, pair.bg) }))
+  })
+}
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`标识色对底色达到 3:1 图形阈值(${colorScheme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme })
+    await page.goto('/')
+    await waitForPage(page)
+
+    const ratios = await collectIdentityContrast(page)
+    expect(ratios.length).toBeGreaterThan(0)
+    const failing = ratios.filter((entry) => entry.ratio < 3)
+    expect(failing.map((entry) => `${entry.name}=${entry.ratio.toFixed(2)}`)).toEqual([])
+  })
+}
+
 // WCAG 1.4.12:行高必须能被调到 1.5× 而不破版。这里验证正文行高本身已不低于 1.5。
 test('正文行高不低于 WCAG 1.4.12 的 1.5 倍', async ({ page }) => {
   await page.goto('/')

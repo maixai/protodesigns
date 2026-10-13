@@ -40,8 +40,15 @@ export default defineConfig({
   // 实测两次捕获之间整页高度在 10757 与 10846 之间摆动(可复现 +89px),而这一页高达约 1 万像素、
   // 一次捕获要几秒 —— 页面里任何在动的元素都会让「连续两张一致」永远不成立。
   // 注意:基线必须与判定用同一组选项生成,否则等于拿另一套渲染结果当期望。
+  //
+  // timeout: 20s —— 实测本机(Linux + headless Chromium)还有第二处同类问题:
+  // **首次 fullPage 截图本身会改变等宽字度量**(捕获后 <code> 的每字宽从 6.0px 变 7.2px,
+  // 多个 .tune__meta 由一行折成两行),整页高度一次性 +89px(12524 → 12613)并从此稳定 ——
+  // 也就是说第 1 张与第 2 张必然不同,收敛要到第 3 张。一次全高捕获约 2.5s,默认 5s 内拍不完三张,
+  // 于是 1280 / 1600 这两档**在 update 模式下也写不出基线**。放宽到 20s 让收敛跑完即可,
+  // 判定标准本身没有放松(仍是"连续两张一致" + 1% 像素差)。
   expect: {
-    toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: 'disabled' },
+    toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: 'disabled', timeout: 20_000 },
   },
   use: {
     baseURL: BASE_URL,

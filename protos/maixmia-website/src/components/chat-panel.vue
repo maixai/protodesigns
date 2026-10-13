@@ -19,10 +19,15 @@ import ChatSessionView from './chat-session-view.vue'
 import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
-  // 该窗体的会话 id(= 窗体 id,windowIdOf 对 chat 取 sessionId)。
+  // 该窗体的**复合 id**(chat://<项目>/<会话>)——用作 DOM 选中钩子,保证同名内容跨项目时唯一。
+  windowId: string
+  // 该窗体的会话 id(= 内容里的 sessionId)。
   sessionId: string
   // 会话标题:标题栏显示它,也是拖拽 / 停靠播报里的 {name}。
   title: string
+  // 归属项目名与它的标识色绑定类名:标题栏直接写「色 + 项目名」,多项目并行时一眼看出出处。
+  projectName: string
+  identityClass: string
   // 该会话的运行态(草稿 / 转录 / 生成 / 遥测 / 待确认 / 粘底 —— 随会话存活,不随容器)。
   runtime: ChatRuntime
   userName: string
@@ -116,12 +121,17 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
     role="dialog"
     :aria-label="t.workspace.chatWindow.label"
     data-mode="floating"
+    :data-window-id="windowId"
     :data-session-id="sessionId"
     :data-focused="isFocused ? 'true' : 'false'"
     @pointerdown="emit('focus')"
   >
-    <!-- 标题栏 = 会话标题 + 工具钮。整块是拖拽手柄(由壳接手势),按钮不算手柄。 -->
+    <!-- 标题栏 = [色 + 项目名] 归属 + 会话标题 + 工具钮。整块是拖拽手柄(由壳接手势),按钮不算手柄。 -->
     <template #header>
+      <span class="chat-panel__attribution" :class="identityClass" :title="projectName">
+        <span class="chat-panel__identity" aria-hidden="true" />
+        <span class="chat-panel__project">{{ projectName }}</span>
+      </span>
       <span class="chat-panel__title" :title="title">{{ title }}</span>
       <div class="chat-panel__tools">
         <!-- 停靠回条上的**原生按钮**:拖拽之外的非拖拽通路(WCAG 2.5.7)。图标纯装饰,语义由 aria-label 承担。 -->
@@ -170,6 +180,33 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
   text-overflow: ellipsis;
   font-size: var(--dl-font-size-sm);
   color: var(--dl-text-primary);
+}
+
+/* 标题栏的归属标识:[色点 + 项目名]。色点走 var(--dl-identity)(由外层 .dl-identity-N 绑定类选号),
+   只作图形、不填整块区域、不作文字色。名字用二级文字色(它是补充信息,标题才是主信息)。 */
+.chat-panel__attribution {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dl-space-1);
+  max-inline-size: 40%;
+}
+
+.chat-panel__identity {
+  flex-shrink: 0;
+  inline-size: var(--dl-identity-dot-size);
+  block-size: var(--dl-identity-dot-size);
+  border-radius: var(--dl-radius-pill);
+  background: var(--dl-identity);
+}
+
+.chat-panel__project {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--dl-font-size-xs);
+  color: var(--dl-text-secondary);
 }
 
 .chat-panel__tools {

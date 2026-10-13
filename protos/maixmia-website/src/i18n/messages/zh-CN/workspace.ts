@@ -31,6 +31,15 @@ export const workspace = {
   projectsError: '项目列表加载失败',
   openProject: '打开项目',
   closeProject: '关闭项目',
+  // 关闭项目的播报:把「已关闭项目 X」与「连带关闭了 N 个窗口」**合成一条**
+  // (announcePlacement 是后写覆盖先写的单通道,分两次调用会丢前一条)。
+  closedProject: '已关闭项目「{name}」· 关闭了 {count} 个窗口',
+  // 新建对话**归属**相关的文案(平权之后没有「当前项目」):
+  //   · newChatProject / newChatProjectHint —— 区域为空且有多个已打开项目时,列出项目让用户选;
+  //   · newChatNeedProject —— 一个项目都没打开时,引导先打开项目。
+  newChatProject: '在哪个项目里新建对话',
+  newChatProjectHint: '当前没有可推断归属的窗口，请选择一个项目。',
+  newChatNeedProject: '请先打开一个项目，再新建对话',
   // 项目行的「⋯」操作菜单的可访问名。(原 expandProject / collapseProject 已随目录行改用
   // 「整行 button + aria-expanded」而下线,不再有「动作词 + 项目名」拼出的可访问名。)
   projectActions: '项目操作',
@@ -72,9 +81,10 @@ export const workspace = {
   // tab 拖拽 / 快捷键重排后的无视觉反馈补充:面向屏幕阅读器的 aria-live 播报。
   // {title} 是会话标题,{index} 是 1 基的目标位次,{total} 是打开集总数。
   tabMoved: '{title} 已移到第 {index} 位,共 {total} 位',
-  // 面板里的两个分组:置顶的「等待你」组(等在等你、且你还未打开过)与「本项目」组(其余会话)。
+  // 面板里的分组:置顶的「等待你」组(在等你、且你还未打开过),以及下方**按项目分组**的组
+  // (平权之后候选列表跨多个项目,每组组头带该项目的标识色点 + 名称,不再是「本项目」)。
   awaitingGroup: '等待你 · {count}',
-  projectGroup: '本项目 · {count}',
+  projectGroup: '{name} · {count}',
   you: '你',
   assistant: 'Mia',
   transcript: '对话记录',
@@ -134,9 +144,9 @@ export const workspace = {
   errorTitle: '暂时无法加载对话',
   errorBody: '演示连接暂时中断。重试后即可继续这段对话。',
   retry: '重试',
-  sessionsEmpty: '这个项目还没有对话',
+  sessionsEmpty: '还没有对话',
   // 全部会话都在显示中(被切换器隐去)时的说明 —— 与 sessionsEmpty 不是一回事。
-  sessionsAllDisplayed: '这个项目的对话都已在显示中',
+  sessionsAllDisplayed: '所有对话都已在显示中',
   sessionsError: '对话列表加载失败',
   sendError: '消息暂未发送，请重试。',
   invalidSession: '找不到这段对话',

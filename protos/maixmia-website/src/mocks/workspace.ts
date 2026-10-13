@@ -140,8 +140,8 @@ export function mockTranscript(sessionId: string): ChatMessage[] {
   return [...initial, ...extra]
 }
 
-// 新建会话的归属规则:归属项目由调用方(侧栏当前项目)决定后传入 —— 项目本身就已挂在某个
-// Agent 上,故 agent 由项目反推,调用方不必重复传、也就没有两处对不上的风险。
+// 新建会话的归属规则:归属项目由调用方(页面按「能推断就推断」的规则定出)决定后传入 ——
+// 项目本身就已挂在某个 Agent 上,故 agent 由项目反推,调用方不必重复传、也就没有两处对不上的风险。
 export function mockCreateSession(projectId: string): ChatSession {
   sequence.session += 1
   const session: ChatSession = { id: `draft-${sequence.session}`, title: '', preview: '', agent: projectAgent(projectId), projectId, updatedAt: '2026-10-08T10:00:00Z', status: 'new' }
@@ -185,6 +185,8 @@ export function mockSaveResponse(sessionId: string, response: ChatMessage): void
 interface ProjectSeed {
   id: string
   name: string
+  // 项目缩写(2–4 字符):tab 标题前缀用它承担归属的**文字通道**(色觉障碍下唯一可用的通道)。
+  mark: string
   path: string
   entries: ProjectEntry[]
 }
@@ -194,6 +196,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
   planning: [
     {
       id: 'weekly-report',
+      mark: 'WR',
       name: 'weekly-report',
       path: '~/work/weekly-report',
       // 五层深树(src → components → layout → header → index.ts),用于演示与断言密集档的
@@ -232,6 +235,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
     },
     {
       id: 'knowledge-base',
+      mark: 'KB',
       name: 'knowledge-base',
       path: '~/work/knowledge-base',
       // 该项目初始没有会话,用于演示对话栏的空态。
@@ -247,6 +251,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
   research: [
     {
       id: 'user-research',
+      mark: 'UR',
       name: 'user-research',
       path: '~/work/user-research',
       entries: [
@@ -260,6 +265,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
     },
     {
       id: 'benchmarks',
+      mark: 'BM',
       name: 'benchmarks',
       path: '~/work/benchmarks',
       entries: [
@@ -274,6 +280,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
   writing: [
     {
       id: 'product-docs',
+      mark: 'PD',
       name: 'product-docs',
       path: '~/work/product-docs',
       // knowledge / quarterly 两个「等待交互」会话的确认请求各受影响一个文件:
@@ -291,6 +298,7 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
     },
     {
       id: 'changelog',
+      mark: 'CL',
       name: 'changelog',
       path: '~/work/changelog',
       entries: [
@@ -334,10 +342,16 @@ export function mockProjects(agentId: AgentId): Project[] {
   return projectStore[agentId].map((project) => ({
     id: project.id,
     name: project.name,
+    mark: project.mark,
     path: project.path,
     entryCount: project.entries.length,
     entries: [],
   }))
+}
+
+// 某个 Agent 当前打开的全部项目 id —— 会话装载按它取「这个 Agent 名下所有已打开项目的会话」。
+export function mockProjectIdsOf(agentId: AgentId): string[] {
+  return projectStore[agentId].map((project) => project.id)
 }
 
 export function mockAgents(): Agent[] {
@@ -351,6 +365,26 @@ export function mockProjectTree(projectId: string): ProjectEntry[] | null {
     if (project) return project.entries.map((entry) => ({ ...entry }))
   }
   return null
+}
+
+// 候选目录的**已知缩写**:已列在候选表里的目录预先给好 2–4 字符的缩写,打开后不再现算,
+// 保证候选与打开后的 tab 前缀一致(与标识色按 path 取号同一思路:候选阶段就定得下来)。
+const PROJECT_MARKS: Record<string, string> = {
+  'weekly-report': 'WR',
+  'knowledge-base': 'KB',
+  'product-docs': 'PD',
+  'api-server': 'AS',
+  'design-tokens': 'DT',
+  notes: 'NT',
+  scratch: 'SC',
+}
+
+// 未知目录名的缩写回退:取各段首字母(最多 3 个),够短且确定。
+function markFor(name: string): string {
+  const known = PROJECT_MARKS[name]
+  if (known !== undefined) return known
+  const letters = name.split(/[^a-zA-Z0-9]+/).filter((part) => part !== '').map((part) => part[0]?.toUpperCase() ?? '')
+  return letters.slice(0, 3).join('') || name.slice(0, 2).toUpperCase()
 }
 
 export function mockProjectCandidates(): ProjectCandidate[] {
@@ -368,9 +402,9 @@ export function mockOpenProject(agentId: AgentId, path: string): Project {
     { id: `${slug}-index`, path: 'src/index.ts', kind: 'file', state: 'none' },
     { id: `${slug}-readme`, path: 'README.md', kind: 'file', state: 'none' },
   ]
-  const project: ProjectSeed = { id: `${slug}-opened-${projectStore[agentId].length}`, name, path, entries }
+  const project: ProjectSeed = { id: `${slug}-opened-${projectStore[agentId].length}`, name, mark: markFor(name), path, entries }
   projectStore[agentId].push(project)
-  return { id: project.id, name: project.name, path: project.path, entryCount: project.entries.length, entries: [] }
+  return { id: project.id, name: project.name, mark: project.mark, path: project.path, entryCount: project.entries.length, entries: [] }
 }
 
 // 关闭项目:按 id 从它所属 Agent 的列表里移除(只动这一个,不牵连其它项目)。
@@ -429,7 +463,7 @@ const confirmationSeeds: Record<(typeof AWAITING_SESSION_IDS)[number], { entryPa
   quarterly: { entryPath: 'release-plan.csv', summaryKey: 'quarterlySummary', detailKey: 'quarterlyDetail' },
 }
 
-// 遥测条最后一项表达**当前项目**(CLI 的 cwd)。项目不存在(未选项目)时回落空串。
+// 遥测条最后一项表达**该会话所属的项目**(CLI 的 cwd)。项目不存在时回落空串。
 // 运行态是否报 waiting 由**当前会话**是否处于 awaiting 决定 —— 会话与项目各管一段:
 // 「正在看的这段对话在等你」才该让输入框上方的状态条说等待确认;别的会话在等你,
 // 由对话切换器的图标 / 菜单表达(两个区域职责分明,不互相冒充)。
@@ -476,15 +510,15 @@ function excerpt(body: string, needle: string): string {
   return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`
 }
 
-// 会话搜索:在**当前项目**范围内同时匹配标题与消息正文,顺序与会话列表一致。
-// 命中理由由判别联合的 reason 表达 —— 正文命中带具体轮次 id(可跳转并高亮),
-// 标题命中没有轮次可跳。两种理由互斥,不用空串等魔法值编码。
-export function mockSearchHits(query: string, projectId: string, demoState: AppRoute['demoState']): ConversationSearchHit[] {
+// 会话搜索:在**当前 Agent 已装载的全部会话**范围内同时匹配标题与消息正文,顺序与会话列表一致。
+// 平权之后没有「当前项目」,搜索不再按单个项目收窄 —— 多项目并行时,用户要找的那段对话
+// 可能在任何已打开的项目里。命中理由由判别联合的 reason 表达 —— 正文命中带具体轮次 id
+// (可跳转并高亮),标题命中没有轮次可跳。两种理由互斥,不用空串等魔法值编码。
+export function mockSearchHits(query: string, demoState: AppRoute['demoState']): ConversationSearchHit[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return []
   const hits: ConversationSearchHit[] = []
   for (const session of mockSessions(demoState)) {
-    if (session.projectId !== projectId) continue
     const message = mockTranscript(session.id).find((item) => item.body.toLowerCase().includes(needle))
     if (message) {
       hits.push({ reason: 'body', sessionId: session.id, title: session.title, snippet: excerpt(message.body, needle), turnId: message.id })

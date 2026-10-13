@@ -34,6 +34,20 @@
   --dl-accent-600: #2e6f63;
   --dl-accent-700: #245a50;
 
+  /* ---- ramp 层:标识色(identity)—— 浅色 ----
+     用途:多项目并行时标记「这段内容属于哪个项目」。编号不承载语义(1…8 只表示第几号),
+     含义由使用方分配(项目 → 色号)。取值依据见 design-language.md ④「标识色」:
+     8 个色相在环上均布(相邻间隔 36–39°),避开强调色 ±25°;整体比强调色闷(过渡更暗)、
+     且只作**图形**(色条 / 圆点 / 描边),不作文字填充 —— 故对比度按图形阈值 ≥3:1 断言。 */
+  --dl-identity-1: #2c5568; /* 蓝   199° */
+  --dl-identity-2: #535572; /* 靛   235° */
+  --dl-identity-3: #6a5b77; /* 紫   274° */
+  --dl-identity-4: #7c5f76; /* 藕   312° */
+  --dl-identity-5: #8d646b; /* 绛   351° */
+  --dl-identity-6: #8b725a; /* 陶    30° */
+  --dl-identity-7: #7d8263; /* 橄榄  68° */
+  --dl-identity-8: #75896f; /* 苔   107° */
+
   /* ---- 结构 token(深浅无关) ---- */
   /* 字体族:不引入任何 webfont,只取 design-language.md 字体栈的系统回退部分,
      保持原型自包含(见 design-language.md 第 ⑤ 节)。 */
@@ -140,6 +154,11 @@
 
   --dl-accent: var(--dl-accent-600);
   --dl-accent-soft: var(--dl-accent-50);
+  /* 标识色的**角色层**:只暴露一个「当前值」,由绑定类(.dl-identity-N)改写。
+     组件只在自绘样式里引用 var(--dl-identity),永不直接碰 ramp 阶(见 design-language ③)。 */
+  --dl-identity: var(--dl-identity-1);
+  --dl-identity-bar-width: 3px;
+  --dl-identity-dot-size: 10px;
 
   /* ---- 浅色差异项(深色作用域会覆盖) ---- */
   /* hover / active 由 --dl-accent 经 color-mix 派生,不新增 ramp 阶:
@@ -193,6 +212,16 @@
   --dl-accent-500: #6fb3a4;
   --dl-accent-600: #8cc7b9;
   --dl-accent-700: #63a79a;
+
+  /* 标识色深色档:同色相、提亮到对深色底仍 ≥3:1(见 design-language ④)。 */
+  --dl-identity-1: #4b7081;
+  --dl-identity-2: #70728e;
+  --dl-identity-3: #887a93;
+  --dl-identity-4: #9c8096;
+  --dl-identity-5: #b18a8f;
+  --dl-identity-6: #ae9880;
+  --dl-identity-7: #a5a88b;
+  --dl-identity-8: #a0b39a;
 
   /* 深色语义修复:.dl-scope 通用映射里 sunken / hover / border-subtle 同取
      neutral-100;浅色下三者恰好同值且语义方向正确,但深色 ramp 反转后
@@ -255,6 +284,23 @@
   --dl-accent-600: #2e6f63;
   --dl-accent-700: #245a50;
 }
+
+/* ==========================================================================
+   标识色绑定类:把 ramp 阶接到角色层上(见 design-language ④)
+   --------------------------------------------------------------------------
+   组件的写法固定为两步 —— 外层选号,内部只引用角色:
+     <span class="dl-identity-3"><span class="mark"></span></span>
+     .mark { background: var(--dl-identity); }
+   于是「选第几号色」留在 token 层,组件里没有一处 ramp 引用。
+   ========================================================================== */
+.dl-identity-1 { --dl-identity: var(--dl-identity-1); }
+.dl-identity-2 { --dl-identity: var(--dl-identity-2); }
+.dl-identity-3 { --dl-identity: var(--dl-identity-3); }
+.dl-identity-4 { --dl-identity: var(--dl-identity-4); }
+.dl-identity-5 { --dl-identity: var(--dl-identity-5); }
+.dl-identity-6 { --dl-identity: var(--dl-identity-6); }
+.dl-identity-7 { --dl-identity: var(--dl-identity-7); }
+.dl-identity-8 { --dl-identity: var(--dl-identity-8); }
 
 /* ==========================================================================
    基础排版(中文排版硬约束见 design-language.md 第 ⑤ 节)

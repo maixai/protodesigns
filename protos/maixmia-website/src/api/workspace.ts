@@ -24,6 +24,7 @@ import {
   mockCreateSession,
   mockOpenProject,
   mockProjectCandidates,
+  mockProjectIdsOf,
   mockProjectTree,
   mockProjects,
   mockSaveResponse,
@@ -36,11 +37,14 @@ import type { Result } from './result'
 
 const { t } = useI18n()
 
-// 项目的会话列表:按 projectId 隔离,只返回归属该项目的会话。
-export async function listSessions(projectId: string): Promise<Result<ChatSession[]>> {
+// 某个 Agent 下的会话列表:返回它**当前已打开的全部项目**里的会话。
+// 平权之后没有「当前项目」,同一个 Agent 的不同项目并行推进,故按 Agent 装载而不是按单个项目 ——
+// 否则别的项目的会话根本不在列表里,会话标题 / 助手名对它们查不到,切换器的按项目分组也无从派生。
+export async function listSessions(agentId: AgentId): Promise<Result<ChatSession[]>> {
   const demoState = currentRoute.value.demoState
   await delay()
-  return { ok: true, value: mockSessions(demoState).filter((session) => session.projectId === projectId) }
+  const openIds = new Set(mockProjectIdsOf(agentId))
+  return { ok: true, value: mockSessions(demoState).filter((session) => openIds.has(session.projectId)) }
 }
 
 export async function getTranscript(sessionId: string): Promise<Result<ChatMessage[]>> {
@@ -66,7 +70,7 @@ export async function sendMessage(sessionId: string, text: string, attachments: 
 }
 
 // 新会话必须归属某个项目;项目本身就挂在某个 Agent 上,故 agent 由项目反推 —— 调用方
-// 只需给当前项目,不存在「归属 Agent 与归属项目对不上」的第二种可能。
+// 只需给出**归属项目**,不存在「归属 Agent 与归属项目对不上」的第二种可能。
 export async function createSession(projectId: string): Promise<Result<ChatSession>> {
   await delay()
   if (!mockProjectTree(projectId)) {
@@ -140,8 +144,8 @@ export async function listAgentSignals(seenSessionIds: readonly string[]): Promi
   return { ok: true, value: mockAgentSignals(demoState, seenSessionIds) }
 }
 
-// 取某个 Agent 在**当前项目**下的运行遥测(状态 / 状态详情键 / 模型 / context 用量 / 时长 /
-// 当前项目名与路径)。「等待确认」由**当前会话**的等待态驱动:该会话在其他项目 / 其他 Agent
+// 取某个 Agent 在**该会话所属项目**下的运行遥测(状态 / 状态详情键 / 模型 / context 用量 / 时长 /
+// 项目名与路径)。「等待确认」由**当前会话**的等待态驱动:该会话在其他项目 / 其他 Agent
 // 下也在等你,但只有它成为当前会话时才让状态条说「等待确认」。演示态只在适配层读取一次并下发给
 // mock —— API 对外签名仍保持与生产一致(不把 demoState 暴露成接口参数),mock 则是纯函数。
 export async function getAgentRuntime(agentId: AgentId, projectId: string, sessionId: string): Promise<Result<AgentRuntime>> {
@@ -162,11 +166,11 @@ export async function getConfirmationRequest(sessionId: string): Promise<Result<
   return { ok: true, value: request }
 }
 
-// 会话搜索:在**当前项目**范围内匹配标题与消息正文,命中正文时给出可跳转的轮次与上下文片段。
-export async function searchConversations(query: string, projectId: string): Promise<Result<ConversationSearchHit[]>> {
+// 会话搜索:在当前 Agent 已装载的全部会话里匹配标题与消息正文,命中正文时给出可跳转的轮次与上下文片段。
+export async function searchConversations(query: string): Promise<Result<ConversationSearchHit[]>> {
   const demoState = currentRoute.value.demoState
   await delay()
-  return { ok: true, value: mockSearchHits(query, projectId, demoState) }
+  return { ok: true, value: mockSearchHits(query, demoState) }
 }
 
 // 取一份文件内容(供文件面板渲染)。文件在会话里的状态(新建 / 已改 / 待确认)不在这里下发 ——

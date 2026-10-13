@@ -17,10 +17,13 @@ import type { WorkspaceLayout } from '../contracts/generated/workspace-layout'
 import type { WindowRect, WorkspaceWindow } from '../contracts/generated/workspace-window'
 import type { FileTab, FilePanelState, WorkspaceMap } from '../data/windows'
 import type { ChatRuntime } from '../data/chat-runtime'
+import type { ChatTab } from '../data/windows'
+import type { ProjectBadge } from '../data/project-identity'
 import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/project-tree'
+import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
-import { MAIN_SURFACE, activateTab, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, emptyWorkspace, fileBaseName, fileDomainKey, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, withLayout, withSurfaceSplit, windowPath } from '../data/windows'
+import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
@@ -29,7 +32,6 @@ import AgentBar from '../components/agent-bar.vue'
 import ChatPanel from '../components/chat-panel.vue'
 import ChatSessionView from '../components/chat-session-view.vue'
 import ConversationSwitcher from '../components/conversation-switcher.vue'
-import DliIcon from '../components/dl-icon.vue'
 import FileBar from '../components/file-bar.vue'
 import FilePanel from '../components/file-panel.vue'
 import ProjectMenu from '../components/project-menu.vue'
@@ -74,7 +76,7 @@ const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
 // 流式节奏:6 字 / 80ms ≈ 75 字每秒(与真实模型输出的时间尺度一致,也让演示可看)。
 const STREAM_INTERVAL = 80
 const STREAM_CHUNK = 6
-// 新会话的归属项目由侧栏决定;它的 Agent 由项目反推,故页面只持有「当前 Agent」与「当前项目」。
+// 页面只持有「当前 Agent」:新会话的归属项目由「能推断就推断、推断不出让用户选」的规则决定(见 projectForNewChat)。
 const DEFAULT_AGENT_ID = 'planning' satisfies ChatSession['agent']
 const AGENT_ORDER = ['planning', 'research', 'writing'] satisfies ChatSession['agent'][]
 const selectedAgent = ref<ChatSession['agent']>(DEFAULT_AGENT_ID)
@@ -83,21 +85,23 @@ const searchHits = ref<ConversationSearchHit[]>([])
 const isSearching = ref(false)
 let searchVersion = 0
 // ---- 项目(侧栏项目区) ----
+// 平权之后**没有「当前项目」**:多个项目可以同时展开,tab 区与悬浮层也混装不同项目的窗口。
 const projects = ref<Project[]>([])
 const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
-const selectedProjectId = ref('')
-// 项目区是**单展开**导航:展开集任意时刻至多一个成员,且那个成员必然就是当前选中项目。
+// 展开集是**真正的集合**:点一行只 toggle 它自己,不动别人(不再是「单值覆盖」)。
 const expandedProjects = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
 const projectTrees = ref<Record<string, ProjectEntry[]>>({})
 const treeStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const isPickerOpen = ref(false)
-// ---- 区域与窗体(按 (Agent, 项目) 分域保存,刷新即重置)----
+// 新建对话时「多个已打开项目、推断不出归属」的落点:非 null 时弹出项目选择浮层(值为发起该动作的区域 id)。
+const newChatChooserSurfaceId = ref<string | null>(null)
+// ---- 区域与窗体(按 **Agent** 分域保存,刷新即重置)----
 const workspaceMap = ref<WorkspaceMap>(emptyWorkspace())
-const domainKey = computed(() => fileDomainKey(selectedAgent.value, selectedProjectId.value))
+const domainKey = computed(() => agentDomainKey(selectedAgent.value))
 const layout = computed<WorkspaceLayout>(() => layoutOf(workspaceMap.value, domainKey.value))
 const rootId = computed<string>(() => rootSurface(layout.value)?.id ?? MAIN_SURFACE)
-// 文件内容按路径各存一份(多窗口下每个窗口显示的文件不同)。
+// 文件内容按**复合窗体 id**(项目 + 路径)各存一份:同名文件在不同项目是不同内容、也是不同窗体。
 const fileContents = ref<Record<string, FilePanelState>>({})
 const fileVersions = new Map<string, number>()
 // 每会话的在途请求版本号:乱序返回的旧结果不得覆盖新结果。
@@ -380,7 +384,9 @@ function toggleDirectory(projectId: string, path: string): void {
 // 只在开发构建生效(import.meta.env.DEV),生产不带这段;写回前先过守卫,再落值。
 function assertInvariants(next: WorkspaceLayout): WorkspaceLayout {
   if (import.meta.env.DEV) {
-    const violations = layoutViolations(next)
+    // 除布局自身的不变量外,再带上「已打开项目集合」校验窗体的项目归属(不变量⑨):
+    // 拦「项目关了、窗口还留着」这类漂移 —— 侧栏里已没有入口,却还占着一枚 tab。
+    const violations = layoutViolations(next, projects.value.map((project) => project.id))
     if (violations.length > 0) console.error(`[layout-invariant] ${violations.join('; ')}`)
   }
   return next
@@ -421,15 +427,28 @@ function pruneAndAnnounce(current: WorkspaceLayout): WorkspaceLayout {
 function commitLayout(mutate: (current: WorkspaceLayout) => WorkspaceLayout): void {
   patchLayout((current) => pruneAndAnnounce(mutate(current)))
 }
-// 当前项目的展示名:文件窗口的元信息条要写全出处。
-const currentProjectName = computed(() => projects.value.find((project) => project.id === selectedProjectId.value)?.name ?? '')
-// 路径的状态芯片:按**当前项目**的树回查条目。
-function entryStateOfPath(path: string): ProjectEntryStateId {
-  const entry = projectTrees.value[selectedProjectId.value]?.find((item) => item.path === path)
+// 项目的展示名 / 标识(按窗体的 projectId 回查)—— tab 前缀、悬浮窗标题栏、文件面板出处都读它。
+const projectBadges = computed<Map<string, ProjectBadge>>(() => badgeMapOf(projects.value))
+function projectBadgeOf(projectId: string): ProjectBadge | undefined {
+  return projectBadges.value.get(projectId)
+}
+function projectNameOf(projectId: string): string {
+  return projectBadgeOf(projectId)?.name ?? projectId
+}
+function projectIdentityClassOf(projectId: string): string {
+  return projectBadgeOf(projectId)?.identityClass ?? identityClassOf(projectId)
+}
+// 路径的状态芯片:按**该文件所属项目**的树回查条目(不再是「当前项目」)。
+function entryStateOfPath(projectId: string, path: string): ProjectEntryStateId {
+  const entry = projectTrees.value[projectId]?.find((item) => item.path === path)
   return resolveEntryState(entry?.state ?? 'none', path)
 }
-function entryStateOfTab(tab: FileTab): ProjectEntryStateId {
-  return entryStateOfPath(tab.path)
+function entryStateOfTab(tab: FileTab | null): ProjectEntryStateId {
+  return tab === null ? 'none' : entryStateOfPath(tab.projectId, tab.path)
+}
+// 某个窗体若是文件窗,取它的 FileTab 视图(否则 null)。
+function fileContentOf(win: WorkspaceWindow | null): FileTab | null {
+  return win !== null && win.content.kind === 'file' ? win.content : null
 }
 
 // 取某个项目的条目树(每项目只取一次;展开时按需触发)。树自带 loading / error 两态。
@@ -446,25 +465,26 @@ async function ensureProjectTree(projectId: string): Promise<void> {
   treeStatus.value = { ...treeStatus.value, [projectId]: 'ready' }
 }
 // ---- 文件内容 ----
-async function loadFileContent(path: string): Promise<void> {
-  const version = (fileVersions.get(path) ?? 0) + 1
-  fileVersions.set(path, version)
-  const projectId = selectedProjectId.value
+// 缓存键 = **复合窗体 id**(项目 + 路径):同名文件在不同项目是不同内容、也是不同窗体。
+async function loadFileContent(content: FileTab): Promise<void> {
+  const key = windowIdOf(content)
+  const version = (fileVersions.get(key) ?? 0) + 1
+  fileVersions.set(key, version)
   // 确认请求按**会话**查:文件不属于任何会话,取 live 的那段对话(见 primaryChatId 注释)。
   const sessionId = primaryChatId.value
-  fileContents.value = { ...fileContents.value, [path]: { status: 'loading' } }
-  const result = await getFileContent(projectId, path, sessionId)
-  if (!isAlive.value || version !== (fileVersions.get(path) ?? 0)) return
-  if (projectId !== selectedProjectId.value) return
-  if (!layout.value.windows.some((win) => win.id === path)) return
+  fileContents.value = { ...fileContents.value, [key]: { status: 'loading' } }
+  const result = await getFileContent(content.projectId, content.path, sessionId)
+  if (!isAlive.value || version !== (fileVersions.get(key) ?? 0)) return
+  // 该窗体已经不在布局里(被关掉了)时丢弃结果;项目归属由复合键自带,不再需要「当前项目」比对。
+  if (!layout.value.windows.some((win) => win.id === key)) return
   const next: FilePanelState = !result.ok
     ? { status: 'error' }
     // 「无法预览」由契约的 kind 判定(而不是 lines 为空):图片同样没有变更行,但它**要**渲染。
     : (result.value.kind === 'binary' ? { status: 'empty' } : { status: 'ready', content: result.value })
-  fileContents.value = { ...fileContents.value, [path]: next }
+  fileContents.value = { ...fileContents.value, [key]: next }
 }
-function contentOf(path: string): FilePanelState {
-  return fileContents.value[path] ?? { status: 'loading' }
+function contentOf(windowId: string): FilePanelState {
+  return fileContents.value[windowId] ?? { status: 'loading' }
 }
 // 打开一个文件:单击 / 双击 / Enter 三条入口都走这里,行为一致(打开**悬浮**窗体)。
 // 若它此前正停靠在某块区域里,这一次点击会把它从成员里摘走 —— 那块区域若因此被摘空,
@@ -516,13 +536,10 @@ function displayBoxOf(surfaceId: string): WindowRect | null {
 // 某悬浮窗体此刻的**实测几何**(视口坐标):几何以 DOM 为准 —— 布局里的 win.rect 在「还没摆过位置」
 // 时是 {0,0,0,0},而真实几何由窗体组件按视口算出。量不到(该窗体没有渲染)返回 null。
 // 坐标与布局数据同为视口坐标系,可直接比较。
+// 选中钩子按**复合窗体 id**(data-window-id)—— 同名文件跨项目混装时,裸路径会同时命中多个面板,
+// 复合 id 才能保证「选到的一定是那一个窗口」。
 function measuredWindowRect(id: string): WindowRect | null {
-  const win = layout.value.windows.find((item) => item.id === id)
-  if (win === undefined) return null
-  const selector = win.content.kind === 'chat'
-    ? `.chat-panel[data-session-id="${CSS.escape(id)}"]`
-    : `.file-panel[data-mode="floating"][data-file-path="${CSS.escape(id)}"]`
-  const element = document.querySelector<HTMLElement>(selector)
+  const element = document.querySelector<HTMLElement>(`.file-panel[data-window-id="${CSS.escape(id)}"], .chat-panel[data-window-id="${CSS.escape(id)}"]`)
   if (element === null) return null
   const rect = element.getBoundingClientRect()
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
@@ -556,25 +573,25 @@ function afterDock(surfaceId: string, message: string): void {
   announcePlacement(hidden > 0 ? `${message} ${occludedMessage(hidden)}` : message)
 }
 
-function revealWindow(path: string, fallback: (current: WorkspaceLayout) => WorkspaceLayout): void {
-  const owner = surfaceOwning(layout.value, path)
+function revealWindow(id: string, fallback: (current: WorkspaceLayout) => WorkspaceLayout): void {
+  const owner = surfaceOwning(layout.value, id)
   if (owner !== undefined) {
     // 先让遮挡的悬浮窗体让位,再把这枚 tab 切到活动位(两层结构下停靠窗体抬不过浮层)。
     const hidden = uncoverSurface(owner.id)
-    patchLayout((current) => activateTab(current, owner.id, path))
-    pulseWindow(path)
-    const reveal = t.value.workspace.fileBar.revealAnnounce.replace('{name}', windowLabel(path))
+    patchLayout((current) => activateTab(current, owner.id, id))
+    pulseWindow(id)
+    const reveal = t.value.workspace.fileBar.revealAnnounce.replace('{name}', windowLabel(id))
     // 两条信息合成一次播报:announcePlacement 是「后写覆盖先写」的单通道,分两次调用会丢掉前一条。
     announcePlacement(hidden > 0 ? `${reveal} ${occludedMessage(hidden)}` : reveal)
     return
   }
-  const existing = layout.value.windows.find((item) => item.id === path)
+  const existing = layout.value.windows.find((item) => item.id === id)
   if (existing !== undefined && existing.placement === 'floating' && existing.visible) {
-    patchLayout((current) => focusWindow(current, path))
+    patchLayout((current) => focusWindow(current, id))
     return
   }
   commitLayout(fallback)
-  pulseWindow(path)
+  pulseWindow(id)
 }
 
 // 提醒动效的落点:被「显示」的那个窗体的 tab 会短暂脉冲一次(见 .conversation-tab / .file-tab
@@ -591,24 +608,24 @@ function pulseWindow(id: string): void {
 }
 
 // 文件树里点一个文件 = 「显示它」:已有 tab 就切过去,没有才开一个悬浮窗。
-function openFile(path: string): void {
-  revealWindow(path, (current) => openFloating(current, { kind: 'file', path }, { x: 0, y: 0, width: 0, height: 0 }))
+// 窗体身份按**复合键**(项目 + 路径)—— 同名文件在不同项目是**两份不同的窗体**,互不顶掉。
+function openFile(projectId: string, path: string): void {
+  revealWindow(fileWindowId(projectId, path), (current) => openFloating(current, { kind: 'file', projectId, path }, { x: 0, y: 0, width: 0, height: 0 }))
 }
-function openFromTree(path: string): void {
-  if (selectedProjectId.value === '') return
-  openFile(path)
+function openFromTree(projectId: string, row: ProjectTreeRow): void {
+  openFile(projectId, row.path)
 }
-function onFileRowClick(row: ProjectTreeRow, event: MouseEvent): void {
+function onFileRowClick(projectId: string, row: ProjectTreeRow, event: MouseEvent): void {
   if (event.detail === 0) return
-  openFromTree(row.path)
+  openFromTree(projectId, row)
 }
-function onFileRowDblClick(row: ProjectTreeRow): void {
-  openFromTree(row.path)
+function onFileRowDblClick(projectId: string, row: ProjectTreeRow): void {
+  openFromTree(projectId, row)
 }
-function onFileRowKey(event: KeyboardEvent, row: ProjectTreeRow): void {
+function onFileRowKey(projectId: string, event: KeyboardEvent, row: ProjectTreeRow): void {
   if (event.key !== 'Enter' && event.key !== ' ') return
   event.preventDefault()
-  openFromTree(row.path)
+  openFromTree(projectId, row)
 }
 // ---- 把侧栏文件加入对话(两条通路,WCAG 2.5.7 要求拖拽之外必须另有点击通路)----
 // 拖源:文件行带上**自定义 MIME 类型**(值为路径),对话坞据此与「外部文件拖入」区分 ——
@@ -657,14 +674,14 @@ function reorderChatTabs(surfaceId: string, order: string[]): void {
 }
 // 「最近关闭」的复原(关闭 ≠ 删除):走与文件树**同一条** reveal 规则 —— 它已经在某块区域的
 // 条上时切过去(而不是把它从原区域搬到点它的那块区域),只有它确实不在任何条上时才停靠回来。
-function openRecentFile(surfaceId: string, path: string): void {
+function openRecentFile(surfaceId: string, windowId: string): void {
   if (isBusy.value) return
-  revealWindow(path, (current) => {
-    const win = current.windows.find((item) => item.id === path)
+  revealWindow(windowId, (current) => {
+    const win = current.windows.find((item) => item.id === windowId)
     if (win === undefined) return current
     if (win.placement === 'floating') return openFloating(current, win.content, win.rect)
     const surface = surfaceOf(current, surfaceId)
-    return dockWindow(current, path, surfaceId, surface?.members.length ?? 0)
+    return dockWindow(current, windowId, surfaceId, surface?.members.length ?? 0)
   })
 }
 function focusFileWindow(id: string): void {
@@ -689,8 +706,9 @@ function cycleFileWindow(): void {
 function onFileRectChange(id: string, rect: WindowRect | null): void {
   patchLayout((current) => setWindowRect(current, id, rect))
 }
-function retryFile(path: string): void {
-  if (layout.value.windows.some((win) => win.id === path)) void loadFileContent(path)
+function retryFile(id: string): void {
+  const content = fileContentOf(layout.value.windows.find((win) => win.id === id) ?? null)
+  if (content !== null) void loadFileContent(content)
 }
 
 // ---- 悬浮 ↔ 停靠 ----
@@ -743,8 +761,9 @@ function flipFromOf(id: string): WindowRect | null {
 // 窗体的展示名(播报 / 落点提示里的 {name}):文件取路径末段,对话取会话标题。
 function windowLabel(id: string): string {
   const content = layout.value.windows.find((item) => item.id === id)?.content
-  if (content !== undefined && content.kind === 'chat') return sessionTitleOf(content.sessionId)
-  return fileBaseName(id)
+  if (content === undefined) return id
+  if (content.kind === 'chat') return sessionTitleOf(content.sessionId)
+  return fileBaseName(content.path)
 }
 function onTearOut(detail: { key: string; point: { x: number; y: number }; origin: WindowRect }): void {
   if (tearSnapshot === null) {
@@ -907,8 +926,9 @@ function popOutTab(key: string, origin: WindowRect): void {
   void nextTick(() => {
     requestAnimationFrame(() => {
       if (popFlip.value?.key === key) popFlip.value = null
-      // 标题栏是共用窗体壳(WindowFrame)里的一块,两类窗体共用它的类名;根类仍是各自的具体窗体。
-      const meta = document.querySelector<HTMLElement>(`.file-panel[data-mode="floating"][data-file-path="${CSS.escape(key)}"] .dl-window__meta, .chat-panel[data-session-id="${CSS.escape(key)}"] .dl-window__meta`)
+      // 标题栏是共用窗体壳(WindowFrame)里的一块,两类窗体共用它的类名;按**复合窗体 id** 选中
+      // (data-window-id),保证同名文件跨项目时选到的一定是那一个窗口。
+      const meta = document.querySelector<HTMLElement>(`[data-window-id="${CSS.escape(key)}"] .dl-window__meta`)
       meta?.focus()
     })
   })
@@ -1212,34 +1232,41 @@ function resetGenerations(): void {
 }
 
 // ---- 装载与重装 ----
-// 让某段对话成为**指定区域**的活动成员(已在 → 只激活;被关掉过 → 补回;被拆出为悬浮 → 只置顶;
+// 让一段对话成为**指定区域**的活动成员(已在 → 只激活;被关掉过 → 补回;被拆出为悬浮 → 只置顶;
 // 已在**别的**区域开着 → 由 dockWindow 的**移动**语义搬过来)。
 // 经 commitLayout(而非 patchLayout):搬走一段对话可能把原区域摘空,而「摘空即移除」是页面既定的
 // 区域生命周期规则 —— 走过一遍 prune,那块空区域才会随这次搬运一起消失(根区域除外)。
-function activateChat(surfaceId: string, sessionId: string): void {
-  commitLayout((current) => activateChatAt(current, surfaceId, sessionId))
+// 入参是**内容**(而非裸会话 id):窗体身份是复合键,内容自带 projectId,不必再去「当前项目」反查。
+function activateChatContent(surfaceId: string, content: ChatTab): void {
+  commitLayout((current) => activateChatContentAt(current, surfaceId, content))
 }
-function activateChatAt(current: WorkspaceLayout, surfaceId: string, sessionId: string): WorkspaceLayout {
-  const win = current.windows.find((item) => item.id === sessionId)
-  if (win !== undefined && win.placement === 'floating') return focusWindow(current, sessionId)
+function activateChatContentAt(current: WorkspaceLayout, surfaceId: string, content: ChatTab): WorkspaceLayout {
+  const id = windowIdOf(content)
+  const win = current.windows.find((item) => item.id === id)
+  if (win !== undefined && win.placement === 'floating') return focusWindow(current, id)
   const surface = surfaceOf(current, surfaceId)
   if (surface === undefined) return current
-  if (surface.members.includes(sessionId) && win?.visible === true) return activateTab(current, surfaceId, sessionId)
-  const base = win === undefined ? seedChatWindow(current, surfaceId, sessionId, 0) : current
-  return dockWindow(base, sessionId, surfaceId, 0)
+  if (surface.members.includes(id) && win?.visible === true) return activateTab(current, surfaceId, id)
+  const base = win === undefined ? seedChatWindow(current, surfaceId, content, 0) : current
+  return dockWindow(base, id, surfaceId, 0)
+}
+// 会话 → 窗体内容(复合键的组成)。会话本身带 projectId,故归属永不丢失。
+function chatTabOf(session: ChatSession): ChatTab {
+  return { kind: 'chat', projectId: session.projectId, sessionId: session.id }
 }
 // 保证一段对话是**指定区域**的成员(不改变它是否活动)。
-// 新语义下仍然安全:它自带 `surface.members.includes(sessionId)` 早退 —— 已是**本区域**成员时
+// 新语义下仍然安全:它自带 `surface.members.includes(id)` 早退 —— 已是**本区域**成员时
 // 一个字段都不动(不会把自己搬走再搬回来)。只有「窗体存在于别处(别的区域 / 悬浮)」时才会落到
 // dockWindow;那是移动,不产生重复成员(不变量③)。同样经 commitLayout 兜住「搬空来源区域」。
-function ensureChatMember(surfaceId: string, sessionId: string): void {
+function ensureChatMemberContent(surfaceId: string, content: ChatTab): void {
   commitLayout((current) => {
-    const win = current.windows.find((item) => item.id === sessionId)
+    const id = windowIdOf(content)
+    const win = current.windows.find((item) => item.id === id)
     if (win !== undefined && win.placement === 'floating') return current
     const surface = surfaceOf(current, surfaceId)
-    if (surface === undefined || surface.members.includes(sessionId)) return current
-    const base = win === undefined ? seedChatWindow(current, surfaceId, sessionId, surface.members.length) : current
-    return dockWindow(base, sessionId, surfaceId, surface.members.length)
+    if (surface === undefined || surface.members.includes(id)) return current
+    const base = win === undefined ? seedChatWindow(current, surfaceId, content, surface.members.length) : current
+    return dockWindow(base, id, surfaceId, surface.members.length)
   })
 }
 // 装载落点对齐:根区域显示落地那段对话(根区域正显示**文件**时不动它 —— 装载不该抢走用户在看的文件)。
@@ -1252,24 +1279,26 @@ function reconcileLanding(): void {
     if (win !== null && win.content.kind === 'chat') patchLayout((current) => blurSurface(current, surfaceId))
     return
   }
+  const found = sessions.value.find((item) => item.id === landing)
+  if (found === undefined) return
+  const content = chatTabOf(found)
+  const id = windowIdOf(content)
   // 落点那段对话**已被用户关掉**时不再把它拉回来:关 tab 只把窗体的 visible 置假(关闭 ≠ 删除,
   // 几何与层序要留着),而本函数会被每一次重载调用(切语言 / 重试 / 演示态)——
   // 不加这道闸,一次与用户无关的重载就会把刚关掉的对话连草稿一起放回条上,
   // 甚至把「所有 tab 都关掉 → 引导页」那个状态静默顶掉。
   // 窗体**还不存在**(首屏:补成员是异步的 watcher)时照常放行,故首屏落点不受影响。
-  const landingWin = layout.value.windows.find((item) => item.id === landing)
+  const landingWin = layout.value.windows.find((item) => item.id === id)
   if (landingWin !== undefined && !landingWin.visible) return
   // 落点那段对话**已属于别的区域**时也不动它:本函数只负责「根区域该显示哪段对话」,不该把
-  // 用户刚搬进别处(切换器选择 / 拖拽)的那段拽回根区域。少了这道闸,「在子区域的下拉里选一段
-  // 尚在根区域的对话」会被本函数搬回根区域 —— 表现为「搬过去又弹回来」(更早的版本因为 dockWindow
-  // 只从目标区域过滤,同一处漏成了「同一段对话挂在两块区域」)。归属就是根区域时照常走既有逻辑。
-  const landingOwner = surfaceOwning(layout.value, landing)
+  // 用户刚搬进别处(切换器选择 / 拖拽)的那段拽回根区域。归属就是根区域时照常走既有逻辑。
+  const landingOwner = surfaceOwning(layout.value, id)
   if (landingOwner !== undefined && landingOwner.id !== surfaceId) return
   if (win === null || win.content.kind === 'chat') {
-    activateChat(surfaceId, landing)
+    activateChatContent(surfaceId, content)
     return
   }
-  ensureChatMember(surfaceId, landing)
+  ensureChatMemberContent(surfaceId, content)
 }
 // 离开当前分域**之前**:把根区域的内容区交回给一段对话(它不该停在一个文件上 —— 回到本域时
 // 应看到对话,而不是上次打开的文件)。已在对话上则不动;优先落到装载那段对话,否则取首个对话成员。
@@ -1279,12 +1308,13 @@ function showConversation(): void {
   const surface = surfaceOf(layout.value, surfaceId)
   const win = surface === undefined ? null : activeMemberOf(surface)
   if (win !== null && win.content.kind === 'chat') return
-  const chatIds = chatOrderOf(surfaceId)
-  const target = chatIds.includes(landingSessionId.value) ? landingSessionId.value : (chatIds[0] ?? '')
-  if (target === '') return
-  activateChat(surfaceId, target)
+  const chats = memberWindows(layout.value, surfaceId).flatMap((item) => (item.content.kind === 'chat' ? [item.content] : []))
+  const target = chats.find((item) => item.sessionId === landingSessionId.value) ?? chats[0]
+  if (target === undefined) return
+  activateChatContent(surfaceId, target)
 }
-// 重装工作台视图:取项目列表 → 落到选中项目 → 取该项目会话 → 对齐落点 → 刷新落点的转录 / 遥测。
+// 重装工作台视图:取项目列表 → 取该 Agent 全部已打开项目的会话 → 对齐落点 → 刷新落点的转录 / 遥测。
+// 平权之后**没有「当前项目」**:不再「落到选中项目」,而是装载整个 Agent 的会话(跨它已打开的项目)。
 async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false): Promise<void> {
   if (isBusy.value) { isLocalePending.value = true; return }
   workspaceVersion += 1
@@ -1295,25 +1325,27 @@ async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false): P
   if (!projectResult.ok) { projectsStatus.value = 'error'; return }
   projects.value = projectResult.value
   projectsStatus.value = projects.value.length ? 'ready' : 'empty'
-  const kept = projects.value.find((project) => project.id === selectedProjectId.value)
-  const project = kept ?? projects.value[0] ?? null
-  selectedProjectId.value = project?.id ?? ''
-  if (project === null) {
+  // 多项目同时展开:自动展开时**只补首个项目**,不收起用户已经展开的其它项目(单展开已废除)。
+  const openIds = projects.value.map((project) => project.id)
+  const expanded = new Set([...expandedProjects.value].filter((id) => openIds.includes(id)))
+  if (autoExpand && expanded.size === 0) {
+    const first = openIds[0]
+    if (first !== undefined) expanded.add(first)
+  }
+  expandedProjects.value = expanded
+  for (const id of expanded) void ensureProjectTree(id)
+  if (projects.value.length === 0) {
     sessions.value = []
     sessionStatus.value = 'empty'
     landingSessionId.value = ''
-    expandedProjects.value = new Set()
     return
   }
-  // 单展开:自动展开时把展开集收成只含这一个项目。
-  if (autoExpand) expandedProjects.value = new Set([project.id])
-  if (expandedProjects.value.has(project.id)) void ensureProjectTree(project.id)
   sessionStatus.value = 'loading'
-  const sessionResult = await listSessions(project.id)
+  const sessionResult = await listSessions(selectedAgent.value)
   if (!isAlive.value || version !== workspaceVersion) return
   sessions.value = sessionResult.ok ? sessionResult.value : []
   sessionStatus.value = sessionResult.ok ? (sessions.value.length ? 'ready' : 'empty') : 'error'
-  // 落到该项目首条:调用方要求时,或落点非空却不属于本项目(项目 / Agent 切了)。
+  // 落到首条:调用方要求时,或落点非空却不属于本 Agent 的会话集(换了 Agent)。
   const belongsHere = sessions.value.some((item) => item.id === landingSessionId.value)
   if (pickFirstSession || (landingSessionId.value !== '' && !belongsHere)) landingSessionId.value = sessions.value[0]?.id ?? ''
   reconcileLanding()
@@ -1328,49 +1360,53 @@ async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false): P
   }
 }
 
-// 项目行**单控件**:整行一个按钮。点未展开的行 = 选中 + 展开 + 折叠其它;点已展开的行 = 折叠。
+// 项目行**单控件**:整行一个按钮。点击 = **toggle 它自己的展开态**,不动别的项目
+// (单展开 + 选中语义已废除 —— 平权之后没有「当前项目」)。
 async function toggleProjectRow(project: Project): Promise<void> {
-  if (isBusy.value) return
-  if (expandedProjects.value.has(project.id)) {
-    expandedProjects.value = new Set()
-    return
+  const next = new Set(expandedProjects.value)
+  if (next.has(project.id)) {
+    next.delete(project.id)
+  } else {
+    next.add(project.id)
+    void ensureProjectTree(project.id)
   }
-  expandedProjects.value = new Set([project.id])
-  void ensureProjectTree(project.id)
-  if (project.id === selectedProjectId.value) return
-  openMenuSurfaceId.value = ''
-  clearHighlights()
-  // 离开当前分域前先把内容区交回对话(在改选中项目**之前**调,清的是即将离开的那个分域)。
-  showConversation()
-  selectedProjectId.value = project.id
-  await reloadWorkspace(true)
+  expandedProjects.value = next
 }
+// 关闭项目:一并关掉它在 tab 区与悬浮层的**所有**窗口,并把「已关闭项目 X」与「关闭了 N 个窗口」
+// **合成一条**播报(announcePlacement 是「后写覆盖先写」的单通道,分两次调用会丢前一条)。
+// 目标是不留下「侧栏里没有入口、却还占着 tab」的孤儿窗口 —— 那正是 layoutViolations ⑨ 要拦的状态。
 async function onCloseProject(project: Project): Promise<void> {
   if (isBusy.value) return
   openMenuSurfaceId.value = ''
   const result = await closeProjectRequest(project.id)
   if (!isAlive.value || !result.ok) return
-  const wasCurrent = project.id === selectedProjectId.value
-  if (wasCurrent) {
-    showConversation()
-    selectedProjectId.value = ''
-    landingSessionId.value = ''
+  const domain = domainKey.value
+  const current = layoutOf(workspaceMap.value, domain)
+  const doomed = current.windows.filter((win) => win.content.projectId === project.id).map((win) => win.id)
+  if (doomed.length > 0) {
+    const next = pruneEmptySurfaces(dropWindows(current, doomed))
+    workspaceMap.value = withLayout(workspaceMap.value, domain, assertInvariants(next))
   }
-  await reloadWorkspace(wasCurrent, wasCurrent)
+  announcePlacement(t.value.workspace.closedProject.replace('{name}', project.name).replace('{count}', String(doomed.length)))
+  await reloadWorkspace(false)
 }
 async function confirmOpenProject(paths: string[]): Promise<void> {
   isPickerOpen.value = false
   if (paths.length === 0) return
   let openedId = ''
+  const openedIds: string[] = []
   for (const path of paths) {
     const result = await openProject(selectedAgent.value, path)
-    if (result.ok) openedId = result.value.id
+    if (result.ok) {
+      openedId = result.value.id
+      openedIds.push(openedId)
+    }
   }
   if (!isAlive.value || openedId === '') return
-  showConversation()
-  selectedProjectId.value = openedId
   openMenuSurfaceId.value = ''
-  await reloadWorkspace(true, true)
+  // 新打开的项目**自动展开**,但**不收起**用户已经展开的其它项目。
+  expandedProjects.value = new Set([...expandedProjects.value, ...openedIds])
+  await reloadWorkspace(false)
 }
 function retryProjects(): void {
   void reloadWorkspace(false)
@@ -1429,42 +1465,78 @@ async function selectSession(surfaceId: string, target: ChatSession): Promise<vo
   openMenuSurfaceId.value = ''
   landingSessionId.value = target.id
   // 点对话 tab = 显示它:先让遮挡这块区域的浮窗让位。目标本身是**悬浮**窗体时不适用 ——
-  // 那条路是「置顶它」,收起会把它自己也收掉。
-  const targetWin = layout.value.windows.find((item) => item.id === target.id)
+  // 那条路是「置顶它」,收起会把它自己也收掉。窗体身份是复合键(项目 + 会话)。
+  const targetWin = layout.value.windows.find((item) => item.id === windowIdOf(chatTabOf(target)))
   const hidden = targetWin === undefined || targetWin.placement !== 'floating' ? uncoverSurface(surfaceId) : 0
-  activateChat(surfaceId, target.id)
+  activateChatContent(surfaceId, chatTabOf(target))
   if (hidden > 0) announcePlacement(occludedMessage(hidden))
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
 }
-// 新建对话:**立即**建一段会话(不再是「发第一条消息时才建」),归属承载该 ＋ 的那块区域。
+// 新建对话**归谁**(用户已确认的规则,平权之后没有「当前项目」,能推断就推断,推断不出就让用户选):
+//   ① 区域内的通用入口 → 归该区域**当前活动窗口**所属项目;
+//   ② 区域没有活动成员 → 看它已有成员蕴含的项目:恰好一个就用它;
+//   ③ 还推断不出(区域空 / 引导页)→ 只有一个已打开项目就归它,多个则弹出选择浮层让用户选;
+//   ④ 一个项目都没打开 → 引导先打开项目。
+function projectForNewChat(surfaceId: string): string {
+  const surface = surfaceOf(layout.value, surfaceId)
+  const win = surface === undefined ? null : activeMemberOf(surface)
+  if (win !== null) return win.content.projectId
+  const memberProjects = new Set((surface?.members ?? []).flatMap((id) => {
+    const found = layout.value.windows.find((item) => item.id === id)
+    return found === undefined ? [] : [found.content.projectId]
+  }))
+  if (memberProjects.size === 1) return [...memberProjects][0] ?? ''
+  if (memberProjects.size === 0 && projects.value.length === 1) return projects.value[0]?.id ?? ''
+  return ''
+}
 async function newConversation(surfaceId: string): Promise<void> {
   if (isBusy.value) return
   openMenuSurfaceId.value = ''
-  const created = await createSession(selectedProjectId.value)
+  const projectId = projectForNewChat(surfaceId)
+  if (projectId === '') {
+    if (projects.value.length === 0) {
+      announcePlacement(t.value.workspace.newChatNeedProject)
+      return
+    }
+    // 推断不出归属且有多个项目 → 列出项目让用户选(不产生「无归属」的会话)。
+    newChatChooserSurfaceId.value = surfaceId
+    return
+  }
+  await createChatInProject(surfaceId, projectId)
+}
+// 在指定项目的**发起区域**建一段会话(选择浮层与「唯一项目直接建」两条路共用)。
+async function createChatInProject(surfaceId: string, projectId: string): Promise<void> {
+  newChatChooserSurfaceId.value = null
+  const created = await createSession(projectId)
   if (!isAlive.value || !created.ok) return
   sessions.value.unshift(created.value)
   seedRuntime(created.value.id, '')
   if (sessionStatus.value !== 'ready') sessionStatus.value = 'ready'
-  patchLayout((current) => activateChatAt(current, surfaceId, created.value.id))
+  patchLayout((current) => activateChatContentAt(current, surfaceId, chatTabOf(created.value)))
   landingSessionId.value = created.value.id
   if (currentRoute.value.demoState !== 'normal') navigateTo('workspace')
   await nextTick()
   focusComposer(created.value.id)
 }
-// 选择器只写入自己的值;换 Agent 即换项目列表,故一并重装。
+// 选择浮层里点一个项目 → 在发起该动作的区域里为它建一段会话。
+function chooseNewChatProject(projectId: string): void {
+  const surfaceId = newChatChooserSurfaceId.value
+  if (surfaceId === null) return
+  void createChatInProject(surfaceId, projectId)
+}
+// 选择器只写入自己的值;换 Agent 即换项目列表与会话,故一并重装。
 async function onSelectAgent(agent: ChatSession['agent']): Promise<void> {
   if (isBusy.value) return
   if (selectedAgent.value === agent) return
   openMenuSurfaceId.value = ''
   clearHighlights()
-  // 离开当前分域前先把内容区交回对话。**必须在改 selectedAgent 之前** —— 域键是「(Agent, 项目)」,
-  // 先改 Agent 再清,清到的会是 (新 Agent, 旧项目) 这个不存在的域,等于没清。
+  // 离开当前分域前先把内容区交回对话(域键是 Agent,故这一步必须在改 selectedAgent **之前**)。
   showConversation()
   selectedAgent.value = agent
   await reloadWorkspace(true, true)
 }
-// 会话搜索:在当前项目范围内筛选。请求带版本号,避免快速输入时旧结果覆盖新结果。
+// 会话搜索:在当前 Agent 已装载的全部会话里筛选(跨它已打开的项目)。请求带版本号,避免旧结果覆盖新结果。
 function onSearchInput(value: string): void {
   searchQuery.value = value
   void runSearch()
@@ -1480,7 +1552,7 @@ async function runSearch(): Promise<void> {
   searchVersion += 1
   const version = searchVersion
   isSearching.value = true
-  const result = await searchConversations(query, selectedProjectId.value)
+  const result = await searchConversations(query)
   if (!isAlive.value || version !== searchVersion) return
   isSearching.value = false
   searchHits.value = result.ok ? result.value : []
@@ -1514,7 +1586,8 @@ async function openHit(hit: ConversationSearchHit): Promise<void> {
   if (isBusy.value) return
   openMenuSurfaceId.value = ''
   landingSessionId.value = hit.sessionId
-  activateChat(rootId.value, hit.sessionId)
+  const found = sessions.value.find((item) => item.id === hit.sessionId)
+  if (found !== undefined) activateChatContent(rootId.value, chatTabOf(found))
   patchRuntime(hit.sessionId, (current) => ({ ...current, highlightTurnId: hit.reason === 'body' ? hit.turnId : null }))
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
@@ -1626,23 +1699,25 @@ watch(locale, () => {
   // 项目 / 条目的名称与路径都是技术标识,不随语言变化,故只重取会话(标题本地化)、转录与遥测。
   void reloadWorkspace(false)
 })
-// 需要(预)取内容的文件窗体:所有文件类窗体里,可见的、或是区域成员的。
+// 需要(预)取内容的文件窗体:所有文件类窗体里,可见的、或是区域成员的。键是**复合窗体 id**。
 const contentPaths = computed<string[]>(() => layout.value.windows.flatMap((win) => {
   if (win.content.kind !== 'file') return []
   const listed = layout.value.surfaces.some((surface) => surface.members.includes(win.id))
-  return win.visible || listed ? [win.content.path] : []
+  return win.visible || listed ? [win.id] : []
 }))
 watch(() => contentPaths.value.slice().sort().join('\n'), () => {
-  const paths = new Set(contentPaths.value)
-  for (const path of Object.keys(fileContents.value)) {
-    if (paths.has(path)) continue
+  const ids = new Set(contentPaths.value)
+  for (const key of Object.keys(fileContents.value)) {
+    if (ids.has(key)) continue
     const next = { ...fileContents.value }
-    delete next[path]
+    delete next[key]
     fileContents.value = next
-    fileVersions.delete(path)
+    fileVersions.delete(key)
   }
-  for (const path of paths) {
-    if (fileContents.value[path] === undefined) void loadFileContent(path)
+  for (const id of ids) {
+    if (fileContents.value[id] !== undefined) continue
+    const content = fileContentOf(layout.value.windows.find((win) => win.id === id) ?? null)
+    if (content !== null) void loadFileContent(content)
   }
 }, { immediate: true })
 // 可见对话各取一份运行态(转录 + 遥测);新出现的会话在这里首次装载。
@@ -1659,19 +1734,21 @@ watch(() => currentRoute.value.demoState, (demo) => {
   void reloadWorkspace(false, true)
 })
 // 装载期**增量**补齐对话成员(不重算已有成员的相对顺序):补到根区域。
+// 来源是**当前 Agent 已装载的全部会话**(跨它已打开的项目)—— 多项目并行时,别的项目的会话
+// 也要作为 tab 出现在同一张表上,归属由各自的复合键承担。
 function syncChatMembers(): void {
-  if (selectedProjectId.value === '') return
-  const ids = sessions.value.filter((item) => item.projectId === selectedProjectId.value).map((item) => item.id)
+  const contents = sessions.value.map((session) => chatTabOf(session))
   const domain = domainKey.value
   const current = layoutOf(workspaceMap.value, domain)
   const targetSurface = rootId.value
   let next = current
-  ids.forEach((id, index) => {
+  contents.forEach((content, index) => {
+    const id = windowIdOf(content)
     if (next.windows.some((win) => win.id === id)) return
-    const later = new Set(ids.slice(index + 1))
+    const later = new Set(contents.slice(index + 1).map((item) => windowIdOf(item)))
     const members = surfaceOf(next, targetSurface)?.members ?? []
     const at = members.findIndex((member) => later.has(member))
-    next = seedChatWindow(next, targetSurface, id, at < 0 ? members.length : at)
+    next = seedChatWindow(next, targetSurface, content, at < 0 ? members.length : at)
   })
   if (next !== current) workspaceMap.value = withLayout(workspaceMap.value, domain, assertInvariants(next))
 }
@@ -1754,17 +1831,18 @@ onBeforeUnmount(() => {
             <div v-else-if="projectsStatus === 'error'" class="sidebar-loading"><p>{{ t.workspace.projectsError }}</p><button class="workspace-button" @click="retryProjects">{{ t.workspace.retry }}</button></div>
             <p v-else-if="projectsStatus === 'empty'" class="sidebar-hint">{{ t.workspace.projectsEmpty }}</p>
             <ul v-else class="project-list">
-              <li v-for="project in projects" :key="project.id" class="project-item" :class="{ 'is-current': project.id === selectedProjectId }">
+              <li v-for="project in projects" :key="project.id" class="project-item" :class="identityClassOf(project.path)">
                 <div class="project-row">
                   <button
                     type="button" class="project-row__button"
                     :aria-expanded="expandedProjects.has(project.id)"
-                    :aria-current="project.id === selectedProjectId ? 'true' : undefined"
                     :aria-controls="`project-tree-${project.id}`"
-                    :title="`${project.path} · ${formatFileCount(project.entryCount)}`"
+                    :title="`${project.name} · ${project.path} · ${formatFileCount(project.entryCount)}`"
                     @click="toggleProjectRow(project)"
                   >
-                    <DliIcon class="project-row__mark" name="grid" size="sm" />
+                    <!-- 项目行 = **色点 + 名称**:色点承担归属的第二通道(颜色),名称是主通道(文字)。
+                         多项目同时展开时不再有「被选中」的项目,故不再有 aria-current。 -->
+                    <span class="project-dot" aria-hidden="true" />
                     <span class="project-row__name">{{ project.name }}</span>
                     <span class="project-row__slot" aria-hidden="true" />
                     <svg class="tree-caret project-row__caret" :class="{ 'is-open': expandedProjects.has(project.id) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
@@ -1793,9 +1871,9 @@ onBeforeUnmount(() => {
                       <button
                         v-else type="button" class="entry-row__button entry-row__button--file"
                         :title="row.path" draggable="true"
-                        @click="onFileRowClick(row, $event)"
-                        @dblclick="onFileRowDblClick(row)"
-                        @keydown="onFileRowKey($event, row)"
+                        @click="onFileRowClick(project.id, row, $event)"
+                        @dblclick="onFileRowDblClick(project.id, row)"
+                        @keydown="onFileRowKey(project.id, $event, row)"
                         @dragstart="onFileRowDragStart(row, $event)"
                       >
                         <span class="entry-name">{{ row.name }}</span>
@@ -1859,6 +1937,7 @@ onBeforeUnmount(() => {
                 :menu-panel-id="menuPanelIdOf(surfaceId)"
                 :sessions="sessions"
                 :sessions-status="sessionStatus"
+                :projects="projects"
                 :excluded-session-ids="switcherExcludedSessionIds(surfaceId)"
                 :search-query="searchQuery"
                 :search-hits="searchHits"
@@ -1896,6 +1975,7 @@ onBeforeUnmount(() => {
               >
                 <FileBar
                   :tabs="fileTabsOf(surfaceId)"
+                  :projects="projects"
                   :active-key="focusedWindowId"
                   :pulse-key="pulseWindowId"
                   :visible-paths="visibleFilePaths"
@@ -1924,10 +2004,11 @@ onBeforeUnmount(() => {
                   v-if="activeFileWindow(surfaceId)"
                   :key="`docked:${activeFileWindow(surfaceId)?.id}`"
                   mode="docked"
-                  :state="contentOf(activeFilePath(surfaceId))"
+                  :window-id="activeFileWindow(surfaceId)?.id ?? ''"
+                  :state="contentOf(activeFileWindow(surfaceId)?.id ?? '')"
                   :path="activeFilePath(surfaceId)"
-                  :project-name="currentProjectName"
-                  :chip-state="entryStateOfPath(activeFilePath(surfaceId))"
+                  :project-name="projectNameOf(activeFileWindow(surfaceId)?.content.projectId ?? '')"
+                  :chip-state="entryStateOfTab(fileContentOf(activeFileWindow(surfaceId)))"
                   :can-confirm="true"
                   :is-focused="activeFileWindow(surfaceId)?.id === focusedWindowId"
                   :cascade="0"
@@ -1937,7 +2018,7 @@ onBeforeUnmount(() => {
                   :flip-from="dockFlip?.id === activeFileWindow(surfaceId)?.id ? (dockFlip?.rect ?? null) : null"
                   @close="closeFileTab(activeFileWindow(surfaceId)?.id ?? '')"
                   @focus="focusFileWindow(activeFileWindow(surfaceId)?.id ?? '')"
-                  @retry="retryFile(activeFilePath(surfaceId))"
+                  @retry="retryFile(activeFileWindow(surfaceId)?.id ?? '')"
                   @resolve="resolveFileConfirmation"
                   @rect-change="onFileRectChange(activeFileWindow(surfaceId)?.id ?? '', $event)"
                   @float="floatFileWindow(activeFileWindow(surfaceId)?.id ?? '')"
@@ -2000,10 +2081,11 @@ onBeforeUnmount(() => {
         <FilePanel
           v-if="win.content.kind === 'file'"
           mode="floating"
-          :state="contentOf(windowPath(win))"
+          :window-id="win.id"
+          :state="contentOf(win.id)"
           :path="windowPath(win)"
-          :project-name="currentProjectName"
-          :chip-state="entryStateOfPath(windowPath(win))"
+          :project-name="projectNameOf(win.content.projectId)"
+          :chip-state="entryStateOfTab(fileContentOf(win))"
           :can-confirm="true"
           :is-focused="win.id === focusedWindowId"
           :cascade="index"
@@ -2014,7 +2096,7 @@ onBeforeUnmount(() => {
           :flip-from="flipFromOf(win.id)"
           @close="closeFileWindow(win.id)"
           @focus="focusFileWindow(win.id)"
-          @retry="retryFile(windowPath(win))"
+          @retry="retryFile(win.id)"
           @resolve="resolveFileConfirmation"
           @rect-change="onFileRectChange(win.id, $event)"
           @dock="dockFileWindow(win.id, $event)"
@@ -2024,7 +2106,10 @@ onBeforeUnmount(() => {
         />
         <ChatPanel
           v-else
+          :window-id="win.id"
           :session-id="chatSessionIdOf(win)"
+          :project-name="projectNameOf(win.content.projectId)"
+          :identity-class="projectIdentityClassOf(win.content.projectId)"
           :title="windowLabel(win.id)"
           :runtime="runtimeFor(chatSessionIdOf(win))"
           :user-name="userName"
@@ -2067,6 +2152,25 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
+    <!-- 新建对话的**归属选择**:区域为空 / 引导页且有多个已打开项目时,列出项目让用户选 ——
+         平权之后没有「当前项目」,宁可多问一步,也不产生「无归属」的会话。 -->
+    <template v-if="newChatChooserSurfaceId !== null">
+      <div class="workspace-backdrop" aria-hidden="true" @click="newChatChooserSurfaceId = null" />
+      <div class="project-chooser" role="dialog" aria-modal="true" :aria-label="t.workspace.newChatProject">
+        <h2 class="project-chooser__title">{{ t.workspace.newChatProject }}</h2>
+        <p class="project-chooser__hint">{{ t.workspace.newChatProjectHint }}</p>
+        <ul class="project-chooser__list">
+          <li v-for="project in projects" :key="project.id" class="project-chooser__item" :class="identityClassOf(project.path)">
+            <button type="button" class="workspace-button project-chooser__button" @click="chooseNewChatProject(project.id)">
+              <span class="project-dot" aria-hidden="true" />
+              <span class="project-chooser__name">{{ project.name }}</span>
+              <span class="project-chooser__path">{{ project.path }}</span>
+            </button>
+          </li>
+        </ul>
+        <button type="button" class="workspace-button project-chooser__cancel" @click="newChatChooserSurfaceId = null">{{ t.workspace.pickerCancel }}</button>
+      </div>
+    </template>
     <!-- 全页两条礼貌播报通道(各一条):tab 重排(aria-live,只挂属性不加 role=status)与
          区域 / 窗体变化(role=status)。它们都住在页面级 —— 与 h1 同理,不能住在某个区域的会话头里。 -->
     <span class="workspace-tab-live" aria-live="polite">{{ tabAnnounce }}</span>
@@ -2140,12 +2244,18 @@ onBeforeUnmount(() => {
 .workspace-projects { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
 .project-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .project-list { display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
-.project-row { position: relative; display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: var(--dl-space-2); border-inline-start: var(--dl-space-1) solid transparent; border-radius: var(--dl-radius-sm); }
-.project-item.is-current .project-row { border-inline-start-color: var(--dl-accent); background: var(--dl-accent-soft); }
-.project-row__button { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--dl-space-1); padding-inline-start: var(--dl-space-1); min-height: var(--dl-target-size); text-align: left; border-radius: var(--dl-radius-sm); }
-.project-row__mark { flex-shrink: 0; color: var(--dl-text-tertiary); }
+/* 项目之间留**可读的分隔**:发丝线 + 间距(不只靠缩进)。首项之上不画线。 */
+.project-item + .project-item { border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-start: var(--dl-space-2); }
+/* 项目行**粘性吸附**:滚动时项目名吸在侧栏滚动容器顶部,直到它的子树滚出(它的 .project-item 里)。
+   sticky 需要不透明的底,否则下方的文件行会从背后透出来;层序走 --dl-z-sticky(不就地写数值)。
+   祖先 .project-scroll 有 overflow-y:auto、.workspace-sidebar 有 overflow:hidden —— sticky 相对
+   滚动容器定位,注意别被裁:行本身不超出滚动容器,故不受 hidden 影响。 */
+.project-row { position: sticky; inset-block-start: 0; z-index: var(--dl-z-sticky); display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: var(--dl-space-2); background: var(--dl-bg-elevated); border-radius: var(--dl-radius-sm); }
+.project-row__button { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--dl-space-2); padding-inline-start: var(--dl-space-1); min-height: var(--dl-target-size); text-align: left; border-radius: var(--dl-radius-sm); }
+/* 项目色点:归属的**颜色通道**(第二通道)。只作图形,不填整块区域、不作文字色 ——
+   var(--dl-identity) 由所在元素的 .dl-identity-N 绑定类给出(见 style.css 与 design-language ④)。 */
+.project-dot { flex-shrink: 0; inline-size: var(--dl-identity-dot-size); block-size: var(--dl-identity-dot-size); border-radius: var(--dl-radius-pill); background: var(--dl-identity); }
 .project-row__name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--dl-font-size-sm); font-weight: 600; color: var(--dl-text-primary); }
-.project-row__button[aria-current='true'] .project-row__name { color: var(--dl-accent); }
 .project-row__slot { flex-shrink: 0; width: var(--dl-target-size); height: var(--dl-target-size); }
 .project-row__caret { flex-shrink: 0; color: var(--dl-text-secondary); }
 .project-row__button:focus-visible, .entry-row__button:focus-visible { box-shadow: var(--dl-focus-ring); }
@@ -2255,6 +2365,31 @@ onBeforeUnmount(() => {
    一律不设 z-index;第 2 层文件窗体(可覆盖上述全部)取 calc(--dl-z-overlay + n);模态再压窗体。
    输入坞已随对话窗体回到第 1 层,故这里不写 z-index —— 文件窗体可以盖住它。 */
 .workspace-backdrop { position: fixed; inset: 0; z-index: var(--dl-z-overlay); background: color-mix(in srgb, var(--dl-bg-sunken) 80%, transparent); }
+/* 新建对话的归属选择浮层:居中一张小面板,列出每个已打开项目(色点 + 名称 + 路径)。
+   它只解决「推断不出归属」这一种情形,故只在多项目 + 区域为空时出现。 */
+.project-chooser {
+  position: fixed;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  z-index: var(--dl-z-modal);
+  display: flex;
+  flex-direction: column;
+  gap: var(--dl-space-3);
+  inline-size: min(360px, calc(100vw - 2 * var(--dl-space-8)));
+  padding: var(--dl-space-4);
+  background: var(--dl-bg-elevated);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-xl);
+  box-shadow: var(--dl-shadow-lg);
+}
+.project-chooser__title { font-size: var(--dl-font-size-lg); font-weight: 600; color: var(--dl-text-primary); }
+.project-chooser__hint { font-size: var(--dl-font-size-sm); color: var(--dl-text-secondary); }
+.project-chooser__list { display: flex; flex-direction: column; gap: var(--dl-space-1); }
+.project-chooser__button { width: 100%; justify-content: flex-start; gap: var(--dl-space-3); }
+.project-chooser__name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+.project-chooser__path { flex-shrink: 0; max-inline-size: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); color: var(--dl-text-tertiary); }
+.project-chooser__cancel { align-self: flex-end; }
 @media (max-width: 1023px) {
   .workspace-page { --workspace-tree-row-height: var(--dl-target-size);
     --workspace-avatar-size: var(--dl-icon-lg);

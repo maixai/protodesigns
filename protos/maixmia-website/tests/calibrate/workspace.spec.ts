@@ -2232,62 +2232,46 @@ test('回归路径②:?s=waiting 换 Agent 或新建对话后状态词离开「�
 // 点已展开的行 = 折叠(仍保持选中)。上一轮照 Primer 做的「chevron / 名称两段式」已下线,
 // 故这里是**语义替换**而非放宽:原两条「两态独立」的断言不可能再成立(展开与选中由同一次
 // 点击一起决定),新断言锁的是单展开不变量 —— 至多一个项目展开,且展开者必为当前选中者。
-test('项目行单控件:选中与展开一起切换,至多一个展开、展开者即选中者', async ({ page }) => {
+// 项目行**单控件**(本轮改动):整行一个按钮,点一次只 toggle **它自己**的展开态 ——
+// 多项目可同时展开、互不影响。单展开 + 选中语义已随「平权」废除(不再有「当前项目」)。
+test('项目行:多个项目可同时展开、互不影响,点击只 toggle 自己', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   const items = page.locator('.project-item')
   const rowButton = (index: number) => items.nth(index).locator('.project-row__button')
-  // 单展开不变量:展开集至多一个成员,且凡展开者必带 aria-current。
-  const expectSingleExpand = async (label: string): Promise<void> => {
-    const states = await items.evaluateAll((els) => els.map((el) => {
-      const button = el.querySelector('.project-row__button')
-      return {
-        expanded: button?.getAttribute('aria-expanded') === 'true',
-        current: button?.getAttribute('aria-current') === 'true',
-      }
-    }))
-    expect(states.filter((state) => state.expanded).length, `${label}:展开的项目数`).toBeLessThanOrEqual(1)
-    for (const state of states) if (state.expanded) expect(state.current, `${label}:展开者即选中者`).toBe(true)
-  }
 
-  // 初始:首个项目选中且展开,第二个两者皆否。
+  // 初始:首个项目展开(装载时自动展开第一条),第二个未展开。
   await expect(rowButton(0)).toHaveAttribute('aria-expanded', 'true')
-  await expect(rowButton(0)).toHaveAttribute('aria-current', 'true')
   await expect(rowButton(1)).toHaveAttribute('aria-expanded', 'false')
-  await expect(rowButton(1)).not.toHaveAttribute('aria-current', 'true')
-  await expectSingleExpand('初始')
   // 可访问名就是项目名;aria-controls 指向自己的树容器。
   await expect(rowButton(0)).toHaveText(PROJECT_NAMES.planning[0].toString())
   await expect(rowButton(0)).toHaveAttribute('aria-controls', `project-tree-${PROJECT_NAMES.planning[0]}`)
 
-  // 点未展开的第二行:它变展开 + 变当前,第一行被折叠。
+  // 点未展开的第二行:它自行展开,**不动第一个**(多项目同时展开)。
   await rowButton(1).click()
   await expect(rowButton(1)).toHaveAttribute('aria-expanded', 'true')
-  await expect(rowButton(1)).toHaveAttribute('aria-current', 'true')
-  await expect(rowButton(0)).toHaveAttribute('aria-expanded', 'false')
-  await expect(rowButton(0)).not.toHaveAttribute('aria-current', 'true')
-  await expectSingleExpand('展开第二个')
+  await expect(rowButton(0)).toHaveAttribute('aria-expanded', 'true')
+  await expect(items.nth(0).locator('.project-tree')).toBeVisible()
+  await expect(items.nth(1).locator('.project-tree')).toBeVisible()
 
-  // 再点已展开的第二行:折叠,但**仍是当前项目**。
+  // 再点已展开的第二行:只折叠它自己,第一个仍展开。
   await rowButton(1).click()
   await expect(rowButton(1)).toHaveAttribute('aria-expanded', 'false')
-  await expect(rowButton(1)).toHaveAttribute('aria-current', 'true')
-  await expectSingleExpand('折叠第二个')
+  await expect(rowButton(0)).toHaveAttribute('aria-expanded', 'true')
 
-  // 造第三个项目(打开 api-server,自动选中并展开),再做「三项目来回点」的不变量核对。
+  // 造第三个项目(打开 api-server,自动展开);三项目可并存地同时展开。
   await page.getByRole('button', { name: '打开项目', exact: true }).click()
   const dialog = page.locator('dialog.picker')
   await dialog.locator('.picker__item', { hasText: 'api-server' }).locator('.picker__check').check()
   await dialog.getByRole('button', { name: '打开', exact: true }).click()
   await expect(items).toHaveCount(3)
-  await expectSingleExpand('打开第三个后')
-  for (const index of [0, 2, 1, 0, 2]) {
-    await rowButton(index).click()
-    await expect(rowButton(index)).toHaveAttribute('aria-expanded', 'true')
-    await expect(rowButton(index)).toHaveAttribute('aria-current', 'true')
-    await expectSingleExpand(`切到第 ${index} 个项目`)
-  }
+  await expect(items.filter({ hasText: 'api-server' }).locator('.project-row__button'), '新项目自动展开').toHaveAttribute('aria-expanded', 'true')
+  await expect(rowButton(0), '原有项目不受影响').toHaveAttribute('aria-expanded', 'true')
+  // 此刻展开集 = {weekly-report, api-server}(第二个此前被折叠)→ 两个并存,互不影响。
+  await expect(rowButton(1)).toHaveAttribute('aria-expanded', 'false')
+  const expanded = await items.locator('.project-row__button').evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')))
+  expect(expanded.filter((value) => value === 'true').length, '多项目同时展开').toBe(2)
 })
 
 // 缩进与对齐(本轮改动):逐层 8px;同层目录行与文件行标签左缘相等;导引线是装饰性的。
@@ -2394,23 +2378,23 @@ test('chevron 位置:项目行在行右半,树目录行在行左半', async ({ p
   expect(dirCaret.x - (dirBox.x + dirBox.width / 2), '树目录行 chevron 在行左半').toBeLessThan(0)
 })
 
-test('项目专属前导记号:16px、aria-hidden;树里图标数为 0', async ({ page }) => {
+test('项目专属前导记号:色点 10px、aria-hidden;树里图标数为 0', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  const mark = page.locator('.project-item').nth(0).locator('.project-row__mark')
+  const mark = page.locator('.project-item').nth(0).locator('.project-dot')
   await expect(mark).toHaveCount(1)
   await expect(mark).toHaveAttribute('aria-hidden', 'true')
   const box = await mark.boundingBox()
-  expect(box, '记号有几何盒').not.toBeNull()
+  expect(box, '色点有几何盒').not.toBeNull()
   if (box === null) return
-  expect(Math.abs(box.width - 16), '记号宽 16').toBeLessThanOrEqual(1)
-  expect(Math.abs(box.height - 16), '记号高 16').toBeLessThanOrEqual(1)
-  // 树里没有任何图标元素(dl-icon)—— 这一个记号因此是项目行独有的最强区分信号。
+  expect(Math.abs(box.width - 10), '色点宽 10(--dl-identity-dot-size)').toBeLessThanOrEqual(1)
+  expect(Math.abs(box.height - 10), '色点高 10').toBeLessThanOrEqual(1)
+  // 树里没有任何图标元素(dl-icon)—— 项目行只靠色点 + 名称区分。
   await expect(page.locator('.project-tree .dl-icon')).toHaveCount(0)
 })
 
-test('展开脊线:与记号列左缘 / level-1 caret 列左缘同一竖线;折叠时消失', async ({ page }) => {
+test('展开脊线:与 level-1 caret 列左缘同一竖线;折叠时消失', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -2419,17 +2403,12 @@ test('展开脊线:与记号列左缘 / level-1 caret 列左缘同一竖线;折�
   const ridge = tree.locator('.project-ridge')
   await expect(ridge, '展开项目的脊线在场').toBeVisible()
   const ridgeBox = await ridge.boundingBox()
-  const markBox = await row.locator('.project-row__mark').boundingBox()
   const dirCaret = await tree.locator('.entry-row[data-kind="directory"]').first().locator('.tree-caret').boundingBox()
   expect(ridgeBox, '脊线有几何盒').not.toBeNull()
-  expect(markBox, '记号有几何盒').not.toBeNull()
   expect(dirCaret, 'level-1 caret 有几何盒').not.toBeNull()
-  if (ridgeBox === null || markBox === null || dirCaret === null) return
-  // 脊线 x = 记号列左缘 = 树 level-1 目录行 caret 列左缘(= 树逐级导引线所在的 8px 竖线)。
-  // 说明:设计要点原文写「记号右缘」;但脊线若落在记号右缘(24px)会横穿 level-2 的 caret
-  // 列 [16,32],且不与树的导引线共线(导引线在 8px)。按要点自带的「结构性不成立时按实际
-  // 成立的那条断言并在注释写明原因」处理:对齐到三条竖线真正共线的位置 —— 记号的**左缘**。
-  expect(Math.abs(ridgeBox.x - markBox.x), '脊线 x = 记号列左缘').toBeLessThanOrEqual(1)
+  if (ridgeBox === null || dirCaret === null) return
+  // 脊线 x = 树 level-1 目录行 caret 列左缘(= 树逐级导引线所在的 8px 竖线),
+  // 即脊线与树的导引线共线。项目行改为「色点 + 名称」后不再有记号列,故只对树这一条断言。
   expect(Math.abs(ridgeBox.x - dirCaret.x), '脊线 x = 树 level-1 caret 列左缘').toBeLessThanOrEqual(1)
   // 折叠后期容器 v-show 隐藏,脊线随之消失。
   await row.locator('.project-row__button').click()
@@ -2710,20 +2689,19 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(page.locator('.project-menu__item')).toHaveCount(0)
   await expect(trigger).toBeFocused()
   await expect(items).toHaveCount(2)
-  // 键盘打开 + 触发关闭(关掉**当前**项目,最坏情况:既要从列表移除,也要让选中项落到
-  // 剩下的项目上 —— Bug 常出在「连带移除」或「关掉后选中项悬空」)。
+  // 键盘打开 + 触发关闭。关闭项目会**连带关掉它在该 Agent 下 tab 区与悬浮层的所有窗口**
+  // (weekly-report 的 6 段会话都在根区域),并把「已关闭项目 X」与「关闭了 N 个窗口」合成一条播报。
   await page.keyboard.press('Enter')
   const closeItem = page.locator('.project-menu__item')
   await expect(closeItem).toBeVisible()
   await closeItem.click()
-  // 只移除被关的那一个:另一个项目仍在,且被选中项落到它上面。
+  // 只移除被关的那一个:另一个项目仍在。
   await expect(items).toHaveCount(1)
   await expect(projects).toContainText(PROJECT_NAMES.planning[1])
   await expect(projects).not.toContainText(PROJECT_NAMES.planning[0])
-  await expect(items.first().locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
-  // 新当前项目(knowledge-base)没有会话:区域既无成员又无子区域 → 渲染**引导页**;
-  // h1 随之等于引导页的标题(而不是「新建对话」—— 引导页上的大标题与 h1 必须对得上,
-  // 否则读屏用户听到的页面标题与屏幕上的标题不一致)。
+  // 连带关闭:weekly-report 的窗口都被关掉,根区域随之被摘空 → 渲染**引导页**;
+  // h1 随之等于引导页的标题(而不是「新建对话」—— 引导页上的大标题与 h1 必须对得上)。
+  await expect(page.locator('.workspace-live'), '关闭项目合成一条播报').toHaveText(/已关闭项目「weekly-report」.*关闭了 6 个窗口/)
   await expect(page.locator('.onboarding')).toHaveCount(1)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('这里还没有打开的窗口')
   // 再关掉最后一个:没有项目可归属时侧栏给空态,遥测的项目项随之下线(不留上一个项目的假信息)。
@@ -2757,13 +2735,13 @@ test('打开项目:搜索过滤 → 勾选 → 打开后进入侧栏并自动选
   // 关闭后焦点归还触发钮。
   await expect(dialog).not.toBeVisible()
   await expect(openButton).toBeFocused()
-  // 新项目进入侧栏,并被**自动选中**;会话切到它 —— 它没有会话 ⇒ 根区域既无成员又无子区域 ⇒
-  // 引导页(没有转录,故 role="log" 为 0)。
+  // 新项目进入侧栏并**自动展开**(不再有「选中」语义 —— 平权之后多个项目可同时展开)。
   await expect(page.locator('.project-item')).toHaveCount(3)
   const added = page.locator('.project-item').filter({ hasText: 'api-server' })
-  await expect(added.locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
-  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
-  await expect(page.getByRole('log'), '引导页不是转录').toHaveCount(0)
+  await expect(added.locator('.project-row__button')).toHaveAttribute('aria-expanded', 'true')
+  // 它没有会话,但**其它项目的会话仍在显示中** —— 故不是引导页,根区域照旧显示原来的对话。
+  await expect(page.getByRole('log')).toHaveCount(1)
+  await expect(page.locator('.onboarding'), '有会话在显示 → 不是引导页').toHaveCount(0)
 })
 
 test('打开项目对话框:取消 / Esc 关闭并归还焦点', async ({ page }) => {
@@ -2787,29 +2765,33 @@ test('打开项目对话框:取消 / Esc 关闭并归还焦点', async ({ page }
   await expect(page.locator('.project-item')).toHaveCount(2)
 })
 
-test('会话按项目隔离:只显示当前项目的会话,无会话项目显示空态', async ({ page }) => {
+// 会话按 **Agent** 装载(跨它已打开的项目):平权之后没有「当前项目」,同一 Agent 下不同项目的
+// 会话共存于同一张 tab 表;别的 Agent 的会话不在此列。
+test('会话按 Agent 装载(跨它已打开的项目):菜单列出本 Agent 的会话,不含其它 Agent 的', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  // 项目 A(weekly-report):6 条会话(其中一段正显示 → 菜单里 5 条),且不含其它项目的会话标题。
+  // weekly-report 的 6 条会话(其中一段正显示 → 菜单里 5 条);不含其它 Agent 的会话标题。
   await openSwitcher(page)
   await expect(page.locator('.session-item')).toHaveCount(5)
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].research)
   await expect(page.locator(SWITCHER_PANEL)).not.toContainText(HEADINGS['zh-CN'].knowledge)
   await closeSwitcher(page)
-  // 切到项目 B(knowledge-base):它没有会话 ⇒ 根区域既无成员又无子区域 ⇒ 引导页,旧项目的会话不再出现。
-  await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
-  await expect(page.getByRole('log'), '引导页不是转录').toHaveCount(0)
-  await expect(page.locator('.workspace-projects')).not.toContainText(HEADINGS['zh-CN'].weekly)
-  await expect(page.locator('[data-message-id="weekly-1"]')).toHaveCount(0)
+  // 展开第二个项目(knowledge-base)只是展开它自己的树 —— **不影响** tab 区
+  // (不再有「切当前项目 ⇒ 换掉全部会话」)。它没有文件,故树里给空态提示。
+  const second = page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] })
+  await second.locator('.project-row__button').click()
+  await expect(second.locator('.project-tree')).toBeVisible()
+  await expect(page.getByRole('log'), 'tab 区不变').toHaveAttribute('data-state', 'ready')
+  await expect(page.locator(TAB, { hasText: HEADINGS['zh-CN'].weekly })).toHaveCount(1)
+  await expect(page.locator('.onboarding'), '不是引导页').toHaveCount(0)
 })
 
-test('端到端:项目 A 下新建会话,切到项目 B 时不出现,切回 A 仍在', async ({ page }) => {
+test('端到端:在同一 Agent 下新建会话,展开别的项目不丢它(tab 区不再随项目变)', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  // 在项目 A(weekly-report)下新建并发送。
+  // 在 weekly-report(首个项目)下新建并发送。
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请整理一下本季度的目标。')
@@ -2820,17 +2802,14 @@ test('端到端:项目 A 下新建会话,切到项目 B 时不出现,切回 A �
   await expect(page.locator('.session-item')).toHaveCount(6)
   await expect(page.locator('.session-item', { hasText: '请整理一下本季度的目标。' }), '当前显示的新会话不在列表里').toHaveCount(0)
   await closeSwitcher(page)
-  // 等保存收尾:保存中会短暂锁住项目 / 会话切换(与既有「生成中不可切」同一把锁)。
+  // 等保存收尾:保存中会短暂锁住切换(与既有「生成中不可切」同一把锁)。
   await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).not.toHaveAttribute('readonly', '')
-  // 切到项目 B(knowledge-base):项目无会话 ⇒ 引导页;新会话归属 A,不出现在 B。
-  await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
-  await expect(page.locator('.workspace-projects')).not.toContainText('请整理一下本季度的目标。')
-  // 切回项目 A:新会话仍在。
-  await page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[0] }).locator('.project-row__button').click()
-  await openSwitcher(page)
-  await expect(page.locator('.session-item')).toHaveCount(6)
-  await expect(page.locator('.session-item', { hasText: '请整理一下本季度的目标。' })).toHaveCount(0)
+  // 展开第二个项目(knowledge-base):只是展开树,**不动** tab 区 —— 新会话仍在。
+  const second = page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] })
+  await second.locator('.project-row__button').click()
+  await expect(second.locator('.project-tree')).toBeVisible()
+  await expect(page.locator(TAB, { hasText: '请整理一下本季度的目标。' }), 'tab 区不变,新会话仍在').toHaveCount(1)
+  await expect(page.locator('.onboarding'), '不是引导页').toHaveCount(0)
 })
 
 // ============================================================================
@@ -2937,11 +2916,12 @@ test('从菜单选中 waiting 的 quarterly:其确认卡出现、等待你组消
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(QUARTERLY['zh-CN'])
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator(TAB, { hasText: QUARTERLY['zh-CN'] })).toHaveAttribute('aria-selected', 'true')
-  // 重新打开:只剩「本项目」组,无「等待你」组。
+  // 重新打开:只剩**按项目分组**那一组,无「等待你」组。
   await openSwitcher(page)
   await expect(page.locator('.conversation-group')).toHaveCount(1)
   // quarterly 现在是**当前显示**的那段 → 隐去;product-docs 的 3 段里列出 2 段。
-  await expect(page.locator('.conversation-group__title')).toHaveText(/本项目.*2/)
+  // 组头 = 「项目名 · 条数」(平权之后按项目分组,不再是「本项目」)。
+  await expect(page.locator('.conversation-group__title')).toHaveText(/product-docs.*2/)
   await expect(page.locator('.conversation-group__title', { hasText: '等待你' })).toHaveCount(0)
   await closeSwitcher(page)
   // 跨区域一致:转录里是**它自己**的确认卡,pending 芯片是它的受影响文件,遥测说等待确认。
@@ -5129,7 +5109,7 @@ test('文件面板缩放:四边分隔条按 APG、四角 44×44、拖动 / 方�
   }, { message: 'aria-valuenow 与渲染宽一致' }).toBeLessThanOrEqual(1)
 })
 
-test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟着分域走,切回来原样恢复', async ({ page }) => {
+test('文件窗口按 **Agent** 分域:切 Agent 换一整套 tab / 浮层,切回来原样恢复', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -5141,54 +5121,39 @@ test('文件窗口按 (Agent, 项目) 分域:悬浮窗几何 + 条上 tab 都跟
   expect(headerBox, '悬浮窗标题栏有几何盒').not.toBeNull()
   if (headerBox !== null) await dragFromTo(page, headerBox.x + headerBox.width / 2, headerBox.y + headerBox.height / 2, 40, 20)
   const placed = await panelRectOf(page, README)
-  console.log(`[file domain] 摆好的悬浮窗 ${JSON.stringify(placed)}`)
   await clickFileRow(page, PROGRESS)
   await dockLastFloating(page)
   await expect(page.locator(FILE_TAB)).toHaveCount(1)
 
-  // 换会话(同项目、同 Agent = 同一分域)→ 条上的 tab 不变。
-  // 注意:点对话 tab 属于「显示一个停靠窗体」的动作 —— 盖在区域上的悬浮窗会**让位收起**
-  // (见「遮挡让位」一组用例)。收起只改 visible,几何仍留在本域里,故下面切回来还能原样恢复。
+  // 换会话(同 Agent = 同一分域)→ 条上的 tab 不变。注意:点对话 tab 属于「显示一个停靠窗体」的动作
+  // —— 盖在区域上的悬浮窗会**让位收起**(只改 visible,几何仍留在本域里,故切回来还能原样恢复)。
   await clickTab(page, HEADINGS['zh-CN'].roadmap)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '换会话后 tab 不变').toHaveCount(1)
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '盖在区域上的悬浮窗让位收起').toHaveCount(0)
 
-  // 换项目(knowledge-base)—— 分域换成新的一对 → 条上与浮层里都不再有旧域的东西。
-  // 新域没有会话 ⇒ 根区域既无成员又无子区域 ⇒ 引导页(没有转录,故不能等 role="log")。
-  await page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button').click()
-  await expect(page.locator('.onboarding'), '无会话项目 → 引导页').toHaveCount(1)
-  await expect(page.locator(FILE_TAB), '换项目即换域,条上不再有旧域的文件').toHaveCount(0)
+  // 换 Agent(research)—— 分域换成 research 的布局:条上与浮层里都不再有 planning 的东西。
+  await selectAgent(page, AGENT_NAMES['zh-CN'].research)
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+  await expect(page.locator(FILE_TAB), '换 Agent 即换域,条上不再有旧域的文件').toHaveCount(0)
   await expect(page.locator(FILE_PANEL), '浮层里也不再有旧域的窗口').toHaveCount(0)
-  // 侧栏仍是范围指示的一半(本批不做 Agent 栏,故只断言侧栏这一半)。
-  await expect(page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-row__button')).toHaveAttribute('aria-current', 'true')
 
-  // 在新域里开一个文件并停靠 → 条上只有它。
-  const tree = page.locator('.project-item', { hasText: PROJECT_NAMES.planning[1] }).locator('.project-tree')
-  await tree.locator('.entry-row[data-kind="directory"]', { hasText: 'docs' }).first().locator('.entry-row__button').click()
-  await openDockedFile(page, 'index.md')
-  await expect(page.locator(FILE_TAB)).toHaveCount(1)
-  const labels = await fileTabLabels(page)
-  console.log(`[file bar] 新域 tab ${JSON.stringify(labels)}`)
-  expect(labels, '新域只有新域的文件').toEqual(['index.md'])
-
-  // 切回第一个项目 → 旧域**原样恢复**:tab 与悬浮窗都在,悬浮窗回到记忆的几何。
-  await page.locator('.project-item', { hasText: PROJECT_NAMES.planning[0] }).locator('.project-row__button').click()
-  await waitForStable(page)
+  // 切回 planning → 旧域**原样恢复**:tab 与悬浮窗都在,悬浮窗回到记忆的几何。
+  await selectAgent(page, AGENT_NAMES['zh-CN'].planning)
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator(`${FILE_TAB}[data-file-path="progress.csv"]`), '切回来旧域的 tab 原样恢复').toHaveCount(1)
-  await expect(page.locator(FILE_TAB), '恢复的是旧域那一份,不掺新域').toHaveCount(1)
+  await expect(page.locator(FILE_TAB), '恢复的是旧域那一份').toHaveCount(1)
   // 悬浮窗此前被「让位收起」,从侧栏重新打开它 → 回到本域记忆的几何(收起 ≠ 删除)。
   await clickFileRow(page, README)
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"][data-file-path="README.md"]`), '悬浮窗也原样恢复').toHaveCount(1)
   await expect.poll(async () => Math.round((await panelRectOf(page, README)).x), { message: '悬浮窗恢复的位置与原分域一致' }).toBe(Math.round(placed.x))
   const restored = await panelRectOf(page, README)
-  console.log(`[file domain] 恢复后的悬浮窗 ${JSON.stringify(restored)}`)
   expect(Math.abs(restored.y - placed.y), '纵向也一致').toBeLessThanOrEqual(1)
   expect(Math.abs(restored.width - placed.width), '宽度也一致').toBeLessThanOrEqual(1)
   expect(Math.abs(restored.height - placed.height), '高度也一致').toBeLessThanOrEqual(1)
 })
 
-test('文件 tab:主标签是文件名、条内不出现项目名(分域之后项目是重复信息)', async ({ page }) => {
+test('文件 tab:主标签是文件名 + 项目缩写前缀(跨项目归属),title 写全出处', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -5198,34 +5163,20 @@ test('文件 tab:主标签是文件名、条内不出现项目名(分域之后�
 
   // 主标签 = **文件名**。
   await expect(tab.locator('.file-tab__label'), '主标签是文件名').toHaveText('README.md')
-  // 负向断言:条内不再有项目标识 / 项目名文本(第九轮撤销跨项目后,"再标一次项目"是重复信息)。
-  await expect(page.locator('.file-tab__mark'), '项目首字标识已删除').toHaveCount(0)
-  const barText = await page.locator(FILE_BAR).innerText()
-  console.log(`[file tab] 栏内文本 ${JSON.stringify(barText)}`)
-  expect(barText, '条内不出现项目名').not.toContain(PROJECT_NAMES.planning[0])
-  expect(barText, '条内不出现项目名').not.toContain(PROJECT_NAMES.planning[1])
+  // 归属的**文字通道**:文件名之前是项目的 2–4 字符缩写(weekly-report → WR)。
+  // 打开集跨项目,同名文件必须能一眼分辨来自哪个项目;文字不依赖颜色,故色觉障碍下仍读得出。
+  await expect(tab.locator('.file-tab__mark'), '项目缩写前缀在场').toHaveText('WR')
+  // 归属的**颜色通道**:贴左缘的 3px 标识色条(由 .dl-identity-N 绑定类给出颜色)。
+  await expect(tab.locator('.file-tab__identity')).toHaveCount(1)
+  await expect(tab).toHaveClass(/dl-identity-\d+/)
 
-  // title = 「文件名 · 域内路径 · 打开方式」—— 项目名不再出现(项目由侧栏当前项目给出)。
+  // 悬停 title 写全出处:文件名 · **项目名** · 项目内路径。
   const title = await tab.getAttribute('title')
   console.log(`[file tab] title = ${JSON.stringify(title)}`)
   expect(title, 'title 含文件名').toContain('README.md')
-  expect(title, 'title 含域内完整路径').toContain('README.md')
+  expect(title, 'title 含项目名').toContain(PROJECT_NAMES.planning[0])
+  expect(title, 'title 含项目内路径').toContain('README.md')
   expect(title, 'title 的字段分隔符').toContain(' · ')
-  expect(title, 'title 不再重复项目名').not.toContain(PROJECT_NAMES.planning[0])
-
-  // 换到另一个项目(另一 Agent 的 benchmarks)→ 新域自己的 README,条上仍只有一条、仍不写项目名。
-  await selectAgent(page, AGENT_NAMES['zh-CN'].research)
-  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
-  await page.locator('.project-item', { hasText: PROJECT_NAMES.research[1] }).locator('.project-row__button').click()
-  await expect(page.locator('.project-item', { hasText: PROJECT_NAMES.research[1] }).locator('.entry-row[data-kind="file"]', { hasText: README })).toBeVisible()
-  await expect(page.locator(FILE_TAB), '换 Agent + 换项目 = 换域,条上先是空的').toHaveCount(0)
-  await openDockedFile(page, README)
-  await expect(page.locator(FILE_TAB)).toHaveCount(1)
-  const crossLabels = await fileTabLabels(page)
-  console.log(`[file tab] 新域标签 ${JSON.stringify(crossLabels)}`)
-  expect(crossLabels, '新域主标签仍是文件名').toEqual([README])
-  const crossText = await page.locator(FILE_BAR).innerText()
-  expect(crossText, '新域条内同样不写项目名').not.toContain(PROJECT_NAMES.research[1])
 })
 
 test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / Esc 收起 ≠ 删除 / 可覆盖输入区', async ({ page }) => {
@@ -5574,9 +5525,10 @@ test('最近关闭:只列**本域**的、两段式行(域内目录路径)、点�
   })))
   console.log(`[file menu] 行 ${JSON.stringify(rows)}`)
   expect(rows.length, '两条关闭的文件都在').toBe(2)
-  for (const row of rows) expect(row.path, '次行是域内目录路径').toBe('/')
+  // 次行 = **项目名 › 项目内目录路径**(打开集跨项目,出处必须写全;根目录用 '/' 占位)。
+  for (const row of rows) expect(row.path, '次行写全出处:项目名 › 目录').toBe('weekly-report › /')
   const panelText = await page.locator(SWITCHER_PANEL).innerText()
-  expect(panelText, '最近列表不写项目名').not.toContain(PROJECT_NAMES.planning[0])
+  expect(panelText, '最近列表写全项目名').toContain(PROJECT_NAMES.planning[0])
 
   // 点其中一条 → 窗口重新打开该文件,条上重新出现它的项(关闭 ≠ 删除)。
   await page.locator('.conversation-row[data-file-option]', { hasText: README }).click()
@@ -5629,8 +5581,8 @@ test('下拉「文件」页:列出全部已打开的文件(含条上可见的)�
   await expect(page.locator('.conversation-hint'), '非空时没有空文案').toHaveCount(0)
   await expect(page.locator('.conversation-group__title')).toHaveText(['已打开 · 1'])
   await expect(page.locator('.conversation-row__name').first()).toHaveText(README)
-  // 次行 = 域内目录路径(分域之后不再写项目名)。
-  await expect(page.locator('.conversation-row__path').first()).toHaveText('/')
+  // 次行 = 项目名 › 项目内目录路径(打开集跨项目,出处写全)。
+  await expect(page.locator('.conversation-row__path').first()).toHaveText('weekly-report › /')
   // 点「已可见」的那一行 = 显示它的窗口(不出错即可)。
   await page.locator('.conversation-row[data-file-option]').first().click()
   await expect(page.locator(SWITCHER_PANEL)).toHaveCount(0)
@@ -5643,7 +5595,8 @@ test('下拉「文件」页:列出全部已打开的文件(含条上可见的)�
   await openDockedFile(page, GITIGNORE)
   await page.locator('.project-item').nth(0).locator('.project-tree').locator('.entry-row[data-kind="directory"]', { hasText: 'notes' }).first().locator('.entry-row__button').click()
   await openDockedFile(page, '2026-W40.md')
-  const closing = await page.locator('.file-tab-slot').first().locator('.file-tab__label').innerText()
+  // 同上:用 textContent 取「关掉的是哪一枚」的标识,避开 WebKit 下被裁剪标签的 innerText 空串。
+  const closing = ((await page.locator('.file-tab-slot').first().locator('.file-tab__label').textContent()) ?? '').trim()
   await page.locator('.file-tab-slot').first().hover()
   await page.locator('.file-tab-slot').first().locator('.file-tab-close').click()
   await closeAllFileWindows(page)
@@ -6636,7 +6589,9 @@ test('在新区域的下拉里选一段仍在根区域的对话:搬进新区域,
   await expect(panes, '切出两块区域').toHaveCount(2)
   const root = panes.nth(0)
   const child = panes.nth(1)
-  const rootTitle = await root.locator(`${TAB}[aria-selected="true"] .conversation-tab__label`).innerText()
+  // 用 textContent 而非 innerText:标签在窄 tab 里会被 ellipsis 裁剪,WebKit 下 innerText
+  // 可能取到空串(该值只用作「哪段对话」的标识,与渲染无关)。
+  const rootTitle = ((await root.locator(`${TAB}[aria-selected="true"] .conversation-tab__label`).textContent()) ?? '').trim()
 
   // 在**子区域**的下拉里点那段此刻仍属于**根区域**的对话。
   // 它仍列在子区域的列表里 —— 被隐去的只有「本区域正在显示的那段」,不是「所有已打开的」。
@@ -7312,4 +7267,153 @@ test.describe('文件面板档位(英文)', () => {
     await expect(panel).toHaveAttribute('data-pane', 'source')
     await expect(panel.locator('.file-panel__editor .cm-editor')).toHaveCount(1)
   })
+})
+
+// ============================================================================
+// 本轮新增:多项目并行 —— 布局从「项目私有」变成「Agent 一份」。
+// 覆盖:跨项目同名文件并存、归属三通道、悬浮窗标题栏的真实归属、新建对话归属的三条分支。
+// ============================================================================
+
+// 打开候选目录并把它的树展开(返回它的项目项定位符)。
+async function openCandidateProject(page: Page, name: string): Promise<Locator> {
+  await page.getByRole('button', { name: '打开项目', exact: true }).click()
+  const dialog = page.locator('dialog.picker')
+  await dialog.locator('.picker__item', { hasText: name }).locator('.picker__check').check()
+  await dialog.getByRole('button', { name: '打开', exact: true }).click()
+  const item = page.locator('.project-item').filter({ hasText: name })
+  await expect(item).toHaveCount(1)
+  // 新打开的项目自动展开;保险起见若未展开则点一下。
+  if (await item.locator('.project-row__button').getAttribute('aria-expanded') !== 'true') {
+    await item.locator('.project-row__button').click()
+  }
+  await expect(item.locator('.project-tree')).toBeVisible()
+  return item
+}
+
+test('跨项目同名文件:两个项目各开一份 README.md,两个窗体 / 两个 tab 并存、内容不同', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // api-server 是新打开的项目,它被 mock 生成一份**自己的** README.md(与 weekly-report 的不同)。
+  const apiItem = await openCandidateProject(page, 'api-server')
+  expect(apiItem).toBeTruthy()
+
+  // 先开 weekly-report 的 README(第一个 README 行)并停靠 → 条上第一枚。
+  await clickFileRow(page, README)
+  await dockLastFloating(page)
+  await expect(page.locator(FILE_TAB)).toHaveCount(1)
+  // 再开 api-server 的 README(它的树里的 README 行)→ 悬浮。
+  await apiItem.locator('.entry-row[data-kind="file"]', { hasText: README }).first().locator('.entry-row__button').click()
+
+  // **两个 README 窗体并存** —— 复合键(file://<项目>/README.md)把项目编进了窗体身份,
+  // 裸路径会让两份 README 解析成同一个窗体、互相顶掉。一个停靠、一个悬浮,故共两个面板。
+  await expect(page.locator(FILE_PANEL), '两份 README 是两个独立窗体').toHaveCount(2)
+  // 两个窗体的**复合 id 不同**(各带自己的项目)。
+  const ids = await page.locator(FILE_PANEL).evaluateAll((els) => els.map((el) => el.getAttribute('data-window-id')))
+  expect(new Set(ids).size, '两个复合窗体 id').toBe(2)
+  expect(ids.every((id) => (id ?? '').endsWith('/README.md'))).toBe(true)
+
+  // 两份**内容不同**(各项目一份写实 README;mock 按 projectId::path 查表)。
+  await expect(page.locator(`${FILE_PANEL}[data-status="loading"]`), '两份都加载完').toHaveCount(0)
+  const heads = await page.locator(`${FILE_PANEL} .file-render--markdown h1`).allTextContents()
+  expect(new Set(heads), '两份 README 的标题各异').toEqual(new Set(['weekly-report', 'api-server']))
+
+  // 把 api-server 那份也停靠 → 条上两枚同名 tab 并存(互不顶掉),各自带**不同**的项目缩写前缀。
+  await dockLastFloating(page)
+  await expect(page.locator(FILE_TAB), '两个同名 README 各占一枚 tab').toHaveCount(2)
+  const marks = await page.locator(`${FILE_TAB} .file-tab__mark`).allTextContents()
+  expect(new Set(marks), '两枚 tab 的归属前缀不同').toEqual(new Set(['WR', 'AS']))
+})
+
+test('归属三通道:tab 有项目缩写前缀 + 标识色条 + 悬停 title 写项目名', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const tab = page.locator(TAB, { hasText: HEADINGS['zh-CN'].weekly })
+  // ① 文字通道(主通道,色觉障碍下唯一可用):项目缩写前缀。
+  await expect(tab.locator('.conversation-tab__mark'), '缩写前缀承担文字通道').toHaveText('WR')
+  // ② 颜色通道:贴左缘的 3px 标识色条 + 外层 .dl-identity-N 绑定类(组件只引用角色层变量)。
+  await expect(tab.locator('.tab-identity')).toHaveCount(1)
+  await expect(tab).toHaveClass(/dl-identity-\d+/)
+  // ③ 悬停 title(补充通道):标题 + 项目名 + 状态词。
+  const title = await tab.getAttribute('title')
+  expect(title, 'title 含标题').toContain(HEADINGS['zh-CN'].weekly)
+  expect(title, 'title 含项目名').toContain(PROJECT_NAMES.planning[0])
+  // 侧栏项目行:色点(颜色通道)+ 名称(文字通道)。
+  const project = page.locator('.project-item').nth(0)
+  await expect(project.locator('.project-dot')).toHaveCount(1)
+  await expect(project.locator('.project-row__name')).toHaveText(PROJECT_NAMES.planning[0])
+})
+
+test('悬浮窗标题栏显示的是该文件**真实所属项目**(多项目下不再显示错)', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const apiItem = await openCandidateProject(page, 'api-server')
+  // 先开 api-server 的 README,再开 weekly-report 的 README。
+  await apiItem.locator('.entry-row[data-kind="file"]', { hasText: README }).first().locator('.entry-row__button').click()
+  await clickFileRow(page, README)
+  await expect(page.locator(FILE_PANEL)).toHaveCount(2)
+  // 两个标题栏各写**各自**的项目名(旧实现读「当前项目」,多项目下必然显示错)。
+  const labels = await page.locator(`${FILE_PANEL} .file-panel__project`).allTextContents()
+  expect(new Set(labels), '两个标题栏各写各的项目').toEqual(new Set(['weekly-report', 'api-server']))
+  await expect(page.locator(`${FILE_PANEL} .file-panel__path`).first()).toHaveText(README)
+})
+
+// 新建对话归属①:区域内的通用入口 → 归该区域**当前活动窗口**所属项目。
+test('新建对话归属①:区域内的 ＋ 归该区域当前活动窗口所属项目', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator('.conversation[data-surface-id]').first().getByRole('button', { name: '新建对话', exact: true }).click()
+  // 直接建,不弹选择;新会话的 tab 带 weekly-report 的缩写。
+  await expect(page.locator('.project-chooser')).toHaveCount(0)
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
+})
+
+// 新建对话归属②:区域为空 / 引导页 + **只有一个**已打开项目 → 直接归它(不弹选择)。
+test('新建对话归属②:只有一个已打开项目时直接归它,不弹选择', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 关掉第二个项目(knowledge-base)→ 只剩 weekly-report。
+  const kb = page.locator('.project-item').filter({ hasText: PROJECT_NAMES.planning[1] })
+  await kb.locator('.project-menu__trigger').click()
+  await page.locator('.project-menu__item').click()
+  await expect(page.locator('.project-item')).toHaveCount(1)
+  // 关掉根区域的所有 tab → 引导页。
+  for (let guard = 0; guard < 20; guard += 1) {
+    const slots = page.locator('.tab-slot')
+    if (await slots.count() === 0) break
+    await slots.first().hover()
+    await slots.first().locator('.tab-close').click()
+  }
+  await expect(page.locator('.onboarding')).toHaveCount(1)
+  await page.locator('.onboarding__primary').click()
+  await expect(page.locator('.project-chooser'), '唯一项目 → 不弹选择').toHaveCount(0)
+  await expect(page.locator('.onboarding')).toHaveCount(0)
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
+})
+
+// 新建对话归属③:区域为空 / 引导页 + 多个已打开项目 → 列出项目让用户选。
+test('新建对话归属③:多个已打开项目时列出项目让用户选', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  for (let guard = 0; guard < 20; guard += 1) {
+    const slots = page.locator('.tab-slot')
+    if (await slots.count() === 0) break
+    await slots.first().hover()
+    await slots.first().locator('.tab-close').click()
+  }
+  await expect(page.locator('.onboarding')).toHaveCount(1)
+  await page.locator('.onboarding__primary').click()
+  const chooser = page.locator('.project-chooser')
+  await expect(chooser, '多个项目 → 列出来让用户选').toHaveCount(1)
+  await expect(chooser.locator('.project-chooser__button')).toHaveCount(2)
+  // 选 weekly-report → 建一段归属它的会话,选择浮层收起。
+  await chooser.locator('.project-chooser__button', { hasText: PROJECT_NAMES.planning[0] }).click()
+  await expect(chooser).toHaveCount(0)
+  await expect(page.locator('.onboarding')).toHaveCount(0)
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
 })

@@ -35,6 +35,16 @@ export const workspace = {
   projectsError: 'Unable to load projects',
   openProject: 'Open project',
   closeProject: 'Close project',
+  // Closing a project: the "closed project X" and "also closed N windows" notices are composed
+  // into a single announcement (announcePlacement is a last-write-wins single channel).
+  closedProject: 'Closed project "{name}" · closed {count} windows',
+  // New-conversation ownership (there is no "current project" once projects are peers):
+  //   · newChatProject / newChatProjectHint — when the region is empty and several projects are
+  //     open, list the projects for the user to pick one;
+  //   · newChatNeedProject — when no project is open, prompt the user to open one first.
+  newChatProject: 'New conversation in which project?',
+  newChatProjectHint: 'No window here implies an owner. Pick a project to continue.',
+  newChatNeedProject: 'Open a project first, then start a conversation',
   // Accessible name of the project row's "⋯" action menu. (expandProject / collapseProject were
   // dropped when directory rows moved to a whole-row button with aria-expanded.)
   projectActions: 'Project actions',
@@ -81,7 +91,7 @@ export const workspace = {
   // The panel's two groups: the pinned "waiting on you" group (still waiting and not yet opened)
   // and the "this project" group (everything else).
   awaitingGroup: 'Waiting on you · {count}',
-  projectGroup: 'This project · {count}',
+  projectGroup: '{name} · {count}',
   you: 'You',
   assistant: 'Mia',
   transcript: 'Conversation',
@@ -137,10 +147,10 @@ export const workspace = {
   errorTitle: 'Unable to load this conversation',
   errorBody: 'The demo connection was interrupted. Retry to continue this conversation.',
   retry: 'Retry',
-  sessionsEmpty: 'This project has no conversations yet',
+  sessionsEmpty: 'No conversations yet',
   // Shown when every conversation is already on screen (and therefore hidden from this list) —
   // a different situation from sessionsEmpty.
-  sessionsAllDisplayed: 'Every conversation in this project is already on screen',
+  sessionsAllDisplayed: 'Every conversation is already on screen',
   sessionsError: 'Unable to load conversations',
   sendError: 'Your message was not sent. Please try again.',
   invalidSession: 'Conversation not found',

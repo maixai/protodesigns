@@ -19,9 +19,12 @@ import { NSkeleton } from 'naive-ui'
 import type { ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
+import type { Project } from '../contracts/generated/project'
 import type { WindowRect } from '../contracts/generated/workspace-window'
-import { fileBaseName, fileDirName, fileTabKey } from '../data/windows'
+import { chatWindowId, fileBaseName, fileDirName, fileTabKey, parseWindowId } from '../data/windows'
 import type { FileTab } from '../data/windows'
+import { badgeMapOf } from '../data/project-identity'
+import type { ProjectBadge } from '../data/project-identity'
 import { TEAR_OUT_KEYSHORTCUTS, isTearOutShortcut } from '../data/shortcuts'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
@@ -33,6 +36,9 @@ type SessionsStatus = 'loading' | 'ready' | 'empty' | 'error'
 const props = defineProps<{
   sessions: ChatSession[]
   sessionsStatus: SessionsStatus
+  // 当前 Agent 已打开的全部项目 —— 用于解析每段对话 / 每个文件的**归属标识**
+  // (项目缩写 + 标识色绑定类 + 悬停里的项目名与路径)。多项目并行时,tab 上必须能看出归属。
+  projects: Project[]
   // 下拉的**会话列表**里要隐去的会话 id(视图状态,不进契约):本区域正在显示的那段 + 任何可见的
   // 悬浮对话。判据由页面持有(见 workspace-page 的 switcherExcludedSessionIds)—— 组件只负责滤掉,
   // 因为它只管列表;**tab 条不受影响**(tabSessions 由 order + sessions 全量映射,被隐去的会话
@@ -48,9 +54,9 @@ const props = defineProps<{
   // 某段对话的**实时**状态覆盖:排队 / 流式 → streaming、完成 → completed;null 表示回落取
   // 会话自身的 status。每段对话各有自己的生成态(按会话查询),页级「当前会话」已消失。
   statusOf: (session: ChatSession) => SessionStatus | null
-  // **条上对话的顺序**:区域成员里的对话 id(按成员顺序)—— 唯一事实源。
-  // 组件不再自排一份顺序:新出现 / 已关闭由页面按「补一个成员 / 撤下一个成员」增量维护成员数组,
-  // 拖拽重排也写回成员(经 reorder 事件),于是「成员顺序 = 条上顺序」恒成立,用户拖过的顺序不会被冲掉。
+  // **条上对话的顺序**:区域成员里的对话窗体 id(按成员顺序,**复合键** chat://<项目>/<会话>)
+  // —— 唯一事实源。组件不再自排一份顺序:新出现 / 已关闭由页面按「补一个成员 / 撤下一个成员」
+  // 增量维护成员数组,拖拽重排也写回成员(经 reorder 事件),于是「成员顺序 = 条上顺序」恒成立。
   order: string[]
   // 「显示一个已打开的窗体」时的提醒落点:与它同 id 的 tab 会短暂脉冲一次(见下方动画)。
   // 由页面持有并在一拍后清空 —— 组件不持有这个状态,它只负责把这一帧画出来。
@@ -125,25 +131,58 @@ watch(() => props.files.length, () => { measureStrip() })
 type MenuFilter = 'conversations' | 'files'
 const menuFilter = ref<MenuFilter>('conversations')
 
-// 文件行:主行文件名、次行域内目录路径(分域之后不必再写项目名);根目录下的文件用 '/' 占位。
-function fileRowPath(path: string): string {
+// ---- 归属标识(项目 → 缩写 / 名称 / 路径 / 标识色绑定类) ----
+// 用户名下的项目表在建段时给全,组件按 projectId 回查即可;查不到(理论上不会)时退化为 id 本身,
+// 保证归属信息永远读得出来(文字通道优先)。
+const projectBadges = computed<Map<string, ProjectBadge>>(() => badgeMapOf(props.projects))
+function badgeOf(projectId: string): ProjectBadge | undefined {
+  return projectBadges.value.get(projectId)
+}
+function markOf(projectId: string): string {
+  return badgeOf(projectId)?.mark ?? ''
+}
+function projectNameOf(projectId: string): string {
+  return badgeOf(projectId)?.name ?? projectId
+}
+function identityClassOfProject(projectId: string): string {
+  return badgeOf(projectId)?.identityClass ?? ''
+}
+// 会话的**复合窗体键**(与页面 data/windows 的 chatWindowId 同源):条上顺序与关闭 / 拆出都按它。
+function windowKeyOf(session: ChatSession): string {
+  return chatWindowId(session.projectId, session.id)
+}
+
+// 文件行:主行文件名、次行**所属项目 + 目录**(打开集跨项目,出处必须写全);根目录下的文件用 '/' 占位。
+function fileRowLocation(projectId: string, path: string): string {
   const dir = fileDirName(path)
-  return dir === '' ? '/' : dir
+  return `${projectNameOf(projectId)} › ${dir === '' ? '/' : dir}`
+}
+function fileRowPath(tab: FileTab): string {
+  return fileRowLocation(tab.projectId, tab.path)
+}
+// 「最近关闭」段只拿得到复合窗体键(没有 FileTab 对象),故经 parseWindowId 回查项目与路径。
+function closedFileRowPath(key: string): string {
+  const parsed = parseWindowId(key)
+  return parsed === null ? key : fileRowLocation(parsed.projectId, parsed.ref)
+}
+function closedFileBaseName(key: string): string {
+  const parsed = parseWindowId(key)
+  return parsed === null ? key : fileBaseName(parsed.ref)
 }
 
 // 下拉里的文件行 = 显示该文件的窗口(单窗口期即切换活动文件);关掉过的行 = 重新打开。
-function onSelectFileRow(path: string): void {
-  emit('select-file', path)
+function onSelectFileRow(key: string): void {
+  emit('select-file', key)
   close(false)
 }
 
-function onOpenRecentRow(path: string): void {
-  emit('open-recent-file', path)
+function onOpenRecentRow(key: string): void {
+  emit('open-recent-file', key)
   close(false)
 }
 
-// 本域里**关掉过**(可重新打开)的路径;仍打开着的不重复列(它们已在下拉的「已打开」段)。
-const closedFilePaths = computed(() => props.recentFiles.filter((path) => !props.files.some((tab) => tab.path === path)))
+// 关掉过、仍可从下拉重新打开的文件(复合窗体键);仍打开着的不重复列(它们已在下拉的「已打开」段)。
+const closedFilePaths = computed(() => props.recentFiles.filter((key) => !props.files.some((tab) => fileTabKey(tab) === key)))
 
 // 文件的状态芯片文案(与文件树 / 文件栏同一套词条)。
 function fileChipLabel(tab: FileTab): string | null {
@@ -158,20 +197,20 @@ const menuTriggerRef = ref<HTMLButtonElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 const searchRef = ref<HTMLInputElement | null>(null)
 
-// 全部会话按**最近更新**倒序:菜单的两组沿用这个顺序(它是「索引」,便于按时间查找)。
+// 全部会话按**最近更新**倒序:菜单的几组沿用这个顺序(它是「索引」,便于按时间查找)。
 const orderedSessions = computed(() => [...props.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
 // 下拉列表要展示的会话 = 全量里滤掉「已打开、正摆在眼前的那些」(见 excludedSessionIds 的说明)。
-// 只作用于**列表**;tab 条走 sessionById(仍用全量 sessions),故条上的 tab 一枚不少。
+// 只作用于**列表**;tab 条走 sessionByWindow(仍用全量 sessions),故条上的 tab 一枚不少。
 const menuSessions = computed(() => orderedSessions.value.filter((session) => !props.excludedSessionIds.includes(session.id)))
-// 会话按 id 索引:tab 条的顺序由 props.order 给出(区域成员的顺序),这里只做 id → 会话的映射。
-const sessionById = computed(() => new Map(props.sessions.map((session) => [session.id, session])))
+// 会话按**复合窗体键**索引:tab 条的顺序由 props.order(复合键)给出,这里只做 键 → 会话 的映射。
+const sessionByWindow = computed(() => new Map(props.sessions.map((session) => [windowKeyOf(session), session])))
 
 // ---- tab 条的顺序(由布局成员给出,单一事实源)----
-// props.order 是区域成员里的对话 id(按成员顺序)。页面在「会话新出现 / 关闭 / 重排」时增量维护成员数组,
-// 故这里不再自存一份 manualOrder —— 两处各存一份顺序必然有一天对不上,且会把用户拖过的顺序冲掉。
-// 未在 sessions 里的 id(尚未落定的)被略过。
-const tabSessions = computed(() => props.order.flatMap((id) => {
-  const session = sessionById.value.get(id)
+// props.order 是区域成员里的对话窗体 id(复合键,按成员顺序)。页面在「会话新出现 / 关闭 / 重排」时
+// 增量维护成员数组,故这里不再自存一份 manualOrder —— 两处各存一份顺序必然有一天对不上。
+// 未在 sessions 里的键(尚未落定的)被略过。
+const tabSessions = computed(() => props.order.flatMap((key) => {
+  const session = sessionByWindow.value.get(key)
   return session === undefined ? [] : [session]
 }))
 
@@ -213,15 +252,36 @@ function tabBadge(session: ChatSession): TabBadge | null {
   return null
 }
 
-// tab 的 title(鼠标悬停可读)= 标题 + 状态词。状态信息另由遥测条的 live region 与 ▾ 面板的文字
-// 承担,故 tab 的**可访问名**(来自可见标签文字)不变,不影响既有按名字定位的断言。
+// tab 的 title(鼠标悬停可读)= 标题 + **归属项目名** + 状态词(补充通道,不承担唯一信息)。
+// 状态信息另由遥测条的 live region 与 ▾ 面板的文字承担,故 tab 的**可访问名**(来自可见标签文字)
+// 不变,不影响既有按名字定位的断言。
 function tabTitle(session: ChatSession): string {
-  return `${session.title} · ${t.value.workspace.sessionStatus[effectiveStatus(session)]}`
+  return `${session.title} · ${projectNameOf(session.projectId)} · ${t.value.workspace.sessionStatus[effectiveStatus(session)]}`
 }
 
 const awaitingSessions = computed(() => menuSessions.value.filter(isAwaitingUnseen))
-// 菜单「本项目」组与「等待你」组不重复:已看过(或本就不等待)的会话落在这组。
+// 菜单里「本项目」组与「等待你」组不重复:已看过(或本就不等待)的会话落进后面的**按项目分组**。
 const projectSessions = computed(() => menuSessions.value.filter((session) => !isAwaitingUnseen(session)))
+// **按项目分组**(多项目并行时的核心:候选列表不再只列一个项目,而要标出每段的归属)。
+// 组的顺序 = 该组里最近更新那段的位置(会话已按最近更新倒序),组头带该项目的标识(色点 + 名称)。
+interface ProjectGroup {
+  projectId: string
+  badge: ProjectBadge | undefined
+  sessions: ChatSession[]
+}
+const projectGroups = computed<ProjectGroup[]>(() => {
+  const groups = new Map<string, ChatSession[]>()
+  for (const session of projectSessions.value) {
+    const list = groups.get(session.projectId)
+    if (list === undefined) groups.set(session.projectId, [session])
+    else list.push(session)
+  }
+  return [...groups.entries()].map(([projectId, sessions]) => ({ projectId, badge: badgeOf(projectId), sessions }))
+})
+// 组头文案:{项目名} · {条数}。
+function groupLabel(badge: ProjectBadge | undefined, projectId: string, count: number): string {
+  return t.value.workspace.projectGroup.replace('{name}', badge?.name ?? projectId).replace('{count}', String(count))
+}
 
 // ---- 溢出计算(简单、确定、可断言)----
 // 调研:Telerik TabStrip 与 SAP Fiori 的 tabsOverflowMode 默认都是「超出部分收进末尾的『更多』
@@ -361,7 +421,7 @@ function onTabsKeydown(event: KeyboardEvent): void {
   if (event.key === 'Delete') {
     event.preventDefault()
     const session = tabs[index]
-    if (session !== undefined) emit('close', session.id)
+    if (session !== undefined) emit('close', windowKeyOf(session))
     return
   }
   // Ctrl+Shift+PageUp / PageDown:把聚焦的 tab 逐位左 / 右移。Chrome 与 Firefox 都用这一对
@@ -376,7 +436,7 @@ function onTabsKeydown(event: KeyboardEvent): void {
   if (isTearOutShortcut(event)) {
     event.preventDefault()
     const session = tabs[index]
-    if (session !== undefined) emitPop(session.id)
+    if (session !== undefined) emitPop(session)
     return
   }
   let next = index
@@ -495,7 +555,7 @@ function onTabPointerMove(event: PointerEvent): void {
     const dragged = visibleTabs.value[dragIndex.value]
     const slot = event.currentTarget
     if (dragged === undefined || !(slot instanceof HTMLElement)) return
-    dragId.value = dragged.id
+    dragId.value = windowKeyOf(dragged)
     dragSlot = slot
     // 轴向锁定:明确的**向下**意图(纵向分量占优)才是拆出,其余一律按重排。
     dragAxis = dy > 0 && dy > Math.abs(dx) ? 'y' : 'x'
@@ -643,15 +703,16 @@ function onDragKeydown(event: KeyboardEvent): void {
 }
 
 // 把可见段按 [from, to] 重排,隐藏项保持原相对顺序接在其后;交出**完整**的新顺序给页面写回成员。
+// 顺序的单位是**复合窗体键**(与区域成员同一口径),页面据此直接写回成员数组。
 function commitReorder(from: number, to: number): void {
-  const ids = visibleTabs.value.map((session) => session.id)
-  const moved = ids[from]
+  const keys = visibleTabs.value.map((session) => windowKeyOf(session))
+  const moved = keys[from]
   if (moved === undefined) return
-  ids.splice(from, 1)
-  ids.splice(to, 0, moved)
-  const movedSet = new Set(ids)
-  const rest = tabSessions.value.map((session) => session.id).filter((id) => !movedSet.has(id))
-  emit('reorder', [...ids, ...rest])
+  keys.splice(from, 1)
+  keys.splice(to, 0, moved)
+  const movedSet = new Set(keys)
+  const rest = tabSessions.value.map((session) => windowKeyOf(session)).filter((key) => !movedSet.has(key))
+  emit('reorder', [...keys, ...rest])
 }
 
 // 键盘重排:移动一位 + 播报 + 焦点跟随被移动的 tab。
@@ -667,10 +728,11 @@ function moveTab(from: number, to: number): void {
 
 // tab 上的「拆出」按钮(WCAG 2.5.7 的非拖拽通路):把该 tab 的屏幕矩形一并交给页面。
 // 快捷键那条通路复用同一个 emit,只是矩形从 DOM 里现取(点不到 event.currentTarget)。
-function emitPop(id: string): void {
-  const slot = tabsRef.value?.querySelector<HTMLElement>(`.conversation-tab[data-tab-id="${id}"]`)?.closest('.tab-slot') ?? null
+// 抛给页面的是**复合窗体键**(窗体的真实身份),DOM 查询仍用会话 id(data-tab-id)。
+function emitPop(session: ChatSession): void {
+  const slot = tabsRef.value?.querySelector<HTMLElement>(`.conversation-tab[data-tab-id="${CSS.escape(session.id)}"]`)?.closest('.tab-slot') ?? null
   const rect = slot instanceof HTMLElement ? slot.getBoundingClientRect() : null
-  emit('tear-pop', id, rect === null
+  emit('tear-pop', windowKeyOf(session), rect === null
     ? { x: 0, y: 0, width: 0, height: 0 }
     : { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
 }
@@ -678,7 +740,7 @@ function emitPop(id: string): void {
 function onTabPop(event: MouseEvent, session: ChatSession): void {
   const slot = event.currentTarget instanceof Element ? event.currentTarget.closest('.tab-slot') : null
   const rect = slot instanceof HTMLElement ? slot.getBoundingClientRect() : null
-  emit('tear-pop', session.id, rect === null
+  emit('tear-pop', windowKeyOf(session), rect === null
     ? { x: 0, y: 0, width: 0, height: 0 }
     : { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
 }
@@ -713,7 +775,7 @@ function onTabDblClick(event: MouseEvent, session: ChatSession): void {
 function slotTransform(index: number): string | undefined {
   const tab = visibleTabs.value[index]
   if (tab === undefined) return undefined
-  if (dragId.value === tab.id) return dragAxis === 'y' ? undefined : `translate(${dragOffsetX.value}px, var(--dl-lift-hover))`
+  if (dragId.value === windowKeyOf(tab)) return dragAxis === 'y' ? undefined : `translate(${dragOffsetX.value}px, var(--dl-lift-hover))`
   if (dragId.value === '' || dragAxis === 'y') return undefined
   const span = slotWidth + tabGap.value
   const from = dragIndex.value
@@ -881,7 +943,7 @@ onBeforeUnmount(() => {
         class="tab-slot"
         role="presentation"
         :data-selected="tab.id === activeId"
-        :class="{ 'is-dragging': tab.id === dragId }"
+        :class="{ 'is-dragging': windowKeyOf(tab) === dragId }"
         :style="{ width: `${tabWidth}px`, transform: slotTransform(index) }"
         @pointerdown="onTabPointerDown($event, index)"
         @pointermove="onTabPointerMove"
@@ -893,7 +955,8 @@ onBeforeUnmount(() => {
           :data-tab-id="tab.id"
           role="tab"
           class="conversation-tab"
-          :data-pulsing="tab.id === pulseKey ? 'true' : undefined"
+          :class="identityClassOfProject(tab.projectId)"
+          :data-pulsing="windowKeyOf(tab) === pulseKey ? 'true' : undefined"
           :aria-selected="tab.id === activeId"
           :tabindex="tab.id === tabStopId ? 0 : -1"
           :aria-actions="tabActions(tab)"
@@ -903,11 +966,17 @@ onBeforeUnmount(() => {
           @dblclick="onTabDblClick($event, tab)"
           @focus="focusedTabId = tab.id"
         >
+          <!-- 归属的**颜色通道**:贴容器左缘、通高的一条 3px 标识色条。只作图形,不填整块 tab 底
+               (填底会跟强调色争夺「可操作」的语义)。色号由按钮上的 .dl-identity-N 绑定类给出。 -->
+          <span v-if="markOf(tab.projectId)" class="tab-identity" aria-hidden="true" />
           <!-- 前导状态槽:恒定 16px 占位,槽宽不随状态变化 —— 呼吸灯出现 / 消失时标签不位移。
                除了「正在产出」的呼吸圆点,这里不再画任何图形(其余状态见脚本里的规则注释)。 -->
           <span class="tab-status" :data-status="effectiveStatus(tab)" :data-icon="isProducing(tab) ? 'dot' : 'none'" aria-hidden="true">
             <span v-if="isProducing(tab)" class="tab-status__dot" />
           </span>
+          <!-- 归属的**文字通道**(主通道,色觉障碍下唯一可用):项目缩写前缀,如「WR · README.md」。
+               它必须始终可见,不能只藏在悬停里 —— 那等于在触屏与色觉障碍下不存在。 -->
+          <span v-if="markOf(tab.projectId)" class="conversation-tab__mark" aria-hidden="true">{{ markOf(tab.projectId) }}</span>
           <span class="conversation-tab__label">{{ tab.title }}</span>
           <!-- 需要你介入 / 刚出结果的文字 Badge。用文字而不是图形:语义不依赖颜色(WCAG 1.4.1),
                两个档位只用来分出紧迫度。 -->
@@ -940,7 +1009,7 @@ onBeforeUnmount(() => {
           class="tab-close"
           tabindex="-1"
           :aria-label="closeLabel(tab.title)"
-          @click="emit('close', tab.id)"
+          @click="emit('close', windowKeyOf(tab))"
         >
           <span aria-hidden="true">✕</span>
         </button>
@@ -1012,14 +1081,14 @@ onBeforeUnmount(() => {
                 <span class="conversation-row__name">{{ fileBaseName(tab.path) }}</span>
                 <span v-if="fileChipLabel(tab)" class="entry-state" :data-state="fileStateOf(tab)">{{ fileChipLabel(tab) }}</span>
               </span>
-              <span class="conversation-row__path">{{ fileRowPath(tab.path) }}</span>
+              <span class="conversation-row__path">{{ fileRowPath(tab) }}</span>
             </button>
           </section>
           <section v-if="closedFilePaths.length > 0" class="conversation-group">
             <h2 class="conversation-group__title">{{ t.workspace.fileBar.recentClosed }}</h2>
-            <button v-for="path in closedFilePaths" :key="path" type="button" class="conversation-row" data-file-option @click="onOpenRecentRow(path)">
-              <span class="conversation-row__main"><span class="conversation-row__name">{{ fileBaseName(path) }}</span></span>
-              <span class="conversation-row__path">{{ fileRowPath(path) }}</span>
+            <button v-for="key in closedFilePaths" :key="key" type="button" class="conversation-row" data-file-option @click="onOpenRecentRow(key)">
+              <span class="conversation-row__main"><span class="conversation-row__name">{{ closedFileBaseName(key) }}</span></span>
+              <span class="conversation-row__path">{{ closedFileRowPath(key) }}</span>
             </button>
           </section>
         </div>
@@ -1067,10 +1136,18 @@ onBeforeUnmount(() => {
                   <span class="session-meta"><time :datetime="session.updatedAt">{{ formatTime(session.updatedAt) }}</time><span class="session-badge">{{ t.workspace.statusWords.waiting }}</span></span>
                 </button>
               </section>
-              <section v-if="projectSessions.length > 0" class="conversation-group">
-                <h2 class="conversation-group__title">{{ groupTitle(t.workspace.projectGroup, projectSessions.length) }}</h2>
+              <!-- **按项目分组**:候选不再只列一个项目的会话,每组组头带该项目的标识(色点 + 名称)。
+                   「等待你」组在上、按项目分组在下,两组不重复。 -->
+              <section
+                v-for="group in projectGroups" :key="group.projectId"
+                class="conversation-group" :class="group.badge?.identityClass"
+              >
+                <h2 class="conversation-group__title">
+                  <span class="conversation-group__dot" aria-hidden="true" />
+                  {{ groupLabel(group.badge, group.projectId, group.sessions.length) }}
+                </h2>
                 <button
-                  v-for="session in projectSessions"
+                  v-for="session in group.sessions"
                   :key="session.id"
                   type="button"
                   class="session-item"
@@ -1134,8 +1211,11 @@ onBeforeUnmount(() => {
    的取值依据。不再有贴边 / 压线 / 方角 —— tab 与内容区之间是留白间隔(间隔落在头部下内边距上)。
    右内边距**恒常预留**关闭钮的槽(--workspace-tab-reserved):悬停出现时零重排(禁止靠 :hover 改内边距)。 */
 .conversation-tab {
-  /* position: relative —— 提醒脉冲的环画在 ::after 上,需要一个定位上下文。 */
+  /* position: relative —— 提醒脉冲的环画在 ::after 上,需要一个定位上下文;
+     同时是归属色条(绝对定位贴左缘)的定位上下文。overflow:hidden 让色条被圆角裁住,
+     不越出 tab 的圆角轮廓(它只裁后代,不裁 tab 自己的外扩焦点环)。 */
   position: relative;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1261,6 +1341,28 @@ onBeforeUnmount(() => {
   background: var(--dl-accent-soft);
   color: var(--dl-text-primary);
   font-weight: 500;
+}
+
+/* 归属的**颜色通道**:贴容器左缘、通高的一条 3px 标识色条。var(--dl-identity) 由按钮上的
+   .dl-identity-N 绑定类给出;只作图形,不填整块 tab 底。 */
+.tab-identity {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: var(--dl-identity-bar-width);
+  background: var(--dl-identity);
+  border-start-start-radius: var(--dl-radius-md);
+  border-end-start-radius: var(--dl-radius-md);
+}
+
+/* 归属的**文字通道**(主通道):项目缩写前缀,等宽、小号、二级文字色 —— 它是可读的实义文本,
+   不靠颜色,故色觉障碍下依然读得出归属(WCAG 1.4.1)。 */
+.conversation-tab__mark {
+  flex-shrink: 0;
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+  letter-spacing: var(--dl-tracking-caps);
+  color: var(--dl-text-tertiary);
 }
 
 .conversation-tab__label {
@@ -1603,11 +1705,24 @@ onBeforeUnmount(() => {
 }
 
 .conversation-group__title {
+  display: flex;
+  align-items: center;
+  gap: var(--dl-space-2);
   font-size: var(--dl-font-size-xs);
   font-weight: 500;
   letter-spacing: var(--dl-tracking-label);
   color: var(--dl-text-tertiary);
   padding: var(--dl-space-1) var(--dl-space-1) 0;
+}
+
+/* 组头的**项目标识色点**:var(--dl-identity) 由所在 section 的 .dl-identity-N 绑定类给出。
+   组头既写项目名(文字通道)又带色点(颜色通道),归属不依赖单一通道。 */
+.conversation-group__dot {
+  flex-shrink: 0;
+  inline-size: var(--dl-identity-dot-size);
+  block-size: var(--dl-identity-dot-size);
+  border-radius: var(--dl-radius-pill);
+  background: var(--dl-identity);
 }
 
 .conversation-hint {

@@ -73,6 +73,9 @@ import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
   state: FilePanelState
+  // 该窗体的**复合 id**(file://<项目>/<相对路径>)——用作 DOM 选中钩子(遮挡判定按它选,
+  // 保证同名文件跨项目时「选到的一定是那一个窗口」)。
+  windowId: string
   path: string
   // 呈现模式:**floating** = 固定定位的浮窗(可拖动 / 可缩放,几何由窗体能力本体持有);
   // **docked** = 停靠在区域内容区里的一块(填满内容区、不可拖动 / 缩放,几何由容器给出)。
@@ -367,6 +370,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
     :data-mode="mode"
     :data-default-geometry="frame.hasExplicitRect.value ? 'false' : 'true'"
     :data-focused="isFocused ? 'true' : 'false'"
+    :data-window-id="windowId"
     :data-file-path="path"
     @pointerdown="emit('focus')"
   >

@@ -12,8 +12,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FileTab } from '../data/windows'
 import type { ProjectEntryStateId } from '../contracts/generated/project-entry'
+import type { Project } from '../contracts/generated/project'
 import type { WindowRect } from '../contracts/generated/workspace-window'
 import { fileBaseName, fileTabKey } from '../data/windows'
+import { badgeMapOf } from '../data/project-identity'
+import type { ProjectBadge } from '../data/project-identity'
 import { TEAR_OUT_KEYSHORTCUTS, isTearOutShortcut } from '../data/shortcuts'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
@@ -28,6 +31,9 @@ interface TabTearDetail {
 
 const props = defineProps<{
   tabs: FileTab[]
+  // 当前 Agent 已打开的全部项目 —— 用于解析每个文件 tab 的**归属标识**(项目缩写 + 标识色)。
+  // 打开集跨项目,故出处必须由**每个 tab 自己**声明,不能靠在栏首标一次。
+  projects: Project[]
   // 当前**聚焦**的文件(条上的高亮 / roving tabindex 的落点)。
   activeKey: string
   // 「显示一个已打开的窗体」时的提醒落点:与它同 key 的 tab 会短暂脉冲一次(见下方动画)。
@@ -74,11 +80,25 @@ function chipLabel(tab: FileTab): string | null {
   return t.value.workspace.entryStates[state]
 }
 
-// tab 的 title(悬停可读):文件名 · 域内路径。
-// 分域之后整条只属一个项目,再标一次项目名就是重复信息(项目由侧栏当前项目给出),
-// 故 title 只写域内的完整路径。**不再有打开方式** —— 打开即独占,没有预览 / 固定的区分。
+// ---- 归属标识(项目 → 缩写 / 名称 / 标识色绑定类) ----
+const projectBadges = computed<Map<string, ProjectBadge>>(() => badgeMapOf(props.projects))
+function badgeOf(projectId: string): ProjectBadge | undefined {
+  return projectBadges.value.get(projectId)
+}
+function markOf(projectId: string): string {
+  return badgeOf(projectId)?.mark ?? ''
+}
+function projectNameOf(projectId: string): string {
+  return badgeOf(projectId)?.name ?? projectId
+}
+function identityClassOfProject(projectId: string): string {
+  return badgeOf(projectId)?.identityClass ?? ''
+}
+
+// tab 的 title(悬停可读):文件名 · **项目名** · 项目内路径。
+// 打开集**跨项目**共享,同名文件可能来自不同项目,故出处必须写全 —— 这正是归属的悬停补充通道。
 function tabTitle(tab: FileTab): string {
-  return `${fileBaseName(tab.path)} · ${tab.path}`
+  return `${fileBaseName(tab.path)} · ${projectNameOf(tab.projectId)} · ${tab.path}`
 }
 
 // 关闭钮的可访问名 = 「关闭 + 文件名」,多个关闭钮因此唯一可辨别(与会话 tab 同规则)。
@@ -620,6 +640,7 @@ onBeforeUnmount(() => {
           :data-file-key="fileTabKey(tab)"
           :data-file-path="tab.path"
           class="file-tab"
+          :class="identityClassOfProject(tab.projectId)"
           :data-pulsing="fileTabKey(tab) === pulseKey ? 'true' : undefined"
 
           :aria-pressed="visiblePaths.includes(fileTabKey(tab))"
@@ -630,9 +651,12 @@ onBeforeUnmount(() => {
           @dblclick="onTabDblClick($event, tab)"
           @focus="focusedKey = fileTabKey(tab)"
         >
-          <!-- 主标签 = **文件名**。分域之后整条只属一个项目,故**不再标项目** ——
-               再标一次是重复信息(项目由侧栏当前项目给出),同名跨项目混排的歧义也随之消失。 -->
+          <!-- 归属的**颜色通道**:贴左缘、通高的一条 3px 标识色条(只作图形,不填整块 tab 底)。 -->
+          <span v-if="markOf(tab.projectId)" class="file-tab__identity" aria-hidden="true" />
           <DliIcon class="file-tab__icon" name="fileText" size="sm" />
+          <!-- 归属的**文字通道**(主通道):项目缩写前缀(如「WR」),与文件名并列显示。
+               打开集跨项目,同名文件必须能一眼分辨来自哪个项目;文字不依赖颜色,故色觉障碍下仍读得出。 -->
+          <span v-if="markOf(tab.projectId)" class="file-tab__mark" aria-hidden="true">{{ markOf(tab.projectId) }}</span>
           <span class="file-tab__label">{{ fileBaseName(tab.path) }}</span>
           <span v-if="chipLabel(tab)" class="file-tab__chip" :data-state="stateOf(tab)">{{ chipLabel(tab) }}</span>
         </button>
@@ -690,9 +714,30 @@ onBeforeUnmount(() => {
   --file-tab-reserved: calc(2 * var(--dl-icon-lg) + 3 * var(--dl-space-1));
 }
 
-/* 文件图标:区分「这是文件」而不是对话(项目标识已随分域删除 —— 那个区分的是项目,不是类型)。 */
+/* 文件图标:区分「这是文件」而不是对话。 */
 .file-tab__icon {
   flex: none;
+  color: var(--dl-text-tertiary);
+}
+
+/* 归属的**颜色通道**:贴左缘、通高的一条 3px 标识色条。var(--dl-identity) 由 tab 上的
+   .dl-identity-N 绑定类给出;只作图形,不填整块 tab 底。 */
+.file-tab__identity {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: var(--dl-identity-bar-width);
+  background: var(--dl-identity);
+  border-start-start-radius: var(--dl-radius-md);
+  border-end-start-radius: var(--dl-radius-md);
+}
+
+/* 归属的**文字通道**(主通道):项目缩写前缀,等宽、小号、三级文字色。 */
+.file-tab__mark {
+  flex-shrink: 0;
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+  letter-spacing: var(--dl-tracking-caps);
   color: var(--dl-text-tertiary);
 }
 
@@ -720,8 +765,11 @@ onBeforeUnmount(() => {
 
 /* 单个文件 tab:与会话 tab 同一档尺寸(紧凑导航行档 32px,横向 tab 条的任何宽度都保持此档)。 */
 .file-tab {
-  /* position: relative —— 提醒脉冲的环画在 ::after 上,需要一个定位上下文。 */
+  /* position: relative —— 提醒脉冲的环画在 ::after 上,需要一个定位上下文;
+     同时是归属色条(绝对定位贴左缘)的定位上下文。overflow:hidden 让色条被圆角裁住,
+     不越出 tab 的圆角轮廓(它只裁后代,不裁 tab 自己的外扩焦点环)。 */
   position: relative;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
   display: flex;

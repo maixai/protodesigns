@@ -8,13 +8,16 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 import type { WorkspaceLayout } from '../../src/contracts/generated/workspace-layout'
+import type { WindowContent } from '../../src/contracts/generated/window-content'
 import {
   MAIN_SURFACE,
   OWN_WEIGHT,
   activateTab,
+  chatWindowId,
   dockWindow,
   emptyLayout,
   fileMemberIds,
+  fileWindowId,
   layoutViolations,
   openFloating,
   openTab,
@@ -29,10 +32,19 @@ import {
   withSurfaceSplit,
 } from '../../src/data/windows'
 
+const PROJECT = 'weekly-report'
 const README = 'README.md'
 const PROGRESS = 'progress.csv'
 const WEEKLY = 'weekly'
 const ROADMAP = 'roadmap'
+// 窗体身份是**复合键**:文件 = file://<项目>/<路径>,对话 = chat://<项目>/<会话 id>。
+// 裸文件名不唯一(README.md 同时在多个项目里),故纯模型断言一律用复合 id。
+const README_ID = fileWindowId(PROJECT, README)
+const PROGRESS_ID = fileWindowId(PROJECT, PROGRESS)
+const WEEKLY_ID = chatWindowId(PROJECT, WEEKLY)
+const ROADMAP_ID = chatWindowId(PROJECT, ROADMAP)
+const fileContent = (path: string): WindowContent => ({ kind: 'file', projectId: PROJECT, path })
+const chatContent = (sessionId: string): WindowContent => ({ kind: 'chat', projectId: PROJECT, sessionId })
 const VIEWPORT_HEIGHT = 900
 
 test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
@@ -44,27 +56,27 @@ test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
 // 建一个「两个对话 + 一个文件」的根区域布局(切分要跨成员类型验)。
 function baseLayout(): WorkspaceLayout {
   let layout = emptyLayout()
-  layout = seedChatWindow(layout, MAIN_SURFACE, WEEKLY, 0)
-  layout = seedChatWindow(layout, MAIN_SURFACE, ROADMAP, 1)
-  layout = openTab(layout, MAIN_SURFACE, { kind: 'file', path: README })
+  layout = seedChatWindow(layout, MAIN_SURFACE, chatContent('weekly'), 0)
+  layout = seedChatWindow(layout, MAIN_SURFACE, chatContent('roadmap'), 1)
+  layout = openTab(layout, MAIN_SURFACE, fileContent('README.md'))
   return layout
 }
 
 test('splitSurface:返回新区域 id、新区域挂在被切区域之下,且入参布局一个字段都不动', () => {
   const layout = baseLayout()
   const before = JSON.parse(JSON.stringify(layout)) as WorkspaceLayout
-  const id = splitSurface(layout, MAIN_SURFACE, 'row', README)
+  const id = splitSurface(layout, MAIN_SURFACE, 'row', README_ID)
   expect(id, '返回新区域 id').not.toBe('')
   // 纯规划:入参布局原样(与「松手前都可逆」同源 —— 一切操作都不可变)。
   expect(layout, '入参布局未被改动').toEqual(before)
 
-  const next = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README)
+  const next = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README_ID)
   const created = surfaceOf(next, id)
   expect(created, '新区域已建').toBeDefined()
-  expect(created).toMatchObject({ parentId: MAIN_SURFACE, axis: 'row', members: [README], activeId: README })
+  expect(created).toMatchObject({ parentId: MAIN_SURFACE, axis: 'row', members: [README_ID], activeId: README_ID })
   // 「被切的 tab 归新区域并成为其 activeId」:新区域只装它一个,原区域不再有这个成员。
   expect(fileMemberIds(next, MAIN_SURFACE), '原区域不再有这个文件成员').toEqual([])
-  expect(next.focus, '新区域成为当前项').toBe(README)
+  expect(next.focus, '新区域成为当前项').toBe(README_ID)
   expect(layoutViolations(next), '不变量恒为空').toEqual([])
   // 根 id 不变(切分只往根下面挂子区域)。
   expect(rootSurface(next)?.id).toBe(MAIN_SURFACE)
@@ -72,37 +84,37 @@ test('splitSurface:返回新区域 id、新区域挂在被切区域之下,且入
 
 test('splitSurface:区域不存在 / 窗体不存在时返回空串(调用方据此判定未切分)', () => {
   const layout = baseLayout()
-  expect(splitSurface(layout, 'ghost', 'row', README)).toBe('')
+  expect(splitSurface(layout, 'ghost', 'row', README_ID)).toBe('')
   expect(splitSurface(layout, MAIN_SURFACE, 'row', 'ghost')).toBe('')
   // 两次切分得到两个不同的 id,且都挂在被切区域之下。
-  const first = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README)
-  const second = withSurfaceSplit(first, ROADMAP, 'column', ROADMAP)
+  const first = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README_ID)
+  const second = withSurfaceSplit(first, ROADMAP_ID, 'column', ROADMAP_ID)
   const ids = second.surfaces.map((surface) => surface.id)
   expect(new Set(ids).size, 'id 不重复').toBe(ids.length)
-  expect(surfaceOf(second, ROADMAP)?.parentId, '第二次切的是 ROADMAP 所在的那块').not.toBeNull()
+  expect(surfaceOf(second, ROADMAP_ID)?.parentId, '第二次切的是 ROADMAP_ID 所在的那块').not.toBeNull()
   expect(layoutViolations(second)).toEqual([])
 })
 
 test('splitSurface:被切区域的活动成员是它自己时,活动位交给相邻成员(与 closeTab 同规则)', () => {
   // 激活 LAST(文件),再把它切出去 → 原区域的活动位应落到相邻的对话上,而不是悬空。
-  const layout = activateTab(baseLayout(), MAIN_SURFACE, README)
-  expect(surfaceOf(layout, MAIN_SURFACE)?.activeId).toBe(README)
-  const next = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README)
+  const layout = activateTab(baseLayout(), MAIN_SURFACE, README_ID)
+  expect(surfaceOf(layout, MAIN_SURFACE)?.activeId).toBe(README_ID)
+  const next = withSurfaceSplit(layout, MAIN_SURFACE, 'row', README_ID)
   const source = surfaceOf(next, MAIN_SURFACE)
-  expect(source?.activeId, '不指向已迁走的成员').not.toBe(README)
+  expect(source?.activeId, '不指向已迁走的成员').not.toBe(README_ID)
   expect(source?.members.includes(source?.activeId ?? ''), 'activeId 仍 ∈ members').toBe(true)
   expect(layoutViolations(next)).toEqual([])
 })
 
 test('removeSurface:成员与子区域都托付给父区域,根区域不可删', () => {
-  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README)
+  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README_ID)
   const child = layout.surfaces.at(-1)
   expect(child).toBeDefined()
   if (child === undefined) return
 
   const merged = removeSurface(layout, child.id)
   expect(surfaceOf(merged, child.id), '子区域已摘除').toBeUndefined()
-  expect(fileMemberIds(merged, MAIN_SURFACE), '成员回到了父区域').toEqual([README])
+  expect(fileMemberIds(merged, MAIN_SURFACE), '成员回到了父区域').toEqual([README_ID])
   expect(layoutViolations(merged)).toEqual([])
 
   // 根区域没有父区域可托付 → 原样返回。
@@ -110,10 +122,10 @@ test('removeSurface:成员与子区域都托付给父区域,根区域不可删',
 })
 
 test('removeSurface:子区域的子区域改挂到父区域名下(树不断链)', () => {
-  const one = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README)
+  const one = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README_ID)
   const mid = one.surfaces.at(-1)
   if (mid === undefined) return
-  const two = withSurfaceSplit(one, mid.id, 'column', ROADMAP)
+  const two = withSurfaceSplit(one, mid.id, 'column', ROADMAP_ID)
   const leaf = two.surfaces.at(-1)
   if (leaf === undefined) return
   const collapsed = removeSurface(two, mid.id)
@@ -122,7 +134,7 @@ test('removeSurface:子区域的子区域改挂到父区域名下(树不断链)'
 })
 
 test('setSeparatorPercent:按百分比改权重,夹在 10–90;separatorPercent 读回同一个数', () => {
-  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README)
+  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README_ID)
   expect(separatorPercent(layout, MAIN_SURFACE, 0), '首次切分对半').toBe(50)
 
   const widened = setSeparatorPercent(layout, MAIN_SURFACE, 0, 80)
@@ -139,8 +151,8 @@ test('setSeparatorPercent:按百分比改权重,夹在 10–90;separatorPercent 
 })
 
 test('setSeparatorPercent:两个子区域之间那条分隔线同时改左右两个权重并保持其和', () => {
-  const one = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README)
-  const two = withSurfaceSplit(one, MAIN_SURFACE, 'row', ROADMAP)
+  const one = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README_ID)
+  const two = withSurfaceSplit(one, MAIN_SURFACE, 'row', ROADMAP_ID)
   const children = two.surfaces.filter((surface) => surface.parentId === MAIN_SURFACE)
   expect(children, '两个子区域').toHaveLength(2)
   const left = children[0]
@@ -158,22 +170,22 @@ test('setSeparatorPercent:两个子区域之间那条分隔线同时改左右两
 })
 
 test('reorderChatMembers 与切分互不串位:切出去的区域只影响自己那份成员', () => {
-  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', ROADMAP)
-  expect(fileMemberIds(layout, MAIN_SURFACE)).toEqual([README])
-  const reordered = reorderChatMembers(layout, MAIN_SURFACE, [WEEKLY])
-  expect(surfaceOf(reordered, MAIN_SURFACE)?.members.includes(ROADMAP), '已迁走的对话不会被重排拉回来').toBe(false)
+  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', ROADMAP_ID)
+  expect(fileMemberIds(layout, MAIN_SURFACE)).toEqual([README_ID])
+  const reordered = reorderChatMembers(layout, MAIN_SURFACE, [WEEKLY_ID])
+  expect(surfaceOf(reordered, MAIN_SURFACE)?.members.includes(ROADMAP_ID), '已迁走的对话不会被重排拉回来').toBe(false)
   expect(layoutViolations(reordered)).toEqual([])
 })
 
 test('dockWindow 到一个子区域:成员落在那块区域上,不变量恒为空', () => {
-  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README)
+  const layout = withSurfaceSplit(baseLayout(), MAIN_SURFACE, 'row', README_ID)
   const child = layout.surfaces.at(-1)
   if (child === undefined) return
   // dockWindow 的契约是「这个窗体此刻不属于任何区域」(页面只在悬浮窗上调用它),故先造一个悬浮窗。
-  const floating = openFloating(layout, { kind: 'file', path: PROGRESS }, { x: 0, y: 0, width: 0, height: 0 })
-  const docked = dockWindow(floating, PROGRESS, child.id, 0)
-  expect(surfaceOf(docked, child.id)?.members, '成员插在子区域下标 0 处').toEqual([PROGRESS, README])
-  expect(surfaceOf(docked, child.id)?.activeId, '停靠即成为该区域的活动成员').toBe(PROGRESS)
+  const floating = openFloating(layout, fileContent('progress.csv'), { x: 0, y: 0, width: 0, height: 0 })
+  const docked = dockWindow(floating, PROGRESS_ID, child.id, 0)
+  expect(surfaceOf(docked, child.id)?.members, '成员插在子区域下标 0 处').toEqual([PROGRESS_ID, README_ID])
+  expect(surfaceOf(docked, child.id)?.activeId, '停靠即成为该区域的活动成员').toBe(PROGRESS_ID)
   expect(layoutViolations(docked)).toEqual([])
 })
 
@@ -546,7 +558,13 @@ test('根区域为唯一区域时关掉最后一个 tab → 引导页;主按钮�
   await expect(page).toHaveScreenshot('workspace-onboarding-1600.png', { fullPage: true })
 
   // 主按钮 = 与区域 ＋ 同一个动作:恢复一块带 tab 的区域 + 一段新会话,输入框自动聚焦。
+  // 平权之后没有「当前项目」:引导页 + 有多个已打开项目 ⇒ 先弹出项目选择浮层(归属需用户拍板),
+  // 选一个项目才真正建会话。
   await page.locator('.onboarding__primary').click()
+  const chooser = page.locator('.project-chooser')
+  await expect(chooser, '多项目下先让用户选归属').toHaveCount(1)
+  await chooser.locator('.project-chooser__button').first().click()
+  await expect(chooser, '选完即收起').toHaveCount(0)
   await expect(page.locator('.onboarding'), '引导页退出').toHaveCount(0)
   await expect(page.locator(SURFACES), '恢复一块带 tab 的区域').toHaveCount(1)
   await expect(page.locator('.tab-slot'), '新会话占一个 tab').toHaveCount(1)

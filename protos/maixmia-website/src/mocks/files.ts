@@ -627,6 +627,97 @@ const IMAGE_SEEDS: Record<string, string> = {
   'assets/logo.svg': "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232e6f63'/%3E%3Cpath d='M9 23V9l7 9 7-9v14' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
 }
 
+// ---- 按项目区分的文件(explicit seeds)----
+// FILE_SEEDS 是 **path 键**的表,同一个 path 在不同项目会命中同一份内容;多项目并排时
+// 两份一模一样的 README 看着就像坏了。这里为**同名但不同项目**的文件补一份独立内容,
+// 键是 `${projectId}::${path}`。查表时优先取本表,取不到再回落到 path 表。
+// 演示数据里 README.md 同时存在于 weekly-report / benchmarks / changelog 三个项目,
+// 故这三个项目各给一份写实、各自不同章节的 README。
+const PROJECT_FILE_SEEDS: Record<string, FileSeed> = {
+  // 研究助手 · benchmarks:一份跑分工具的 README(与 weekly-report 的周报工具完全不同)。
+  'benchmarks::README.md': {
+    kind: 'markdown',
+    language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# benchmarks',
+      '',
+      '衡量几个候选实现在同一批工作负载下的延迟与吞吐。',
+      '',
+      '## 如何运行',
+      '',
+      '```bash',
+      'pnpm bench --suite latency --runs 5',
+      '```',
+      '',
+      '## 套件',
+      '',
+      '- `suites/latency.ts` —— 单次请求的 P50 / P95 / P99',
+      '- `suites/throughput.ts` —— 并发下的每秒请求数',
+      '',
+      '## 结果',
+      '',
+      '每次运行写入 `results/` 下的一份按季度命名的 CSV，便于跨版本对照。',
+      '基准只反映**当前**机器与数据集，跨机器的绝对值不作结论。',
+    ].join('\n'),
+  },
+  // 写作助手 · changelog:一份发布日志的 README(以「条目」为核心)。
+  'changelog::README.md': {
+    kind: 'markdown',
+    language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      '# changelog',
+      '',
+      '把散落在各处的改动收拢成一份给人看的发布日志。',
+      '',
+      '## 约定',
+      '',
+      '每个版本一个文件，放在 `entries/` 下：',
+      '',
+      '- `entries/unreleased.md` —— 尚未发布的改动',
+      '- `entries/1.0.md` —— 已发布的版本',
+      '',
+      '## 条目写法',
+      '',
+      '按「新增 / 调整 / 修复」三组归类，每条一句话说清**用户能感知到的变化**，',
+      '不写实现细节。',
+    ].join('\n'),
+  },
+}
+
+// 已经**显式**给出 README 内容的项目:path 表里的 README 属 weekly-report,另两个在上面。
+// 其余项目(新打开的候选目录)走动态回退 —— 见 projectReadme。
+const README_PROJECTS = new Set(['weekly-report', 'benchmarks', 'changelog'])
+
+// 新打开项目的 README:一份按项目名的通用骨架。**按项目区分**是必要的 —— 同名 README 跨项目
+// 会并排显示,若回落到 path 表就会两份一模一样、看着像坏了。
+function projectReadme(projectId: string): FileSeed {
+  const name = projectId.replace(/-opened-\d+$/, '')
+  return {
+    kind: 'markdown',
+    language: 'markdown',
+    mime: 'text/markdown',
+    source: [
+      `# ${name}`,
+      '',
+      `${name} 的说明文档。`,
+      '',
+      '## 开发',
+      '',
+      '```bash',
+      'pnpm install',
+      'pnpm dev',
+      '```',
+      '',
+      '## 目录',
+      '',
+      '- `src/` —— 源码',
+      '- `README.md` —— 本文件',
+    ].join('\n'),
+  }
+}
+
 // ---- fallback:按扩展名生成一份写实的短文件 ----
 // 目的是「点开任意文件都有内容」,而不是把整棵树的正文都手工写一遍。
 function fallbackSeed(path: string): FileSeed {
@@ -693,9 +784,10 @@ function isBinary(path: string): boolean {
 }
 
 // 取一份文件内容。confirmationId 由 API 层按当前会话的确认请求补上 —— 这里只负责文件本身。
-// projectId 目前不参与查表(path 在演示数据里已唯一),保留入参是为了贴合真实接口形状。
+// 查表顺序:`项目::路径` → `路径`。**先按项目查**是必要的:同名文件在不同项目里是不同内容
+// (演示数据里三个项目各有一份 README),只按 path 查会让它们返回同一份、看着像坏了;
+// 其余文件仍允许回落到 path 表(它们在各项目里本就没有同名冲突)。
 export function mockFileContent(projectId: string, path: string): Omit<FileContent, 'confirmationId'> {
-  void projectId
   // 图片:只有预览档,内容在 contentUrl 里,没有源码与变更视图。
   const imageUrl = IMAGE_SEEDS[path]
   if (imageUrl !== undefined) {
@@ -704,7 +796,8 @@ export function mockFileContent(projectId: string, path: string): Omit<FileConte
   if (isBinary(path)) {
     return { path, kind: 'binary', language: 'binary', mime: 'application/octet-stream', source: '', contentUrl: '', addedCount: 0, removedCount: 0, lines: [] }
   }
-  const seed = FILE_SEEDS[path] ?? fallbackSeed(path)
+  const seed = PROJECT_FILE_SEEDS[`${projectId}::${path}`]
+    ?? (path === 'README.md' && !README_PROJECTS.has(projectId) ? projectReadme(projectId) : FILE_SEEDS[path] ?? fallbackSeed(path))
   const lines = buildLines(seed.lines ?? unchangedLines(seed.source))
   const counts = countChanges(lines)
   return {

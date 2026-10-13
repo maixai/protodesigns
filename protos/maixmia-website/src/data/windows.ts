@@ -11,7 +11,8 @@
 // 全层共用 --dl-z-overlay,谁压谁由 DOM 顺序决定。
 //
 // 所有数据结构都来自契约生成物(src/contracts/generated/),此处不手写。
-// 布局按 (Agent, 项目) 分域保存(刷新即重置):切域时旧域原样留着,切回来即恢复。
+// 布局按 **Agent** 分域保存(刷新即重置):窗口自带项目归属,同一个 Agent 下不同项目的
+// 对话与文件共存于同一张 tab 表 —— 这正是「多项目并行」的前提。
 
 import type { AgentId } from '../contracts/generated/chat-session'
 import type { FileContent, FileLine } from '../contracts/generated/file-content'
@@ -28,13 +29,14 @@ export type FilePanelState =
   | { status: 'error' }
 
 // ---- 分域 ----
-// 键 = (Agent, 项目) 对:tab 表示的对话或文件只能属于被选中的 Agent 与被选中的项目,
-// 于是「区域成员 / 窗体几何 / 最近打开」都按这一对分域保存,条上不会混装两个项目的东西。
-export function fileDomainKey(agentId: AgentId, projectId: string): string {
-  return `${agentId}::${projectId}`
+// 键 = **Agent**:tab 表示的对话或文件只需属于同一个 Agent。平权之后没有「当前项目」,
+// 同一个 Agent 下不同项目的窗口共存于同一张表 —— 归属由**每个窗体自己**带(见 windowIdOf),
+// 不再由这张表的键决定。
+export function agentDomainKey(agentId: AgentId): string {
+  return agentId
 }
 
-// 所有域拼成的整张表(键 = fileDomainKey)。
+// 所有域拼成的整张表(键 = agentDomainKey,即 Agent id)。
 export type WorkspaceMap = Record<string, WorkspaceLayout>
 
 // 本单元唯一的根区域 id。多区域演进时这里会变成动态生成。
@@ -105,9 +107,42 @@ export function isMember(layout: WorkspaceLayout, surfaceId: string, windowId: s
 
 // ---- 内容与命名 ----
 
-// 窗体 id:由内容唯一决定(文件取路径,对话取会话 id),故同一内容重复打开只复用同一个窗体。
+// 文件窗体的**复合 id**:带 scheme 与项目维度。
+// 裸路径不唯一(不同项目可以有同名文件,演示数据里 README.md 就同时存在于三个项目),
+// 若身份里不带项目,两份 README 会解析成同一个窗体 id / 同一个 DOM 节点,
+// 「一个窗体至多属于一个区域」「可见的 docked 必属于某区域」随之失效。口径取自 VS Code 的 Uri。
+export function fileWindowId(projectId: string, path: string): string {
+  return `file://${projectId}/${path}`
+}
+
+// 对话窗体的**复合 id**:与 fileWindowId 同构,带 scheme 与项目维度。
+export function chatWindowId(projectId: string, sessionId: string): string {
+  return `chat://${projectId}/${sessionId}`
+}
+
+// 窗体 id:由内容唯一决定(内容含项目维度),故同一内容重复打开只复用同一个窗体。
 export function windowIdOf(content: WindowContent): string {
-  return content.kind === 'file' ? content.path : content.sessionId
+  return content.kind === 'file'
+    ? fileWindowId(content.projectId, content.path)
+    : chatWindowId(content.projectId, content.sessionId)
+}
+
+// 窗体所属的项目(两种内容都有该字段)—— 归属标识 / 关闭项目连带关闭 / 新建归属都读它。
+export function windowProjectId(win: WorkspaceWindow): string {
+  return win.content.projectId
+}
+
+// 复合窗体 id → 它的种类 / 项目 / 内容标识(file 得相对路径、chat 得会话 id)。
+// 供只拿到 id(拿不到窗体对象)的场景回查归属:如切换器里「最近关闭」的文件行。
+// 形状不符时返回 null(调用方据此安全降级,不抛错)。
+export function parseWindowId(id: string): { kind: 'file' | 'chat'; projectId: string; ref: string } | null {
+  const match = /^(file|chat):\/\/([^/]+)\/(.+)$/.exec(id)
+  if (match === null) return null
+  const kind = match[1]
+  const projectId = match[2]
+  const ref = match[3]
+  if ((kind !== 'file' && kind !== 'chat') || projectId === undefined || ref === undefined) return null
+  return { kind, projectId, ref }
 }
 
 // 文件窗体的路径;非文件窗体为空串(展示层据此决定是否渲染文件信息)。
@@ -121,7 +156,7 @@ export type FileTab = Extract<WindowContent, { kind: 'file' }>
 // 对话 tab 的视图投影:与 FileTab 同构,组件的 tab 条据此渲染。
 export type ChatTab = Extract<WindowContent, { kind: 'chat' }>
 
-// tab / 活动窗口的唯一标识(对文件 tab 而言即其路径,对对话而言即其会话 id)。
+// tab / 活动窗口的唯一标识(即复合窗体 id)。
 export function fileTabKey(tab: FileTab): string {
   return windowIdOf(tab)
 }
@@ -135,14 +170,14 @@ export function chatContentOf(win: WorkspaceWindow): ChatTab | null {
   return win.content.kind === 'chat' ? win.content : null
 }
 
-// 区域成员里的**对话** id(按成员顺序)—— 会话头 tab 条的唯一顺序来源。
+// 区域成员里的**对话**窗体 id(按成员顺序,复合 id)—— 会话头 tab 条的唯一顺序来源。
 export function chatMemberIds(layout: WorkspaceLayout, surfaceId: string): string[] {
-  return memberWindows(layout, surfaceId).flatMap((win) => (win.content.kind === 'chat' ? [win.content.sessionId] : []))
+  return memberWindows(layout, surfaceId).flatMap((win) => (win.content.kind === 'chat' ? [win.id] : []))
 }
 
-// 区域成员里的**文件**路径(按成员顺序)—— 文件栏的唯一顺序来源。
+// 区域成员里的**文件**窗体 id(按成员顺序,复合 id)—— 文件栏的唯一顺序来源。
 export function fileMemberIds(layout: WorkspaceLayout, surfaceId: string): string[] {
-  return memberWindows(layout, surfaceId).flatMap((win) => (win.content.kind === 'file' ? [win.content.path] : []))
+  return memberWindows(layout, surfaceId).flatMap((win) => (win.content.kind === 'file' ? [win.id] : []))
 }
 
 // 展示名 = 路径末段。
@@ -386,23 +421,53 @@ export function reorderFileMembers(layout: WorkspaceLayout, surfaceId: string, o
 // 已有窗体则**原样返回** —— 已关闭的会话其窗体仍在(隐藏),不会被重新拉回条上;
 // 已拆出为悬浮的会话同样是「有窗体」,不会被重新加进 members(不变量④)。
 // 这里刻意不碰 focus / activeId:补成员是装载期的补齐,不该抢走用户当前的焦点。
-export function seedChatWindow(layout: WorkspaceLayout, surfaceId: string, sessionId: string, index: number): WorkspaceLayout {
-  if (layout.windows.some((win) => win.id === sessionId)) return layout
+export function seedChatWindow(layout: WorkspaceLayout, surfaceId: string, content: ChatTab, index: number): WorkspaceLayout {
+  const id = windowIdOf(content)
+  if (layout.windows.some((win) => win.id === id)) return layout
   const surface = surfaceOf(layout, surfaceId)
   if (surface === undefined) return layout
   const win: WorkspaceWindow = {
-    id: sessionId,
-    content: { kind: 'chat', sessionId },
+    id,
+    content,
     placement: 'docked',
     view: 'normal',
     visible: true,
     rect: { x: 0, y: 0, width: 0, height: 0 },
   }
   const at = Math.max(0, Math.min(index, surface.members.length))
-  const members = [...surface.members.slice(0, at), sessionId, ...surface.members.slice(at)]
+  const members = [...surface.members.slice(0, at), id, ...surface.members.slice(at)]
   return {
     ...replaceSurface(layout, surfaceId, (item) => ({ ...item, members })),
     windows: [...layout.windows, win],
+  }
+}
+
+// 一并**移除**若干窗体(≠ hideWindows 的「隐藏」):用于「关闭项目 → 连带关掉它在该域里的所有窗口」。
+// 与隐藏的区别:窗体从 windows 数组中**删除**,并从所有区域的成员里摘掉;区域的活动位被摘走时
+// 交给**相邻成员**(与 closeTab 同一条规则);焦点 / 最近打开里也一并清掉。区域被摘空由调用方
+// 走 pruneEmptySurfaces 处理(与 closeTab 一致)。
+export function dropWindows(layout: WorkspaceLayout, ids: readonly string[]): WorkspaceLayout {
+  const doomed = new Set(ids)
+  if (doomed.size === 0) return layout
+  // 活动位被摘走时,交给**最近的、未被摘走的**邻居(优先右侧,其次左侧,与 closeTab 同一规则)。
+  const nextActive = (members: readonly string[], activeId: string): string => {
+    if (!doomed.has(activeId)) return activeId
+    const index = members.indexOf(activeId)
+    if (index < 0) return members.find((id) => !doomed.has(id)) ?? ''
+    const right = members.slice(index + 1).find((id) => !doomed.has(id))
+    if (right !== undefined) return right
+    return members.slice(0, index).reverse().find((id) => !doomed.has(id)) ?? ''
+  }
+  return {
+    ...layout,
+    surfaces: layout.surfaces.map((surface) => ({
+      ...surface,
+      members: surface.members.filter((id) => !doomed.has(id)),
+      activeId: nextActive(surface.members, surface.activeId),
+    })),
+    windows: layout.windows.filter((win) => !doomed.has(win.id)),
+    focus: doomed.has(layout.focus) ? '' : layout.focus,
+    recent: layout.recent.filter((id) => !doomed.has(id)),
   }
 }
 
@@ -655,11 +720,13 @@ export function separatorPercent(layout: WorkspaceLayout, surfaceId: string, ind
 //   ⑤ **可见**的 docked 窗体必须属于某个区域(隐藏的可以不属于:关闭 ≠ 删除,placement 不被销毁);
 //   ⑥ maximized × floating 互斥;
 //   ⑦ focus 非空时必须指向存在的窗体;
-//   ⑧ 区域树的 parentId 必须指向存在的区域(根为 null),且不得指向自己。
-export function layoutViolations(layout: WorkspaceLayout): string[] {
+//   ⑧ 区域树的 parentId 必须指向存在的区域(根为 null),且不得指向自己;
+//   ⑨ (可选)窗体的 content.projectId 必须属于**当前已打开的项目集合** —— 见 openProjects 入参。
+export function layoutViolations(layout: WorkspaceLayout, openProjects?: readonly string[]): string[] {
   const violations: string[] = []
   const ids = new Set(layout.windows.map((win) => win.id))
   const surfaceIds = new Set(layout.surfaces.map((surface) => surface.id))
+  const open = openProjects === undefined ? null : new Set(openProjects)
   for (const surface of layout.surfaces) {
     if (surface.activeId !== '' && !surface.members.includes(surface.activeId)) {
       violations.push(`surface ${surface.id}: activeId ${surface.activeId} 不在 members 里`)
@@ -679,6 +746,11 @@ export function layoutViolations(layout: WorkspaceLayout): string[] {
     if (win.placement === 'floating' && owners.length > 0) violations.push(`window ${win.id}: floating 却出现在区域的 members 里`)
     if (win.placement === 'docked' && win.visible && owners.length === 0) violations.push(`window ${win.id}: 可见的 docked 窗体却不属于任何区域`)
     if (win.placement === 'floating' && win.view === 'maximized') violations.push(`window ${win.id}: floating × maximized 互斥`)
+    // ⑨ 漂移守卫:项目关了、窗口还留着。调用方(页面)把「已打开项目」传进来才校验 ——
+    // 纯函数层的单元用例不经过页面,故不传时跳过(不改变既有调用点的语义)。
+    if (open !== null && !open.has(win.content.projectId)) {
+      violations.push(`window ${win.id}: 所属项目 ${win.content.projectId} 已不在已打开项目集合里`)
+    }
   }
   if (layout.focus !== '' && !ids.has(layout.focus)) violations.push(`focus ${layout.focus} 不存在`)
   return violations

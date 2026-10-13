@@ -311,6 +311,10 @@ model ProjectEntry {
 model Project {
   id: string;
   name: string;                 // 展示名(目录名,技术标识,不随语言变化)
+  // 项目缩写(2–4 字符,如 weekly-report → WR):tab 标题的前缀用它承担「这段内容属于哪个项目」
+  // 的**文字通道**。侧栏同时展开多个项目后,右侧 tab 与悬浮窗会混装不同项目的内容,
+  // 归属必须能被一眼读出 —— 文字是色觉障碍下唯一可用的通道,故缩写是硬要求而不是装饰。
+  mark: string;
   path: string;                 // 展示用短路径,如 ~/work/weekly-report
   entryCount: int32;
   entries: ProjectEntry[];
@@ -520,11 +524,20 @@ model Surface {
 
 // 窗体内容的判别联合:窗体是**通用容器**,内容由 kind 区分。本单元只用到 file
 // (文件 / 对话两种都已用上),故窗体不得假设内容一定是文件。
+//
+// **两支都带 projectId —— 它是窗体身份的组成部分,不是可选元信息**。理由:布局层以
+// windowId 唯一标识一个窗体,而**裸标识不唯一** —— 不同项目可以有同名文件(演示数据里
+// README.md 同时存在于 weekly-report / benchmarks / changelog 三个项目),会话 id 同理。
+// 若身份里不带项目,两份 README 会解析成**同一个窗体 id / 同一个 DOM 节点**:
+// 「一个窗体至多属于一个区域」「可见的 docked 窗体必属于某区域」这两条不变量随之失效
+// (同一个 id 同时挂在两块区域上不会被判为重号),浮窗与停靠也会互相顶掉。
+// 这正是 VS Code 的 Uri 口径:裸文件名不唯一,键里必须有 scheme。
+// 载体据此把 id 拼成复合键:file → `file://<projectId>/<相对路径>`、chat → `chat://<projectId>/<会话 id>`。
 @summary("WindowContent")
 @jsonSchema
 union WindowContent {
-  file: { kind: "file"; path: string; },
-  chat: { kind: "chat"; sessionId: string; },
+  file: { kind: "file"; projectId: string; path: string; },
+  chat: { kind: "chat"; projectId: string; sessionId: string; },
 }
 
 // 窗体的位置:floating(自有矩形,不属于任何区域)/ docked(属于某区域)。
@@ -561,7 +574,10 @@ model WorkspaceWindow {
   rect: WindowRect;
 }
 
-// 一个 (Agent, 项目) 域内的整块工作区布局:区域 + 窗体 + 焦点 + 最近打开。
+// 一个 **Agent** 域内的整块工作区布局:区域 + 窗体 + 焦点 + 最近打开。
+// 布局按 **Agent 分域**(不再按「Agent + 项目」):平权之后没有「当前项目」,同一个 Agent 下
+// 不同项目的窗口共存于同一张 tab 表 —— 离开哪个项目的**归属**由每个窗体的 content.projectId
+// 自己声明,而不是由这张表的键决定。
 // windows 是**数组,顺序即前后层序**(靠后者在上)—— 不用自增 z:自增在多区域下语义会崩,
 // 且本仓层级只有 4 档 token,就地写数值违反「禁止 magic number」。
 @summary("WorkspaceLayout")

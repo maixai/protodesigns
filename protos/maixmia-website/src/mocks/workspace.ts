@@ -218,6 +218,13 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
         { id: 'wr-example-sh', path: 'examples/run-weekly.sh', kind: 'file', state: 'none' },
         { id: 'wr-example-conf', path: 'examples/apache.conf', kind: 'file', state: 'none' },
         { id: 'wr-example-md', path: 'examples/render-check.md', kind: 'file', state: 'none' },
+        // 数据文件样本:JSON 树 / JSON 表格 / 非法 JSON 降级 / CSV 行数上限降级各一份
+        // (见 mocks/files.ts 的注释)。挂在既有项目树下,故从这里就能点到。
+        { id: 'wr-example-schedule', path: 'examples/schedule.json', kind: 'file', state: 'none' },
+        { id: 'wr-example-config', path: 'examples/config.json', kind: 'file', state: 'none' },
+        { id: 'wr-example-broken', path: 'examples/broken.json', kind: 'file', state: 'none' },
+        { id: 'wr-example-export', path: 'examples/large-export.csv', kind: 'file', state: 'none' },
+        { id: 'wr-example-ragged', path: 'examples/ragged.csv', kind: 'file', state: 'none' },
         { id: 'wr-readme', path: 'README.md', kind: 'file', state: 'modified' },
         { id: 'wr-progress', path: 'progress.csv', kind: 'file', state: 'modified' },
         { id: 'wr-gitignore', path: '.gitignore', kind: 'file', state: 'none' },
@@ -300,11 +307,11 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
 // fileCount 是**打开前**检测到的文件数(readdir 的粗计数),与已打开项目树里的**条目数**
 // (Project.entryCount = ProjectSeed.entries.length)概念不同;但演示里两者指同一批内容,
 // 口径必须一致(否则会出现「候选说 9 个、打开后 13 条」的观感矛盾),故对应同一目录的候选项
-// 一律与该项目对齐:weekly-report 18 = entries.length,product-docs 8 = entries.length,
+// 一律与该项目对齐:weekly-report 23 = entries.length,product-docs 8 = entries.length,
 // knowledge-base 5 = entries.length。其余候选(api-server / design-tokens / notes / scratch)
 // 尚未打开,没有可对齐的项目,保持各自的检测值。
 const projectCandidates: ProjectCandidate[] = [
-  { path: '~/work/weekly-report', name: 'weekly-report', fileCount: 18, isGitRepo: true },
+  { path: '~/work/weekly-report', name: 'weekly-report', fileCount: 23, isGitRepo: true },
   { path: '~/work/knowledge-base', name: 'knowledge-base', fileCount: 5, isGitRepo: false },
   { path: '~/work/product-docs', name: 'product-docs', fileCount: 8, isGitRepo: true },
   { path: '~/work/api-server', name: 'api-server', fileCount: 42, isGitRepo: true },

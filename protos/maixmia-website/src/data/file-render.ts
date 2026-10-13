@@ -1,4 +1,4 @@
-// 渲染态的管线:Markdown → 清洗 → 注入 DOM,以及 mermaid 图的按需渲染。
+// 预览态的管线:Markdown → 清洗 → 注入 DOM,以及 mermaid 图的按需渲染。
 //
 // 安全模型(每一层都要写清,评审据此核对):
 //   ① markdown-it **默认禁用原始 HTML**(`html: false` 是它的安全默认)—— Markdown 正文里的

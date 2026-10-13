@@ -4,11 +4,11 @@
 // 两者按同一个 path 对齐。内容一律**写实**(真实的 README / 工具函数 / CSV),不用 lorem。
 //
 // 三份事实各司其职,刻意不互相推导:
-//   · **source** —— 文件**当前**的真实内容,渲染态(渲染 / 图片 / 纯文本预览)与源码态
+//   · **source** —— 文件**当前**的真实内容,预览态(markdown / HTML / 图片的呈现)与源码态
 //     (编辑器)都读它。它**不是**从 lines 拼出来的:diff 模型里 removed 行留在原地,
 //     按 lines 直接拼会把已删除的行当成现存内容(见 contracts/main.tsp 的注释)。
 //   · **lines** —— 相对上一次改动的**行级视图**,只服务「变更」这一档。
-//   · **kind / mime / contentUrl** —— 呈现类别与来源:kind 决定面板给哪几档视图,
+//   · **kind / mime / contentUrl** —— 呈现类别与来源:kind 决定面板给哪几档(纯文本没有预览档),
 //     contentUrl 只有 image 用(原型无后端,图片走 data URL)。
 //
 // 变更标记的语义:数组即「当前文件的展示顺序」——未变更行与改动行按原位交错,removed 行保留在
@@ -75,9 +75,28 @@ interface FileSeed {
 
 // ---- 具体文件(explicit seeds)----
 // 只列「演示路径会走到」的文件;其余由 fallbackSeed 按扩展名生成,避免整棵树点开都是空壳。
+
+// 大表样本的行数:取一个**明确超过** data/csv.ts 里 MAX_CSV_ROWS 的值,让「只显前 N 行」
+// 那条降级说明在演示里确实会出现,而不是一条永远走不到的代码路径。
+const LARGE_EXPORT_ROWS = 400
+
+// 生成一份写实的导出表(逐条记录一行)。行由代码生成,而不是把几百行手抄进源码。
+function largeExportCsv(): string {
+  const tracks = ['登录流程', '通知原型', '知识库', '演示准备', '渠道复盘']
+  const owners = ['林一舟', '周洁', '陈默']
+  const rows = ['id,track,owner,done,total,status']
+  for (let index = 1; index <= LARGE_EXPORT_ROWS; index += 1) {
+    const done = index % 9
+    const track = tracks[index % tracks.length] ?? '其他'
+    const owner = owners[index % owners.length] ?? '待定'
+    rows.push(`${index},${track},${owner},${done},9,${done === 8 ? '已完成' : '进行中'}`)
+  }
+  return rows.join('\n')
+}
+
 const FILE_SEEDS: Record<string, FileSeed> = {
   // 默认项目 weekly-report:一份被改过的 README(三种变更标记齐全 + 一段足够长的未变更正文用于折叠
-  // + 一段 **mermaid 时序图**用来演示渲染态里的图表)。
+  // + 一段 **mermaid 时序图**用来演示预览态里的图表)。
   'README.md': {
     kind: 'markdown',
     language: 'markdown',
@@ -160,7 +179,7 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       { change: 'removed', text: '- 发给团队的通知草稿' },
     ],
   },
-  // HTML 模板:渲染态走 sandbox 的 iframe(里面的脚本可跑,但源是不透明的)。
+  // HTML 模板:预览态走 sandbox 的 iframe(里面的脚本可跑,但源是不透明的)。
   'examples/report.html': {
     kind: 'html',
     language: 'html',
@@ -217,7 +236,8 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       '  exit 3',
       'fi',
       '',
-      'awk -F, \'NR > 1 { printf "%-12s %s/%s\\n", $2, $3, $4 }\' progress.csv',
+      // progress.csv 的列序是 week,track,owner,done,total,status —— track 是 $2,done/total 是 $4/$5。
+      'awk -F, \'NR > 1 { printf "%-12s %s/%s\\n", $2, $4, $5 }\' progress.csv',
     ].join('\n'),
   },
   // Apache 配置:同样走 legacy-modes(apacheconf 模式)。
@@ -297,6 +317,77 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       '```',
     ].join('\n'),
   },
+  // ---- 数据文件样本(examples/ 下三份 JSON + 一份大表)----
+  // 与 render-check.md 同属「演示样本」:分别让 JSON 树预览、JSON 表格预览、非法 JSON 的降级
+  // 与 CSV 的行数上限降级各有用武之地(见 file-panel.vue 的档位矩阵与 csv-preview.vue)。
+  //
+  // 根是**对象数组**的 JSON:JSON 预览的「表格」档只在这种形状下出现(列 = 各对象键的并集,
+  // 行 = 各元素)。`checks` 是数组 —— 表格里它会被压成紧凑 JSON 并截断,正好演示嵌套值的呈现。
+  'examples/schedule.json': {
+    kind: 'json',
+    language: 'json',
+    mime: 'application/json',
+    source: [
+      '[',
+      '  { "track": "登录流程", "owner": "林一舟", "milestone": "W39", "status": "已演示", "progress": 100, "checks": ["入口", "通知", "回退"] },',
+      '  { "track": "通知原型", "owner": "周洁", "milestone": "W39", "status": "待补异常分支", "progress": 83, "checks": ["触发", "文案"] },',
+      '  { "track": "知识库", "owner": "陈默", "milestone": "W40", "status": "未启动", "progress": 0, "checks": [] },',
+      '  { "track": "演示准备", "owner": "林一舟", "milestone": "W40", "status": "彩排中", "progress": 75, "checks": ["主线", "备份"] },',
+      '  { "track": "渠道复盘", "owner": "周洁", "milestone": "W41", "status": "等数据回填", "progress": 50, "checks": ["口径"] }',
+      ']',
+    ].join('\n'),
+  },
+  // 根是**对象**的 JSON:**没有**表格档(那一枚按钮不渲染),走折叠树;同时含字符串 / 数字 /
+  // 布尔 / null / 嵌套对象 / 数组,正好演示「值按类型着色」与默认展开层数。
+  'examples/config.json': {
+    kind: 'json',
+    language: 'json',
+    mime: 'application/json',
+    source: [
+      '{',
+      '  "project": "weekly-report",',
+      '  "version": 3,',
+      '  "output": { "dir": "dist", "format": "markdown", "limits": { "rows": 300, "columns": 32 } },',
+      '  "tracks": ["产品", "增长", "基建"],',
+      '  "notify": false,',
+      '  "owner": null',
+      '}',
+    ].join('\n'),
+  },
+  // **非法 JSON**(尾随逗号,像一次没改完的编辑):演示解析失败的降级 —— 一行可读的错误加一句
+  // 指路,面板不白屏、源码档仍可达。真实仓库里不会有这种文件,故它与 render-check.md 同性质:
+  // 一份**改动样本**(用来验证降级路径),而不是一份正常的项目文件。
+  'examples/broken.json': {
+    kind: 'json',
+    language: 'json',
+    mime: 'application/json',
+    source: [
+      '{',
+      '  "project": "weekly-report",',
+      '  "tracks": ["产品", "增长",],',
+      '}',
+    ].join('\n'),
+  },
+  // 超出表格行数上限的导出表:演示「只显前 N 行 + 表下一行说明」的降级。
+  'examples/large-export.csv': {
+    kind: 'csv',
+    language: 'csv',
+    mime: 'text/csv',
+    source: largeExportCsv(),
+  },
+  // 列数不齐 + 引号包裹的字段:演示解析器的两处容错 —— `"含逗号,的备注"` 是一个字段而不是两个;
+  // 第 3 行比表头多一列,**照渲不报错**(按最大列数补齐,表头缺的补空)。
+  'examples/ragged.csv': {
+    kind: 'csv',
+    language: 'csv',
+    mime: 'text/csv',
+    source: [
+      'id,track,note',
+      '1,登录流程,"含逗号,的备注"',
+      '2,通知原型,只有两列',
+      '3,知识库,第三行多一列,溢出列',
+    ].join('\n'),
+  },
   // 工具函数:一个被改过的函数 + 一段新增的函数。
   'src/utils/format.ts': {
     kind: 'text',
@@ -357,23 +448,28 @@ const FILE_SEEDS: Record<string, FileSeed> = {
       { change: 'added', text: "app.mount('#app')" },
     ],
   },
+  // 进度报表:一份**像样的报表**(多列、文本列与数值列并存),用来演示 CSV 预览的表格口径 ——
+  // 首行即表头、行号列、文本列左对齐 / 数值列右对齐。kind 是 `csv`(不是 text + language):
+  // 面板的档位矩阵按 kind 决定,只有把 csv 单列出来,它才拿得到预览档(见 contracts/main.tsp)。
   'progress.csv': {
-    kind: 'text',
+    kind: 'csv',
     language: 'csv',
     mime: 'text/csv',
     source: [
-      'week,track,done,total',
-      '2026-W39,登录流程,8,8',
-      '2026-W39,通知原型,5,6',
-      '2026-W39,知识库,0,5',
-      '2026-W40,演示准备,3,4',
+      'week,track,owner,done,total,status',
+      '2026-W39,登录流程,林一舟,8,8,已完成',
+      '2026-W39,通知原型,周洁,5,6,进行中',
+      '2026-W39,知识库,陈默,0,5,未启动',
+      '2026-W40,演示准备,林一舟,3,4,进行中',
+      '2026-W40,渠道复盘,周洁,2,4,进行中',
     ].join('\n'),
     lines: [
-      { change: 'none', text: 'week,track,done,total' },
-      { change: 'modified', text: '2026-W39,登录流程,8,8', previous: '2026-W39,登录流程,7,8', highlights: ['8'] },
-      { change: 'none', text: '2026-W39,通知原型,5,6' },
-      { change: 'none', text: '2026-W39,知识库,0,5' },
-      { change: 'added', text: '2026-W40,演示准备,3,4' },
+      { change: 'none', text: 'week,track,owner,done,total,status' },
+      { change: 'modified', text: '2026-W39,登录流程,林一舟,8,8,已完成', previous: '2026-W39,登录流程,林一舟,7,8,进行中', highlights: ['8,8,已完成'] },
+      { change: 'none', text: '2026-W39,通知原型,周洁,5,6,进行中' },
+      { change: 'none', text: '2026-W39,知识库,陈默,0,5,未启动' },
+      { change: 'added', text: '2026-W40,演示准备,林一舟,3,4,进行中' },
+      { change: 'added', text: '2026-W40,渠道复盘,周洁,2,4,进行中' },
     ],
   },
   'notes/2026-W40.md': {
@@ -447,7 +543,9 @@ const FILE_SEEDS: Record<string, FileSeed> = {
     ],
   },
   'release-plan.csv': {
-    kind: 'text',
+    // 同 progress.csv:CSV 一律走 csv kind,否则同一个面板里会出现「一份 .csv 有表格、另一份
+    // 只有源码」的不一致(档位矩阵只看 kind,不看扩展名)。
+    kind: 'csv',
     language: 'csv',
     mime: 'text/csv',
     source: [
@@ -545,8 +643,9 @@ function fallbackSeed(path: string): FileSeed {
     return { kind: 'markdown', language: 'markdown', mime: 'text/markdown', source }
   }
   if (name.endsWith('.csv')) {
+    // 其余项目里的 .csv 也一律是 csv kind —— 档位矩阵由 kind 决定,给了 kind 才有表格预览档。
     return {
-      kind: 'text',
+      kind: 'csv',
       language: 'csv',
       mime: 'text/csv',
       source: ['id,name,status', '1,样例条目,进行中'].join('\n'),
@@ -562,7 +661,7 @@ function fallbackSeed(path: string): FileSeed {
   }
   if (name.endsWith('.json')) {
     return {
-      kind: 'text',
+      kind: 'json',
       language: 'json',
       mime: 'application/json',
       source: ['{', '  "version": 1,', '  "enabled": true', '}'].join('\n'),
@@ -597,7 +696,7 @@ function isBinary(path: string): boolean {
 // projectId 目前不参与查表(path 在演示数据里已唯一),保留入参是为了贴合真实接口形状。
 export function mockFileContent(projectId: string, path: string): Omit<FileContent, 'confirmationId'> {
   void projectId
-  // 图片:只有渲染态,内容在 contentUrl 里,没有源码与变更视图。
+  // 图片:只有预览档,内容在 contentUrl 里,没有源码与变更视图。
   const imageUrl = IMAGE_SEEDS[path]
   if (imageUrl !== undefined) {
     return { path, kind: 'image', language: 'image', mime: 'image/svg+xml', source: '', contentUrl: imageUrl, addedCount: 0, removedCount: 0, lines: [] }

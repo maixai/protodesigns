@@ -327,13 +327,15 @@ export const workspace = {
     // merely hiding the window has no visible effect and leaves the region rendering a hidden member);
     // only the floating form hides the window.
     closeTab: 'Close this file tab',
-    // Top three-way view: rendered (read-only presentation) / source (editable) / changes (the existing diffs).
+    // Top pane switcher: preview (read-only presentation) / source (editable) / changes (the existing diffs).
+    // Note: the preview pane only serves kinds that have a presentation **different from their text**
+    // (markdown / html / image); plain text (code / .conf / .sh …) has source / changes only.
+    // See file-panel.vue for the naming and the rationale.
     paneLabel: 'Display mode',
-    paneRender: 'Rendered',
+    panePreview: 'Preview',
     paneSource: 'Source',
     paneChange: 'Changes',
-    // The rendered view is read-only, so it offers an explicit way into editing.
-    // The Source segment is the **only** edit entry, so its hint says so.
+    // The preview pane is read-only, so the Source segment is the **only** edit entry; its hint says so.
     sourceHint: 'Source · editable',
     // Alt text for images and the accessible name of the HTML preview frame.
     imageAlt: 'Image: {name}',
@@ -376,6 +378,30 @@ export const workspace = {
     retry: 'Retry',
     emptyTitle: 'Cannot preview this file',
     emptyBody: 'This is a binary file; the workspace previews text content only.',
+    // ---- Data-file previews (CSV table / JSON tree and table) ----
+    // Both previews are **read-only**; the copy says what this is and what it can do, never
+    // implying an edit (editing always goes through the Source pane). The row-number corner
+    // header is screen-reader-only, so its name is carried by aria-label.
+    rowNumber: 'Row number',
+    // CSV: the table's accessible name, plus the empty-table and over-the-row-cap notes.
+    csvTableLabel: 'Data table',
+    csvEmpty: 'This table has no content.',
+    csvTruncated: 'Showing the first {shown} rows of {total}',
+    // JSON: accessible names for both views, the tree/table switch, the expand controls, and the
+    // two-line fallback for a parse failure.
+    jsonTreeLabel: 'JSON structure',
+    jsonTableLabel: 'JSON table',
+    jsonViewLabel: 'Display form',
+    jsonViewTree: 'Tree',
+    jsonViewTable: 'Table',
+    jsonExpandLabel: 'Expand controls',
+    jsonExpandAll: 'Expand all',
+    jsonCollapseAll: 'Collapse all',
+    jsonExpandNode: 'Expand {key}',
+    jsonCollapseNode: 'Collapse {key}',
+    jsonRootLabel: 'root',
+    jsonError: 'This is not valid JSON: {message}',
+    jsonErrorHint: 'Switch to the Source pane to read the raw content.',
   },
   // ---- Region splitting: drop a tab on a region's edge to split a new region off along that edge;
   // regions are separated by draggable splitters ----

@@ -19,19 +19,36 @@
 //     (Reviewable 的文档明确写「窗口变窄时并排自动转为统一,反之亦然」);
 //   · 换行开关:长行不横向滚动。
 //
-// 顶部一条分段控件切换**三档视图**,同一份内容在同一栏里就地换形态:
-//   · 渲染 —— Markdown 按 Markdown 渲染(含 mermaid 图)/ HTML 走 sandbox iframe / 图片直接显示 /
-//     其余文本类型给等宽预览。**只读** —— 只读态是「看」的默认,故在显眼处给一枚「编辑」入口,
-//     点了切到源码态并把焦点交给编辑器。
+// 顶部一条分段控件切换**可用档位**,同一份内容在同一栏里就地换形态:
+//   · 预览 —— 只服务**存在与文本不同的呈现**的类型:Markdown 按 Markdown 渲染(含 mermaid 图)/
+//     HTML 走 sandbox iframe / 图片直接显示。**只读** —— 只读态是「看」的默认,故唯一的编辑
+//     入口是「源码」档(点了切过去),不另摆第二枚「编辑」按钮。
 //   · 源码 —— CodeMirror 6,可编辑、带语法高亮(语言映射见 data/file-language.ts)。
 //   · 变更 —— 既有的「整个文件 / 统一 diff / 并排 diff」三段,原样保留,只是收进这一档之下。
+//
+// 档位命名(调研结论):业界对这条「呈现」侧的标准词是**预览**而不是「渲染」—— VS Code 的
+// Markdown **Preview**、Visual Studio 的 preview window、Markdown Editor v2 的三档 Source /
+// Split / Preview、GitHub 的 Preview 页签,一致用「预览」。「渲染」描述的是**过程**,「预览」
+// 描述的是**这一档是什么**,故取「预览」。
+//
+// 档位可用性由契约的 kind 决定(并非一律三档):
+//   · markdown / html / csv / json —— 有「与文本不同的呈现」,给 预览 / 源码 / 变更;
+//   · image —— 有呈现、但没有可编辑的文本,给 预览(image 无源码档);
+//   · text(其余代码 / .conf / .sh …)—— **没有预览档**,只有 源码 / 变更。
+//     依据:VS Code 的 Custom Editor API 列举需要替代呈现的场景只有「Markdown 这类语言的
+//     WYSIWYG 编辑器」「CSV / JSON / XML 这类数据文件的替代可视化呈现」「着色器 / 3D 模型这类
+//     资产的预览」—— 纯文本不在其中。给它们一档只读、无高亮的纯文本,等于同时损失高亮与
+//     可编辑性,是**纯亏损**(Warp 的同类需求 issue #11529 也只给 .html 这种「有可运行呈现」
+//     的类型做 Rendered / Source / Split);
+//   · binary —— 不呈现内容,走「无法预览」空态。
+// csv / json 之所以能从 text 里分出来,是因为契约给了它们各自的 kind(见 contracts/main.tsp):
+// 它们的那一份结构化呈现(表格 / 折叠树)正是预览档的价值所在,而 text 没有这份价值。
+// 默认档按「有预览则预览,否则源码」派生;换文件 / 类型变化后当前档若不可用,回落到默认档。
 //
 // 形态依据(调研结论):业界成熟词汇是 Obsidian 的 Source / Live Preview / Reading View 三态;
 // VS Code 用户在 microsoft/vscode#301686 里明确要求「在**同一个 tab** 里用一个按钮切换阅读与
 // 编辑」(原话抱怨 split pane 笨重、预览入口太隐蔽)→ 单栏切换是主流诉求。本原型因此**不做**
-// Live Preview / WYSIWYG,只做「源码可编辑 + 渲染只读」。
-//
-// 视图可用性由契约的 kind 决定:image 只有渲染态(没有可编辑的文本),binary 走「无法预览」空态。
+// Live Preview / WYSIWYG,只做「源码可编辑 + 预览只读」。
 //
 // a11y:悬浮态是**非模态**对话框(不写 aria-modal,不圈定焦点),停靠态是内容区里的 `region`;
 // 其内容区是文件栏那个 tablist 的 tabpanel(文件栏与转录区**各自**有一个 tablist 与 tabpanel,
@@ -50,6 +67,8 @@ import { useI18n } from '../i18n'
 import { useCodeEditor } from '../composables/use-code-editor'
 import { useWindowFrame } from '../composables/use-window-frame'
 import WindowFrame from './window-frame.vue'
+import CsvPreview from './csv-preview.vue'
+import JsonPreview from './json-preview.vue'
 import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
@@ -117,9 +136,9 @@ const PANEL_MIN_H = 200
 // 「变更」档里的三段展示方式(整个文件 / 统一 diff / 并排 diff)。
 type ViewMode = 'file' | 'unified' | 'side'
 const viewMode = ref<ViewMode>('file')
-// 顶部三档视图。默认落在**渲染** —— 单一规则,不按文件类型变:看是默认意图,编辑是显式动作。
-type Pane = 'render' | 'source' | 'change'
-const pane = ref<Pane>('render')
+// 顶部档位。默认档按 kind 派生(见 defaultPane):有预览则预览,否则源码。
+type Pane = 'preview' | 'source' | 'change'
+const pane = ref<Pane>('preview')
 const isWrap = ref(false)
 const expandedFolds = ref<Set<number>>(new Set())
 const canSideBySide = ref(true)
@@ -128,20 +147,26 @@ const content = computed(() => (props.state.status === 'ready' ? props.state.con
 const lines = computed<FileLine[]>(() => content.value?.lines ?? [])
 // 图片的来源(仅 kind === image 非空):原型无后端,契约里给的是 data URL。
 const contentUrl = computed(() => content.value?.contentUrl ?? '')
-// 呈现类别决定「有哪些视图可用」。binary 走「无法预览」空态(没有内容可渲染);
-// image 只有渲染态 —— 图片没有可编辑的文本,故没有源码态,也就没有「编辑」入口。
+// 呈现类别决定「有哪些档可用」。binary 走「无法预览」空态(没有内容可呈现);
+// image 只有预览档 —— 图片没有可编辑的文本,故没有源码档,也就没有「编辑」入口;
+// text(代码 / .conf / .sh …)只有源码 / 变更 —— 它们没有「与文本不同的呈现」,给一档只读
+// 纯文本是纯亏损(依据见文件头);csv / json 与 markdown / html 同组 —— 各自有一份结构化 /
+// 可运行的呈现,故三档齐备(见下方预览档的分支)。
 const kind = computed<FileKindId | null>(() => content.value?.kind ?? null)
 const paneOptions = computed<Pane[]>(() => {
   if (kind.value === null || kind.value === 'binary') return []
-  if (kind.value === 'image') return ['render']
-  return ['render', 'source', 'change']
+  if (kind.value === 'image') return ['preview']
+  if (kind.value === 'text') return ['source', 'change']
+  return ['preview', 'source', 'change']
 })
+// 默认档:有预览则预览,否则源码。
+const defaultPane = computed<Pane>(() => (paneOptions.value.includes('preview') ? 'preview' : 'source'))
 
 // 编辑作用于**内存里的 source**:刷新即重置,与原型其余部分同一口径。
 // 注意它**不重算「变更」档的 diff 标记** —— 那些标记来自 mock 的下发(它表达的是「相对上一次
 // 改动」),编辑只是把人这台机器上的当前内容改掉;界面也不得暗示「变更已更新」。
 const sourceDraft = ref('')
-// 渲染态的容器(标记为只读):mermaid 图在 HTML 落到 DOM 之后就地渲染。
+// 预览态的容器(标记为只读):mermaid 图在 HTML 落到 DOM 之后就地渲染。
 const renderHost = ref<HTMLElement | null>(null)
 const editorHost = ref<HTMLElement | null>(null)
 const renderedHtml = ref('')
@@ -150,6 +175,8 @@ const renderedHtml = ref('')
 watch(() => [props.path, props.state] as const, () => {
   expandedFolds.value = new Set()
   sourceDraft.value = content.value?.source ?? ''
+  // 换文件 / 内容落定后回到该类型的默认档(此时才知道 kind;加载中 kind 为 null,先不动)。
+  if (kind.value !== null) pane.value = defaultPane.value
   refreshRender()
 }, { immediate: true })
 
@@ -159,16 +186,16 @@ function refreshRender(): void {
 }
 
 async function enhanceCurrent(): Promise<void> {
-  if (pane.value !== 'render' || kind.value !== 'markdown') return
+  if (pane.value !== 'preview' || kind.value !== 'markdown') return
   const host = renderHost.value
   if (host === null) return
   await enhanceMermaidDiagrams(host, t.value.workspace.filePanel.diagramFailed)
 }
 
 onMounted(() => { void enhanceCurrent() })
-// 源码态改过之后回到渲染态,渲染的必须是**改过之后**的内容(两态共用同一份 source)。
+// 源码态改过之后回到预览态,预览的必须是**改过之后**的内容(两态共用同一份 source)。
 watch([sourceDraft, pane], () => {
-  if (pane.value === 'render') refreshRender()
+  if (pane.value === 'preview') refreshRender()
 })
 watch(renderedHtml, () => { void enhanceCurrent() }, { flush: 'post' })
 
@@ -190,12 +217,13 @@ const headerHint = computed(() => (isDocked.value ? t.value.workspace.filePanel.
 // 模式切换按钮的文案:悬浮时提示「停靠」,停靠时提示「悬浮」。
 const placementLabel = computed(() => (isDocked.value ? t.value.workspace.filePanel.float : t.value.workspace.filePanel.dock))
 
-// 三档视图的图标与文案。图标只在**宽档**用于辅助识别(窄档保留文字,见 style 里的说明),
-// 故 aria-label 一律给出完整语义(图标按钮不靠图形传达含义)。
-const PANE_ICON: Record<Pane, 'presentation' | 'code' | 'table'> = { render: 'presentation', source: 'code', change: 'table' }
+// 档位的图标与文案。图标只在**宽档**用于辅助识别(窄档保留文字,见 style 里的说明),
+// 故 aria-label 一律给出完整语义(图标按钮不靠图形传达含义)。预览档沿用「呈现」类图标
+// (它本就是屏幕 / 呈现的语义)。
+const PANE_ICON: Record<Pane, 'presentation' | 'code' | 'table'> = { preview: 'presentation', source: 'code', change: 'table' }
 
 function paneLabel(option: Pane): string {
-  if (option === 'render') return t.value.workspace.filePanel.paneRender
+  if (option === 'preview') return t.value.workspace.filePanel.panePreview
   if (option === 'source') return t.value.workspace.filePanel.paneSource
   return t.value.workspace.filePanel.paneChange
 }
@@ -357,8 +385,9 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
         </span>
       </div>
       <div class="file-panel__tools">
-        <!-- 顶部三档视图:渲染 | 源码 | 变更。原生按钮 + aria-pressed(键盘可达、状态可读);
-             窄容器下按既有做法收成图标(可访问名由 aria-label 承担)。 -->
+        <!-- 顶部档位:预览 | 源码 | 变更(可用档由 kind 决定,纯文本没有预览档)。
+             原生按钮 + aria-pressed(键盘可达、状态可读);窄容器下按既有做法收成图标
+             (可访问名由 aria-label 承担)。 -->
         <div class="file-panel__modes" role="group" :aria-label="t.workspace.filePanel.paneLabel">
           <button
             v-for="option in paneOptions"
@@ -375,12 +404,12 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
           </button>
         </div>
         <!-- 换行开关:宽档是**文字钮**,最窄档(≤559px)收成图标钮 —— 见下方 @container 的说明。
-             渲染态不渲染它:那一档没有「长行」这回事(渲染出来的 HTML 自己换行),摆了也不产生
-             任何效果,那就是一枚死控件。源码与变更两档共用它(编辑器走 lineWrapping)。
+             预览档不渲染它:那一档没有「长行」这回事(呈现出来的 HTML / 图片自己排版),摆了也不
+             产生任何效果,那就是一枚死控件。源码与变更两档共用它(编辑器走 lineWrapping)。
              收窄后可见文字消失,**可访问名由 aria-label 承担**(与可见文字同一条词条),
              aria-pressed 的状态语义不变,仍是原生 button(键盘可达)。 -->
         <button
-          v-if="pane !== 'render'"
+          v-if="pane !== 'preview'"
           type="button"
           class="file-panel__toggle"
           :aria-pressed="isWrap"
@@ -429,14 +458,17 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
         <h2>{{ t.workspace.filePanel.emptyTitle }}</h2>
         <p>{{ t.workspace.filePanel.emptyBody }}</p>
       </div>
-      <!-- ---- 渲染档:各类型按自己的方式呈现,**一律只读** ---- -->
-      <template v-else-if="pane === 'render'">
-        <!-- 本档**只读**,且**没有**第二枚「编辑」入口 —— 唯一的编辑入口就是标题栏分段控件里的
+      <!-- ---- 预览档:只服务有「与文本不同的呈现」的类型,各按自己的方式呈现,**一律只读** ---- -->
+      <template v-else-if="pane === 'preview'">
+        <!-- 本档**只读**,且**没有**第二枚「编辑」入口 —— 唯一的编辑入口就是标题栏档位里的
              「源码」档(带 code 图标 + 「源码 · 可编辑」提示)。依据:PatternFly 的 inline-edit
              指南把铅笔开关**内联放在 header 里**;Linear / Notion / Attio 的对照也被总结成
              「**两个并列的编辑按钮本身就是异味**,一流产品收敛成一个清晰模型」;而在只读的阅读
              视图里摆一枚实心主按钮,会把「读」这个首要动作的视觉主次整个压翻。
-             另:本档也不吸顶任何工具行 —— 正文之上不再压一条色带。 -->
+             另:markdown / html / image 三档**不吸顶任何工具行** —— 正文之上不再压一条色带。
+             唯一的例外是 JSON:它自带「树 | 表格」与「全部展开 | 全部折叠」这几个**同档内的视图
+             开关**(等同变更档那三段),故复用那条面板式工具条(.file-panel__subtools)。
+             本档**只**出现 markdown / html / image / csv / json 五种 kind(text 没有预览档)。 -->
         <!-- 图片:contain(不拉伸、不裁切),src 来自契约的 contentUrl。 -->
         <div v-if="kind === 'image'" class="file-render file-render--image">
           <img class="file-render__image" :src="contentUrl" :alt="t.workspace.filePanel.imageAlt.replace('{name}', path)" />
@@ -448,8 +480,37 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
              allow-same-origin,源因此是不透明的:iframe 里的脚本读不到本页的 localStorage、也调不了
              同源已鉴权的接口(n8n CVE-2026-65597 正是缺了这一条)。 -->
         <iframe v-else-if="kind === 'html'" class="file-render file-render__frame" :srcdoc="sourceDraft" sandbox="allow-scripts" :title="t.workspace.filePanel.htmlPreview" />
-        <!-- 其余文本类型:等宽纯文本预览(不做过度渲染)。插值天然转义,不走 v-html。 -->
-        <pre v-else class="file-render file-render--text">{{ sourceDraft }}</pre>
+        <!-- CSV:只读的数据表格(首行即表头 + 行号;文本列左对齐 / 数字列右对齐;超限只显前 N 行)。
+             值走文本节点渲染,不经 DOMPurify 那条管线 —— 见 csv-preview.vue 的分工说明。 -->
+        <CsvPreview v-else-if="kind === 'csv'" :source="sourceDraft" />
+        <!-- JSON:只读的折叠树 + (根为对象数组时的)表格。工具条由本组件以插槽给出 ——
+             它的类名属于本文件的 scoped 样式,写在插槽里才拿得到变更档那一套面板式工具条的视觉。 -->
+        <JsonPreview v-else-if="kind === 'json'" :source="sourceDraft">
+          <template #toolbar="{ view, canExpand, canTable, setView, expandAll, collapseAll }">
+            <!-- 整条工具行只在**真的有工具可用**时渲染:解析失败时既没有树也没有表,
+                 摆一排点了没反应的死控件是明确的假交互。 -->
+            <div v-if="canExpand" class="file-panel__subtools">
+              <!-- 「树 | 表格」只在数据确实是对象数组时出现(否则不渲那一枚按钮,不摆死控件)。 -->
+              <div v-if="canTable" class="file-panel__views" role="group" :aria-label="t.workspace.filePanel.jsonViewLabel">
+                <button type="button" class="file-panel__view" :aria-pressed="view === 'tree'" :aria-label="t.workspace.filePanel.jsonViewTree" :title="t.workspace.filePanel.jsonViewTree" @click="setView('tree')">
+                  <DliIcon class="file-panel__view-icon" name="database" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.jsonViewTree }}</span>
+                </button>
+                <button type="button" class="file-panel__view" :aria-pressed="view === 'table'" :aria-label="t.workspace.filePanel.jsonViewTable" :title="t.workspace.filePanel.jsonViewTable" @click="setView('table')">
+                  <DliIcon class="file-panel__view-icon" name="table" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.jsonViewTable }}</span>
+                </button>
+              </div>
+              <!-- 展开控制只在树视图里出现 —— 表格视图下它对视图没有任何作用(死控件)。 -->
+              <div v-if="view === 'tree'" class="file-panel__views" role="group" :aria-label="t.workspace.filePanel.jsonExpandLabel">
+                <button type="button" class="file-panel__view" :aria-label="t.workspace.filePanel.jsonExpandAll" :title="t.workspace.filePanel.jsonExpandAll" @click="expandAll()">
+                  <DliIcon class="file-panel__view-icon" name="arrowDown" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.jsonExpandAll }}</span>
+                </button>
+                <button type="button" class="file-panel__view" :aria-label="t.workspace.filePanel.jsonCollapseAll" :title="t.workspace.filePanel.jsonCollapseAll" @click="collapseAll()">
+                  <DliIcon class="file-panel__view-icon" name="chevronRight" size="sm" /><span class="file-panel__view-label">{{ t.workspace.filePanel.jsonCollapseAll }}</span>
+                </button>
+              </div>
+            </div>
+          </template>
+        </JsonPreview>
       </template>
       <!-- ---- 源码档:CodeMirror 6,可编辑、带语法高亮(语言映射见 data/file-language.ts) ---- -->
       <div v-else-if="pane === 'source'" ref="editorHost" class="file-panel__editor" />
@@ -619,7 +680,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
 }
 
 /* 分段控件:一组互斥取值的原生按钮 + aria-pressed(键盘可达、状态可读)。两处共用同一套样式 ——
-   标题栏里的**三档视图**(渲染 / 源码 / 变更)与内容区里的**变更三段**(整个文件 / 统一 diff /
+   标题栏里的**档位**(预览 / 源码 / 变更)与内容区里的**变更三段**(整个文件 / 统一 diff /
    并排 diff)。后者住在内容区、不进标题栏的宽度预算,窄面板下才不会把标题栏控件挤进角手柄命中区。 */
 .file-panel__views,
 .file-panel__modes {
@@ -758,7 +819,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
     display: inline-flex;
   }
 
-  /* 三档视图在这一档**保留可见文字**(渲染 / 源码 / 变更各两字):内容区里的变更三段已经收成
+  /* 档位在这一档**保留可见文字**(预览 / 源码 / 变更各两字):内容区里的变更三段已经收成
      图标,若这里也收成图标,同一面板里就会出现两组互相看不懂的三图标 —— 且两者的字形本就
      有重合(code / table)。文字组在最小窗宽下也放得下(实测 320 时标题栏仍有富余)。 */
 }
@@ -842,37 +903,27 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   justify-self: start;
 }
 
-/* ---- 档内小工具行(渲染态的「编辑」/ 变更态的三段视图)----
-   它住在**内容区**里并吸顶:标题栏的宽度预算不动(窄面板才不会把控件挤进角手柄命中区),
-   横向也跟着吸左,长行 diff 横向滚动时控件不会跟着跑掉。 */
+/* ---- 档内工具行(现只服务「变更」档的三段视图)----
+   它是**面板自身的工具条**,不是浮在正文上的盒子:**通栏**、底色与「面」同源、下缘一条发丝线 ——
+   层级语言因此与面板其余部分一致(本设计语言的层级以发丝描边为主,不用「卡片套卡片」)。
+   它同时吸顶:长行 diff 横向或纵向滚动时控件不跟着跑掉。底色必须**不透明**(与面同源),
+   否则正文会从它下面透出来。 */
 .file-panel__subtools {
   position: sticky;
   inset-block-start: 0;
-  inset-inline-start: 0;
   z-index: var(--dl-z-sticky);
   display: flex;
   align-items: center;
   gap: var(--dl-space-2);
-  width: fit-content;
-  max-width: 100%;
+  inline-size: 100%;
   padding: var(--dl-space-2) var(--workspace-gutter);
-  background: var(--dl-bg-base);
+  background: var(--dl-bg-elevated);
+  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
 
-/* ---- 渲染档:各类型按自己的方式呈现 ---- */
+/* ---- 预览档:各类型按自己的方式呈现(markdown / html / image) ---- */
 .file-render {
   color: var(--dl-text-primary);
-}
-
-/* 纯文本预览:等宽 + 保留换行(不做过度渲染)。 */
-.file-render--text {
-  margin: 0;
-  padding: var(--dl-space-2) var(--workspace-gutter);
-  font-family: var(--dl-font-mono);
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-snug);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 /* 图片:contain —— 完整看得见,不拉伸、不裁切。 */

@@ -306,12 +306,14 @@ export const workspace = {
     // 停靠态的 ✕ 关的是**这个文件的 tab**(面板占据的是区域内容区,隐藏窗口没有可见效果,
     // 而且会让「区域仍在渲染它、tab 却标记为不可见」自相矛盾);悬浮态才是隐藏窗体。
     closeTab: '关闭该文件标签',
-    // 顶部三档视图:渲染(只读的呈现)/ 源码(可编辑)/ 变更(既有的 diff 三段收在这一档下)。
+    // 顶部档位:预览(只读的呈现)/ 源码(可编辑)/ 变更(既有的 diff 三段收在这一档下)。
+    // 注意:预览档**只服务有「与文本不同的呈现」的类型**(markdown / html / image);
+    // 纯文本(代码 / .conf / .sh…)没有预览档,只有源码 / 变更 —— 命名与取舍依据见 file-panel.vue。
     paneLabel: '显示方式',
-    paneRender: '渲染',
+    panePreview: '预览',
     paneSource: '源码',
     paneChange: '变更',
-    // 渲染态只读,故给一枚显式的编辑入口(切到源码态并把焦点交给编辑器)。
+    // 预览态只读,故唯一的编辑入口就是「源码」档。
     // 「源码」档的可访问名与提示:它同时是**唯一的编辑入口**,故把「可编辑」说出来。
     sourceHint: '源码 · 可编辑',
     // 图片的替代文本与 iframe 的可访问名(都用当前文件的路径作为可辨认的说明)。
@@ -354,6 +356,30 @@ export const workspace = {
     retry: '重试',
     emptyTitle: '无法预览这个文件',
     emptyBody: '这是一个二进制文件，工作台只预览文本内容。',
+    // ---- 数据文件的预览(CSV 表格 / JSON 树与表格)----
+    // 两类预览都**只读**;文案只说「这是什么」「能做什么」,不暗示可编辑(编辑一律回「源码」档)。
+    // 行号列的角格只对读屏可见,故它的名字由 aria-label 承担。
+    rowNumber: '行号',
+    // CSV:表格的可访问名 + 空表说明 + 越过行数上限时的说明({shown} / {total} 由载体替换)。
+    csvTableLabel: '数据表格',
+    csvEmpty: '这份表格没有内容。',
+    csvTruncated: '仅显示前 {shown} 行，共 {total} 行',
+    // JSON:两处视图的可访问名、树 / 表格开关与展开控制、以及解析失败的两行降级文案。
+    jsonTreeLabel: 'JSON 结构',
+    jsonTableLabel: 'JSON 表格',
+    jsonViewLabel: '显示形式',
+    jsonViewTree: '树',
+    jsonViewTable: '表格',
+    jsonExpandLabel: '展开控制',
+    jsonExpandAll: '全部展开',
+    jsonCollapseAll: '全部折叠',
+    // 展开钮的可访问名:动作 + 对象({key} 由载体替换为键名;根节点替换为「根节点」)。
+    jsonExpandNode: '展开 {key}',
+    jsonCollapseNode: '折叠 {key}',
+    jsonRootLabel: '根节点',
+    // 非法 JSON:第一行带上 JSON.parse 的原始信息({message}),第二行指路 —— 不白屏、不静默。
+    jsonError: '这段 JSON 无法解析：{message}',
+    jsonErrorHint: '切到「源码」档可以查看原始内容。',
   },
   // ---- 区域切分:把 tab 拖到某个区域的边缘,沿该边切出一个新区域;区域之间是可拖动的分隔线 ----
   regions: {

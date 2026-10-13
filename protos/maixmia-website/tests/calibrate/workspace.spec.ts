@@ -2486,9 +2486,9 @@ test('候选目录文件数与已打开项目的条目数对齐', async ({ page 
   await page.getByRole('button', { name: '打开项目', exact: true }).click()
   const dialog = page.locator('dialog.picker')
   await expect(dialog).toBeVisible()
-  // weekly-report 已打开,项目树里有 18 条(entryCount);候选列表显示的检测文件数必须与之一致,
-  // 否则演示里会出现「候选说 9 个、打开后 18 条」的观感矛盾(见 mocks/workspace.ts 的注释)。
-  await expect(dialog.locator('.picker__item', { hasText: 'weekly-report' }).locator('.picker__meta')).toContainText('18 个文件')
+  // weekly-report 已打开,项目树里有 23 条(entryCount);候选列表显示的检测文件数必须与之一致,
+  // 否则演示里会出现「候选说 9 个、打开后 23 条」的观感矛盾(见 mocks/workspace.ts 的注释)。
+  await expect(dialog.locator('.picker__item', { hasText: 'weekly-report' }).locator('.picker__meta')).toContainText('23 个文件')
 })
 
 // 区块标题(本轮改动):文案居中 + 左右各一条 1px 虚线;窄宽度下不换行。
@@ -3817,12 +3817,13 @@ const README = 'README.md'
 const PROGRESS = 'progress.csv'
 const GITIGNORE = '.gitignore'
 
-// 文件面板顶部三档视图(渲染 / 源码 / 变更)与档内的 diff 三段(整个文件 / 统一 diff / 并排 diff)。
+// 文件面板顶部档位(预览 / 源码 / 变更)与档内的 diff 三段(整个文件 / 统一 diff / 并排 diff)。
 // 文案来自 i18n 词条,测试读不到运行时词条,只能按同值写死(与既有 '整个文件' 同一套路)。
 const FILE_MODE = '.file-panel__mode'
-const PANE_ID = { '渲染': 'render', '源码': 'source', '变更': 'change' } as const
+const PANE_ID = { '预览': 'preview', '源码': 'source', '变更': 'change' } as const
 
-// 切到某一档并确认 data-pane 已落定。渲染是默认档;变更档下才出现既有的 diff 三段控件。
+// 切到某一档并确认 data-pane 已落定。默认档按 kind 派生(有预览则预览,否则源码);
+// 变更档下才出现既有的 diff 三段控件。
 async function showPane(panel: Locator, pane: keyof typeof PANE_ID): Promise<void> {
   await panel.locator(FILE_MODE, { hasText: pane }).first().click()
   await expect(panel).toHaveAttribute('data-pane', PANE_ID[pane])
@@ -3929,8 +3930,8 @@ test('文件树打开 = 悬浮窗体(不占 tab):单击 / 双击 / Enter 行为�
   await expect(page.locator(`${FILE_PANEL}[data-mode="floating"]`)).toHaveCSS('position', 'fixed')
   await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
   await expect(page.locator(`${FILE_PANEL}[data-file-path="README.md"]`)).toHaveAttribute('data-focused', 'true')
-  // 内容渲染出来了:默认落在**渲染**档(README 是 Markdown → 渲染出真实结构,不是骨架屏)。
-  await expect(page.locator(FILE_PANEL)).toHaveAttribute('data-pane', 'render')
+  // 内容呈现出来了:默认落在**预览**档(README 是 Markdown → 渲染出真实结构,不是骨架屏)。
+  await expect(page.locator(FILE_PANEL)).toHaveAttribute('data-pane', 'preview')
   await expect(page.locator(`${FILE_PANEL} .file-render--markdown h1`).first(), '内容渲染出来了').toBeVisible()
 
   // 双击 / Enter 与单击**行为一致**:仍是同一个悬浮窗体(不新增、不变成第二个、也不上条)。
@@ -4582,8 +4583,8 @@ test('文件面板:变更档 —— 三种变更标记 + 词级高亮 + 折叠�
   await expect(panel.locator('.file-panel__stats [data-kind="added"]')).toHaveText(/^\+\d+$/)
   await expect(panel.locator('.file-panel__stats [data-kind="removed"]')).toHaveText(/^−\d+$/)
 
-  // 默认落在**渲染**档:Markdown 渲染出真实结构(标题 / 列表 / 代码块),而且是只读的呈现。
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  // 默认落在**预览**档:Markdown 渲染出真实结构(标题 / 列表 / 代码块),而且是只读的呈现。
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
   await expect(panel.locator('.file-render--markdown h1')).toHaveText('weekly-report')
   expect(await panel.locator('.file-render--markdown ul li').count(), '渲染出真实列表结构').toBeGreaterThan(0)
   expect(await panel.locator('.file-render--markdown pre').count(), '渲染出代码块').toBeGreaterThan(0)
@@ -4897,7 +4898,7 @@ test('文件面板标题栏:40px 薄头、内部不换行、内容区不小于�
   await waitForStable(page)
   await clickFileRow(page, README)
   const panel = page.locator(FILE_PANEL)
-  // 换行钮在渲染档下不渲染(那一档没有长行可换)——切到变更档,标题栏才是「最宽」的那一态。
+  // 换行钮在预览档下不渲染(那一档没有长行可换)——切到变更档,标题栏才是「最宽」的那一态。
   await showPane(panel, '变更')
   const header = panel.locator('.dl-window__meta')
   const headerBox = await header.boundingBox()
@@ -4933,7 +4934,7 @@ test('文件面板标题栏:40px 薄头、内部不换行、内容区不小于�
     return { view: read('.file-panel__mode'), toggle: read('.file-panel__toggle'), close: read('.file-panel__close') }
   })
   console.log(`[panel header] 控件尺寸 ${JSON.stringify(sizes)}`)
-  expect(sizes.view?.h ?? 0, '三档视图分段按钮 = 24(密集档)').toBeLessThanOrEqual(25)
+  expect(sizes.view?.h ?? 0, '档位分段按钮 = 24(密集档)').toBeLessThanOrEqual(25)
   expect(sizes.toggle?.h ?? 0, '换行钮 = 32').toBeGreaterThanOrEqual(31)
   expect(sizes.toggle?.h ?? 0, '换行钮 = 32').toBeLessThanOrEqual(33)
   expect(sizes.close?.h ?? 0, '关闭钮 = 32').toBeGreaterThanOrEqual(31)
@@ -5239,10 +5240,11 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   await expect(page.locator(FILE_PANEL), '三个文件三个窗口').toHaveCount(3)
   await expect(page.locator(FILE_TAB), '悬浮窗体不占 tab').toHaveCount(0)
   for (const name of [README, PROGRESS, GITIGNORE]) await expect(panel(name), `${name} 的窗口在场`).toHaveCount(1)
-  // **每个窗口渲染的是自己的内容**(不是骨架屏):内容按 (域, 路径) 各存一份,互不覆盖。
-  // 默认落在渲染档 —— Markdown 渲染成结构、纯文本渲染成等宽预览,一律由 .file-render 承载。
+  // **每个窗口呈现的是自己的内容**(不是骨架屏):内容按 (域, 路径) 各存一份,互不覆盖。
+  // 默认档按 kind 派生:markdown 落在**预览**(内容本体是 .file-render),纯文本落在**源码**
+  // (内容本体是编辑器 .file-panel__editor)。两种都算「内容在场」,骨架屏 / 错误态不算。
   for (const name of [README, PROGRESS, GITIGNORE]) {
-    await expect(panel(name).locator('#file-panel-body .file-render').first(), `${name} 的内容渲染出来了`).toBeVisible()
+    await expect(panel(name).locator('#file-panel-body .file-render, #file-panel-body .file-panel__editor').first(), `${name} 的内容在场`).toBeVisible()
   }
   await expect(page.locator(`${FILE_PANEL}[data-status="loading"]`), '没有窗口停在骨架屏').toHaveCount(0)
   // 在多窗口之间来回切几轮:任何一轮都不得回到骨架屏(内容命中缓存,不重新拉取)。
@@ -5440,7 +5442,7 @@ test('文件面板:滚轮 / 横向滚动都隔离在面板内,不穿透到背后
   await expect(page.locator(FILE_PANEL)).toBeVisible()
   const body = page.locator('#file-panel-body')
   await expect(body).toBeVisible()
-  // 横向可滚区只存在于**变更**档(渲染态自己换行,不横滚);先切档再制造溢出。
+  // 横向可滚区只存在于**变更**档(预览态自己排版,不横滚);先切档再制造溢出。
   await showPane(page.locator(FILE_PANEL), '变更')
 
   // 先把「可滚」这件事做实:展开被折叠的未变更段(README 共 30+ 行),再把面板缩到最小高度,
@@ -5812,7 +5814,7 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
   // 用**悬浮**窗体:本用例要缩到最小以造出横向可滚区,只有悬浮窗体有缩放手柄。
   await clickFileRow(page, README)
   await expect(page.locator(FILE_PANEL)).toBeVisible()
-  // 横向可滚区只存在于**变更**档(渲染态自己换行);先切档。
+  // 横向可滚区只存在于**变更**档(预览态自己排版);先切档。
   await showPane(page.locator(FILE_PANEL), '变更')
   // 默认不换行(white-space: pre),但面板默认宽度足够宽,最长行仍放得下 —— 把面板缩到最小宽度,
   // 内容区才真的出现横向可滚区,「守卫不误伤合法横向滚动」这条才有意义。
@@ -6428,11 +6430,11 @@ test('标题栏在最小窗宽下仍可点:文件窗与对话窗的每一枚控�
   await login(page)
   await waitForStable(page)
 
-  // ---- 文件窗:工具行最宽(三档视图 + 换行 + 复位 + 停靠 + 关闭),最容易顶进 NE 预留 ----
+  // ---- 文件窗:工具行最宽(档位 + 换行 + 复位 + 停靠 + 关闭),最容易顶进 NE 预留 ----
   await clickFileRow(page, README)
   const filePanel = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
   await expect(filePanel).toHaveCount(1)
-  // 换行钮只在源码 / 变更档渲染(渲染档没有长行可换):切到变更档,标题栏才是最宽的那一态。
+  // 换行钮只在源码 / 变更档渲染(预览档没有长行可换):切到变更档,标题栏才是最宽的那一态。
   await showPane(filePanel, '变更')
   for (const width of [1280, 768] as const) {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
@@ -6740,7 +6742,7 @@ test('把悬浮窗体停靠进内容区时,盖着该区域的其它悬浮窗让�
 })
 
 // ============================================================================
-// 本轮新增:双击 tab 拆出 + 文件面板的三档视图(渲染 / 源码 / 变更)
+// 本轮新增:双击 tab 拆出 + 文件面板的档位(预览 / 源码 / 变更)
 // ============================================================================
 
 // 展开默认项目(weekly-report)顶层的一个目录。
@@ -6780,23 +6782,23 @@ test('双击对话 tab = 把该会话拆出为悬浮窗体(与拆出钮 / 快捷
   await expect(page.locator('.workspace-live')).toContainText('拆出')
 })
 
-test('文件面板三档视图:渲染态出真实结构、源码态出编辑器、变更态仍是既有 diff;键盘可达', async ({ page }) => {
+test('文件面板档位:预览态出真实结构、源码态出编辑器、变更态仍是既有 diff;键盘可达', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   await clickFileRow(page, README)
   const panel = page.locator(FILE_PANEL)
   await expect(panel).toBeVisible()
-  // 三档视图随**内容**就位(可用性由 kind 决定,加载中还不知道是哪种文件),故先等 ready。
+  // 档位随**内容**就位(可用档由 kind 决定,加载中还不知道是哪种文件),故先等 ready。
   await expect(panel).toHaveAttribute('data-status', 'ready')
 
   // 三段是**原生 button**(键盘可达、状态可读),文案与 i18n 同值。
   const labels = await panel.locator(FILE_MODE).evaluateAll((els) => els.map((el) => el.textContent))
-  expect(labels).toEqual(['渲染', '源码', '变更'])
+  expect(labels).toEqual(['预览', '源码', '变更'])
   expect(await panel.locator(FILE_MODE).first().evaluate((el) => el.tagName)).toBe('BUTTON')
 
-  // 默认 = 渲染:Markdown 渲染出真实结构(标题 / 列表 / 代码块)。
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  // 默认 = 预览:Markdown 渲染出真实结构(标题 / 列表 / 代码块)。
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
   await expect(panel.locator('.file-render--markdown h1')).toHaveText('weekly-report')
   expect(await panel.locator('.file-render--markdown ul li').count(), '渲染出列表').toBeGreaterThan(0)
   expect(await panel.locator('.file-render--markdown pre code').count(), '渲染出代码块').toBeGreaterThan(0)
@@ -6813,12 +6815,78 @@ test('文件面板三档视图:渲染态出真实结构、源码态出编辑器�
   await expect(panel).toHaveAttribute('data-view', 'file')
   await expect(panel.locator('.file-line__marker[data-change="modified"]').first(), '变更标记仍在场').toBeVisible()
   expect(await panel.locator('.file-line__hl').count(), '词级高亮仍在场').toBeGreaterThan(0)
-  // 渲染 / 源码两档下**不出现** diff 三段(它收在变更档之下)。
-  await showPane(panel, '渲染')
+  // 预览 / 源码两档下**不出现** diff 三段(它收在变更档之下)。
+  await showPane(panel, '预览')
   await expect(panel.locator('.file-panel__views')).toHaveCount(0)
 })
 
-test('渲染态:mermaid 产出 svg;注入被清洗;语法错的图只退化成代码块(不白屏、无脏日志)', async ({ page }) => {
+test('档位可用性按 kind 收敛:纯文本没有「预览」档,markdown / html / image 有;默认档 = 有预览则预览,否则源码', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const panel = page.locator(FILE_PANEL)
+  const labels = (): Promise<(string | null)[]> => panel.locator(FILE_MODE).evaluateAll((els) => els.map((el) => el.textContent))
+  const closePanel = async (): Promise<void> => {
+    await panel.locator('.file-panel__close').click()
+    await expect(panel).toHaveCount(0)
+  }
+
+  // ---- markdown:预览 / 源码 / 变更,默认**预览** ----
+  await clickFileRow(page, README)
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  expect(await labels(), 'markdown 三档齐备').toEqual(['预览', '源码', '变更'])
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  await closePanel()
+
+  // ---- csv:预览 / 源码 / 变更,默认**预览**(它有一份「与文本不同的呈现」= 表格) ----
+  await clickFileRow(page, PROGRESS)
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  expect(await labels(), 'csv 三档齐备').toEqual(['预览', '源码', '变更'])
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  await closePanel()
+
+  // ---- html:预览 / 源码 / 变更,默认**预览**(HTML 有可运行的呈现) ----
+  await expandDir(page, 'examples')
+  await clickFileRow(page, 'report.html')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  expect(await labels(), 'html 三档齐备').toEqual(['预览', '源码', '变更'])
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  await closePanel()
+
+  // ---- json:预览 / 源码 / 变更,默认**预览**(它有一份「与文本不同的呈现」= 折叠树 / 表) ----
+  await clickFileRow(page, 'schedule.json')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  expect(await labels(), 'json 三档齐备').toEqual(['预览', '源码', '变更'])
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  await closePanel()
+
+  // ---- text(代码 / .conf):只有 源码 / 变更,默认**源码**,且预览档**不可达**(不是「有但禁用」)----
+  for (const name of ['run-weekly.sh', 'apache.conf']) {
+    await clickFileRow(page, name)
+    await expect(panel).toHaveAttribute('data-status', 'ready')
+    expect(await labels(), `${name} 没有预览档`).toEqual(['源码', '变更'])
+    await expect(panel, `${name} 默认落在源码档`).toHaveAttribute('data-pane', 'source')
+    await expect(panel.locator('[data-pane="preview"]'), `${name} 预览档不可达`).toHaveCount(0)
+    await closePanel()
+  }
+
+  // ---- image:只有 预览 ----
+  await selectAgent(page, AGENT_NAMES['zh-CN'].writing)
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+  await expandDir(page, 'assets')
+  await clickFileRow(page, 'logo.svg')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  expect(await labels(), 'image 只有预览一档').toEqual(['预览'])
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  await closePanel()
+
+  // ---- binary:没有任何档位,仍是「无法预览」空态 ----
+  await clickFileRow(page, 'release-deck.pdf')
+  await expect(panel).toHaveAttribute('data-status', 'empty')
+  expect(await labels(), 'binary 没有任何档位').toEqual([])
+})
+
+test('预览态:mermaid 产出 svg;注入被清洗;语法错的图只退化成代码块(不白屏、无脏日志)', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   // 降级路径不该往控制台留脏:整条用例里出现任何 console error / 页面异常即失败。
   const consoleErrors: string[] = []
@@ -6830,7 +6898,7 @@ test('渲染态:mermaid 产出 svg;注入被清洗;语法错的图只退化成�
   await clickFileRow(page, 'render-check.md')
   const panel = page.locator(FILE_PANEL)
   await expect(panel).toHaveAttribute('data-status', 'ready')
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
 
   // mermaid 图按需动态加载 + 严格安全级,渲染成**真实 svg**。
   await expect.poll(async () => panel.locator('.file-render__diagram svg').count(), { message: 'mermaid 产出 svg' }).toBeGreaterThan(0)
@@ -6857,7 +6925,7 @@ test('渲染态:mermaid 产出 svg;注入被清洗;语法错的图只退化成�
   expect(consoleErrors, '降级不留 console error / 未捕获异常').toEqual([])
 })
 
-test('渲染态:HTML 走 sandbox iframe —— 含 allow-scripts,且不含 allow-same-origin', async ({ page }) => {
+test('预览态:HTML 走 sandbox iframe —— 含 allow-scripts,且不含 allow-same-origin', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -6865,12 +6933,12 @@ test('渲染态:HTML 走 sandbox iframe —— 含 allow-scripts,且不含 allow
   await clickFileRow(page, 'report.html')
   const panel = page.locator(FILE_PANEL)
   await expect(panel).toHaveAttribute('data-status', 'ready')
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
   // HTML 没有「按 Markdown 渲染」这回事,源码态的编辑器仍在(三档齐备)。
-  expect(await panel.locator(FILE_MODE).allTextContents()).toEqual(['渲染', '源码', '变更'])
+  expect(await panel.locator(FILE_MODE).allTextContents()).toEqual(['预览', '源码', '变更'])
 
   const frame = panel.locator('iframe.file-render__frame')
-  await expect(frame, '渲染态出现 iframe').toHaveCount(1)
+  await expect(frame, '预览态出现 iframe').toHaveCount(1)
   const sandbox = (await frame.getAttribute('sandbox')) ?? ''
   console.log(`[html preview] sandbox = ${sandbox}`)
   expect(sandbox, 'scripts 可跑').toContain('allow-scripts')
@@ -6879,7 +6947,7 @@ test('渲染态:HTML 走 sandbox iframe —— 含 allow-scripts,且不含 allow
   await expect(frame).toHaveAttribute('srcdoc', /weekly-report/)
 })
 
-test('渲染态:图片渲染为 img;且按 kind 收掉源码 / 变更入口', async ({ page }) => {
+test('预览态:图片呈现为 img;且按 kind 收掉源码 / 变更入口', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -6891,38 +6959,38 @@ test('渲染态:图片渲染为 img;且按 kind 收掉源码 / 变更入口', as
   await expect(panel, '图片是 ready(不是「无法预览」)').toHaveAttribute('data-status', 'ready')
 
   const image = panel.locator('img.file-render__image')
-  await expect(image, '渲染出 img').toHaveCount(1)
+  await expect(image, '呈现为 img').toHaveCount(1)
   await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml/)
   await expect(image).toHaveAttribute('alt', /logo\.svg/)
   const fit = await image.evaluate((element) => getComputedStyle(element).objectFit)
   expect(fit, 'contain —— 完整看得见,不拉伸').toBe('contain')
 
-  // 视图可用性由 kind 决定:image 只有渲染一档 —— 没有源码档,也就没有编辑入口。
-  expect(await panel.locator(FILE_MODE).allTextContents()).toEqual(['渲染'])
-  // 编辑入口**唯一**:渲染档里不得再出现第二条工具行(历史上那枚浮在正文上的实心「编辑」
+  // 视图可用性由 kind 决定:image 只有预览一档 —— 没有源码档,也就没有编辑入口。
+  expect(await panel.locator(FILE_MODE).allTextContents()).toEqual(['预览'])
+  // 编辑入口**唯一**:预览档里不得再出现第二条工具行(历史上那枚浮在正文上的实心「编辑」
   // 已被删除 —— 「两个并列的编辑按钮本身就是异味」)。这条把该缺陷钉死,防回归。
-  await expect(panel.locator('.file-panel__subtools'), '渲染档不再有第二条工具行').toHaveCount(0)
+  await expect(panel.locator('.file-panel__subtools'), '预览档不再有第二条工具行').toHaveCount(0)
   // 二进制则连内容都没有:走「无法预览」。
   await page.keyboard.press('Escape')
   await clickFileRow(page, 'release-deck.pdf')
   await expect(page.locator(FILE_PANEL)).toHaveAttribute('data-status', 'empty')
 })
 
-test('渲染态只读、编辑入口唯一(标题栏的「源码」档):改动落进内存,且不重算变更标记', async ({ page }) => {
+test('预览态只读、编辑入口唯一(标题栏的「源码」档):改动落进内存,且不重算变更标记', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   await clickFileRow(page, README)
   const panel = page.locator(FILE_PANEL)
   await expect(panel).toHaveAttribute('data-status', 'ready')
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
 
-  // 渲染态**只读**:没有内容可编辑的控件,也没有编辑器。
-  expect(await panel.locator('.file-render [contenteditable="true"], .file-render input, .file-render textarea').count(), '渲染态没有可编辑控件').toBe(0)
+  // 预览态**只读**:没有内容可编辑的控件,也没有编辑器。
+  expect(await panel.locator('.file-render [contenteditable="true"], .file-render input, .file-render textarea').count(), '预览态没有可编辑控件').toBe(0)
   expect(await panel.locator('.file-panel__editor').count()).toBe(0)
 
-  // 编辑入口**唯一** = 标题栏的「源码」档(渲染档里没有第二条工具行,见上一条用例)。
-  await expect(panel.locator('.file-panel__subtools'), '渲染档里没有第二条工具行').toHaveCount(0)
+  // 编辑入口**唯一** = 标题栏的「源码」档(预览档里没有第二条工具行,见上一条用例)。
+  await expect(panel.locator('.file-panel__subtools'), '预览档里没有第二条工具行').toHaveCount(0)
   await showPane(panel, '源码')
   await expect(panel).toHaveAttribute('data-pane', 'source')
   await expect(panel.locator('.file-panel__editor .cm-editor'), '源码档出现编辑器').toHaveCount(1)
@@ -6940,9 +7008,9 @@ test('渲染态只读、编辑入口唯一(标题栏的「源码」档):改动�
   await expect.poll(async () => panel.locator('.file-panel__editor .cm-content').evaluate((element) => element.textContent?.includes('MEMORY-EDIT') ?? false)).toBe(true)
 
   const statsBefore = await panel.locator('.file-panel__stats').innerText()
-  // 回到渲染态:渲染的必须是**改过之后**的 source(两态共用同一份内存内容)。
-  await showPane(panel, '渲染')
-  await expect.poll(async () => panel.locator('.file-render--markdown').evaluate((element) => element.textContent?.includes('MEMORY-EDIT') ?? false), { message: '渲染态反映编辑后的 source' }).toBe(true)
+  // 回到预览态:呈现的必须是**改过之后**的 source(两态共用同一份内存内容)。
+  await showPane(panel, '预览')
+  await expect.poll(async () => panel.locator('.file-render--markdown').evaluate((element) => element.textContent?.includes('MEMORY-EDIT') ?? false), { message: '预览态反映编辑后的 source' }).toBe(true)
   // 「变更」档的 diff 标记**不重算**(它来自 mock,表达的是「相对上一次改动」)——
   // 界面也不得暗示「变更已更新」,故统计与编辑前一模一样。
   await showPane(panel, '变更')
@@ -6963,7 +7031,8 @@ test('源码态高亮:shell/bash 与 apacheconf 都产出带高亮类的 token �
 
   await clickFileRow(page, 'run-weekly.sh')
   await expect(panel).toHaveAttribute('data-status', 'ready')
-  await expect(panel).toHaveAttribute('data-pane', 'render')
+  // 纯文本没有预览档,默认就落在**源码**档(高亮是源码档的能力,预览档不参与)。
+  await expect(panel).toHaveAttribute('data-pane', 'source')
   await showPane(panel, '源码')
   await expect(panel.locator('.cm-lineNumbers'), '行号栏在场').toHaveCount(1)
   const shellClasses = await classesOf()
@@ -6981,18 +7050,261 @@ test('源码态高亮:shell/bash 与 apacheconf 都产出带高亮类的 token �
   expect(confClasses, '指令名被标为 keyword').toContain('cm-dl-keyword')
 })
 
-test.describe('文件面板三档视图(英文)', () => {
+// ============================================================================
+// 本轮新增:CSV 与 JSON 的**结构化预览**(数据表格 / 折叠树 + 表格模式)
+// ============================================================================
+
+// data/csv.ts 里的行数上限(测试读不到组件常量,按同值写死;改了它这条会红,是刻意的)。
+const CSV_ROW_LIMIT = 300
+
+// 引擎无关地把计算后的 text-align 归一到 left / right —— `start` / `end` 会不会被引擎解析成
+// 物理方向,Chromium 与 WebKit 并不一致,故两种写法都接受。
+function normalizeAlign(raw: string): string {
+  if (raw === 'start') return 'left'
+  if (raw === 'end') return 'right'
+  return raw
+}
+
+test('CSV 预览:首行即表头 + 行号列;文本列左对齐 / 数字列右对齐(按列判定);列数不齐照渲;超限只显前 N 行', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const panel = page.locator(FILE_PANEL)
+
+  // ---- progress.csv:表头 = 首行,行数 = 数据行数,行号从 1 起 ----
+  await clickFileRow(page, PROGRESS)
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  const table = panel.locator('table.csv-preview__table')
+  await expect(table).toHaveCount(1)
+
+  // 表头 = 首行各列;第一格是行号列的角格(内容为空,名字走 aria-label)。
+  expect(await table.locator('thead th').evaluateAll((els) => els.map((el) => el.textContent)), '表头 = 首行').toEqual(['', 'week', 'track', 'owner', 'done', 'total', 'status'])
+  expect(await table.locator('thead th').first().getAttribute('aria-label'), '角格的可访问名是「行号」').toBe('行号')
+  expect(await table.locator('thead th').nth(1).getAttribute('scope'), '表头单元格带 scope=col').toBe('col')
+  // 行 = 数据行(不含表头那行)。
+  await expect(table.locator('tbody tr'), '行数 = 数据行数').toHaveCount(5)
+  await expect(table.locator('tbody th[scope="row"]'), '行号列是 th[scope=row],从 1 起').toHaveText(['1', '2', '3', '4', '5'])
+
+  // ---- 对齐**按列**判定:文本列左、数字列右;表头与列内容同向 ----
+  const bodyAlign = async (column: number): Promise<string[]> =>
+    (await table.locator(`tbody td[data-col="${column}"]`).evaluateAll((els) => els.map((el) => getComputedStyle(el).textAlign))).map(normalizeAlign)
+  expect(new Set(await bodyAlign(1)), 'track 是文本列 → 全部左对齐').toEqual(new Set(['left']))
+  expect(new Set(await bodyAlign(3)), 'done 是数字列 → 全部右对齐').toEqual(new Set(['right']))
+  expect(new Set(await bodyAlign(4)), 'total 是数字列 → 全部右对齐').toEqual(new Set(['right']))
+  const headAlign = async (column: number): Promise<string> =>
+    normalizeAlign(await table.locator(`thead th[data-col="${column}"]`).evaluate((el) => getComputedStyle(el).textAlign))
+  expect(await headAlign(1), '文本列表头同向').toBe('left')
+  expect(await headAlign(3), '数字列表头同向').toBe('right')
+  expect(await headAlign(5), '文本列表头同向').toBe('left')
+
+  // 预览只读:没有可编辑控件(编辑一律回「源码」档)。
+  expect(await panel.locator('.csv-preview [contenteditable="true"], .csv-preview input, .csv-preview textarea').count(), 'CSV 预览只读').toBe(0)
+  // 新预览里的文字也必须过 4.5:1。
+  expect(await contrastViolations(page), 'CSV 预览的文字对比度').toEqual([])
+  await panel.locator('.file-panel__close').click()
+  await expect(panel).toHaveCount(0)
+
+  // ---- 列数不齐 + 引号包裹:照渲不报错 ----
+  await expandDir(page, 'examples')
+  await clickFileRow(page, 'ragged.csv')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  const ragged = panel.locator('table.csv-preview__table')
+  await expect(ragged, '列数不齐照渲').toHaveCount(1)
+  // 列数取**最大**(第 3 行有 4 列)→ 表头补到 4 列(角格 + 4)。
+  await expect(ragged.locator('thead th'), '按最大列数补齐(表头缺的补空)').toHaveCount(5)
+  await expect(ragged.locator('tbody tr')).toHaveCount(3)
+  // 引号包裹的字段是**一个**单元格(内含逗号不被切开)。
+  await expect(ragged.locator('tbody tr').first().locator('td').nth(2), '引号包裹的字段不被逗号切开').toHaveText('含逗号,的备注')
+  await panel.locator('.file-panel__close').click()
+  await expect(panel).toHaveCount(0)
+
+  // ---- 超过行数上限:只渲前 N 行,并在表下给一行说明 ----
+  await clickFileRow(page, 'large-export.csv')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  await expect(panel.locator('table.csv-preview__table tbody tr'), '只渲前 N 行').toHaveCount(CSV_ROW_LIMIT)
+  await expect(panel.locator('.csv-preview__note'), '表下明写降级说明').toHaveText(`仅显示前 ${CSV_ROW_LIMIT} 行，共 400 行`)
+})
+
+test('JSON 预览·树:折叠的枝不渲染后代、折叠节点显示计数、值按类型着色(含对比度)、键盘可展开', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await expandDir(page, 'examples')
+  await clickFileRow(page, 'config.json')
+  const panel = page.locator(FILE_PANEL)
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  const tree = panel.locator('.json-preview__tree')
+  await expect(tree).toHaveCount(1)
+
+  // 预览只读:没有任何可编辑控件。
+  expect(await panel.locator('.json-preview [contenteditable="true"], .json-preview input, .json-preview textarea').count(), 'JSON 预览只读').toBe(0)
+
+  // 默认展开到第 2 层:第 3 层的值(output.limits.rows)默认**不渲染**。
+  await expect(tree.locator('.json-tree__row', { hasText: 'rows' }), '第 3 层默认折叠').toHaveCount(0)
+
+  // 值按类型着色:四类值各有一个独立取值(断言的是**实际计算颜色**,不是类名)。
+  for (const type of ['string', 'number', 'boolean', 'null']) {
+    await expect(tree.locator(`.json-tree__value[data-type="${type}"]`).first(), `${type} 有自己的取值`).toHaveCount(1)
+  }
+  const valueColors = await tree.locator('.json-tree__value').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).color))])
+  expect(valueColors.length, '字符串 / 数字 / 布尔 / null 四类着色互不相同').toBe(4)
+  const keyColor = await tree.locator('.json-tree__key').first().evaluate((el) => getComputedStyle(el).color)
+  expect(valueColors, '键的颜色与各类型值的颜色都不同').not.toContain(keyColor)
+
+  // 折叠节点显示计数:根是对象,括号间是键数(config.json 有 6 个键)。
+  await expect(tree.locator('.json-tree__count').first(), '折叠节点显示计数').toHaveText('6')
+  const rowsBefore = await tree.locator('.json-tree__row').count()
+  expect(rowsBefore, '默认展开到第 2 层,行数 > 1').toBeGreaterThan(1)
+
+  // **折叠的枝不渲染后代**:收起根之后全场只剩根那一行(这条同时是性能判据)。
+  const rootToggle = tree.locator('.json-tree__toggle').first()
+  await expect(rootToggle, '根默认展开').toHaveAttribute('aria-expanded', 'true')
+  await rootToggle.click()
+  await expect(rootToggle).toHaveAttribute('aria-expanded', 'false')
+  expect(await tree.locator('.json-tree__row').count(), '折叠后一个后代都不渲染').toBe(1)
+
+  // 键盘通路:展开钮是原生 button,Enter 可触发。
+  await rootToggle.focus()
+  await page.keyboard.press('Enter')
+  await expect(rootToggle, 'Enter 可展开').toHaveAttribute('aria-expanded', 'true')
+  expect(await tree.locator('.json-tree__row').count(), '展开后行数恢复').toBe(rowsBefore)
+  await expect(tree.locator('.json-tree__toggle').first(), '展开钮可键盘聚焦').toBeFocused()
+
+  // 对比度:新预览里的所有文字都过 4.5:1。
+  expect(await contrastViolations(page), 'JSON 树的文字对比度').toEqual([])
+})
+
+test('JSON 预览·表格:根为对象数组时出现「树 | 表格」并可切;非对象数组不出现;嵌套值压成紧凑 JSON', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await expandDir(page, 'examples')
+  const panel = page.locator(FILE_PANEL)
+
+  // ---- schedule.json:根是对象数组 → 有表格档 ----
+  await clickFileRow(page, 'schedule.json')
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+
+  // 工具条复用「变更」档那一套(通栏 + 同源底色 + 下缘发丝线),内容是原生按钮 + aria-pressed。
+  const tools = panel.locator('.file-panel__subtools')
+  await expect(tools).toHaveCount(1)
+  const viewButtons = tools.locator('.file-panel__view')
+  await expect(viewButtons, '树 | 表格 | 全部展开 | 全部折叠').toHaveText(['树', '表格', '全部展开', '全部折叠'])
+  expect(await viewButtons.first().evaluate((el) => el.tagName), '是原生 button(键盘可达)').toBe('BUTTON')
+
+  // 默认展开到第 2 层:根 + 5 个元素 + 每个元素 6 个字段 = 36 行(第 3 层的 checks 元素收起)。
+  const rows = panel.locator('.json-tree__row')
+  expect(await rows.count(), '默认展开到第 2 层').toBe(36)
+  await expect(tools.locator('.file-panel__view', { hasText: '树' }), '默认在树视图').toHaveAttribute('aria-pressed', 'true')
+
+  // 全展开:把第 3 层(checks 数组的元素)也放出来;全折叠:只剩根那一行。
+  await tools.locator('.file-panel__view', { hasText: '全部展开' }).click()
+  const expandedCount = await rows.count()
+  expect(expandedCount, '全展开把第 3 层也放出来').toBeGreaterThan(36)
+  await tools.locator('.file-panel__view', { hasText: '全部折叠' }).click()
+  expect(await rows.count(), '全折叠只剩根').toBe(1)
+  await tools.locator('.file-panel__view', { hasText: '全部展开' }).click()
+  expect(await rows.count(), '再全展开回到同一行数').toBe(expandedCount)
+
+  // 切到表格:列 = 各对象键的并集(按首次出现顺序),行 = 各元素。
+  await tools.locator('.file-panel__view', { hasText: '表格' }).click()
+  await expect(tools.locator('.file-panel__view', { hasText: '表格' })).toHaveAttribute('aria-pressed', 'true')
+  const jsonTable = panel.locator('table.json-preview__table')
+  await expect(jsonTable).toHaveCount(1)
+  expect(await jsonTable.locator('thead th').evaluateAll((els) => els.map((el) => el.textContent)), '列 = 键的并集(首次出现顺序)').toEqual(['', 'track', 'owner', 'milestone', 'status', 'progress', 'checks'])
+  await expect(jsonTable.locator('tbody tr'), '行 = 数组元素').toHaveCount(5)
+  await expect(jsonTable.locator('tbody th[scope="row"]')).toHaveText(['1', '2', '3', '4', '5'])
+  // 嵌套值(checks 数组)压成**紧凑 JSON**字符串。
+  await expect(jsonTable.locator('tbody td[data-nested="true"]').first(), '嵌套值以紧凑 JSON 呈现').toHaveText('["入口","通知","回退"]')
+  // 表格视图下不出「展开控制」(那两枚钮对表格没有任何作用 → 死控件)。
+  await expect(tools.locator('.file-panel__view', { hasText: '全部展开' }), '表格视图里没有展开控制').toHaveCount(0)
+
+  // 切回树。
+  await tools.locator('.file-panel__view', { hasText: '树' }).click()
+  await expect(panel.locator('.json-preview__tree')).toHaveCount(1)
+  await panel.locator('.file-panel__close').click()
+  await expect(panel).toHaveCount(0)
+
+  // ---- config.json:根是对象 → **不出现**表格档(不摆一个点了没反应的死控件)----
+  await clickFileRow(page, 'config.json')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+  const configTools = panel.locator('.file-panel__subtools')
+  await expect(configTools.locator('.file-panel__view'), '根是对象 → 只有展开控制').toHaveText(['全部展开', '全部折叠'])
+  await expect(configTools.locator('.file-panel__view', { hasText: '表格' }), '非对象数组没有表格档').toHaveCount(0)
+})
+
+test('JSON 预览:非法 JSON 给一行可读的解析错误 + 指路,不白屏,源码档仍可达', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await expandDir(page, 'examples')
+  await clickFileRow(page, 'broken.json')
+  const panel = page.locator(FILE_PANEL)
+  await expect(panel).toHaveAttribute('data-status', 'ready')
+  await expect(panel).toHaveAttribute('data-pane', 'preview')
+
+  // 解析错误:带上 JSON.parse 的原始信息(各引擎文案不同,但都点名 JSON)。
+  const error = panel.locator('.json-preview__error')
+  await expect(error).toHaveCount(1)
+  await expect(error, '给的是 role=alert').toHaveAttribute('role', 'alert')
+  await expect(error.locator('.json-preview__error-message'), '含 JSON.parse 的信息').toContainText('无法解析')
+  await expect(error.locator('.json-preview__error-message')).toContainText(/JSON/i)
+  await expect(error.locator('.json-preview__error-hint'), '并指路「源码」档').toContainText('源码')
+
+  // 不白屏:面板仍在场,只是既没有树也没有表 —— 也没有任何可编辑控件(仍只读)。
+  await expect(panel.locator('.json-preview__tree')).toHaveCount(0)
+  await expect(panel.locator('table.json-preview__table')).toHaveCount(0)
+  // 也没有一条点了没反应的死工具行(展开 / 表格两枚按钮此时都无事可做)。
+  await expect(panel.locator('.file-panel__subtools'), '解析失败时不摆死工具').toHaveCount(0)
+
+  // 源码档仍可达,并带上那份(非法)内容。
+  await showPane(panel, '源码')
+  await expect(panel.locator('.file-panel__editor .cm-editor')).toHaveCount(1)
+  await expect.poll(async () => panel.locator('.file-panel__editor .cm-content').evaluate((el) => el.textContent?.includes('"tracks"') ?? false), { message: '源码里能看到原始内容' }).toBe(true)
+})
+
+test('CSV / JSON 预览在最窄宽度下不破版:宽表在面板内横向可滚,页面无横向溢出', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await expandDir(page, 'examples')
+  const panel = page.locator(FILE_PANEL)
+
+  // 先在宽屏打开(窄屏下侧栏是抽屉,点树行还得先开抽屉),再收到 375。
+  // 视口变化后布局要一帧才落定,故两条几何断言都走 expect.poll(吸收那一帧的中间态)。
+  await clickFileRow(page, PROGRESS)
+  await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
+  await expect(panel.locator('table.csv-preview__table')).toHaveCount(1)
+  await expect.poll(async () => horizontalOverflow(page), { message: 'CSV 预览不撑破页面' }).toBeLessThanOrEqual(1)
+  // 宽表(7 列)不被压扁 —— 它在**面板内**横向滚动,页面本身不横向溢出。
+  await expect.poll(
+    async () => panel.locator('#file-panel-body').evaluate((el) => el.scrollWidth - el.clientWidth),
+    { message: '宽表在面板内横向可滚' },
+  ).toBeGreaterThan(0)
+
+  await panel.locator('.file-panel__close').click()
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await clickFileRow(page, 'config.json')
+  await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
+  await expect(panel.locator('.json-preview__tree')).toHaveCount(1)
+  await expect.poll(async () => horizontalOverflow(page), { message: 'JSON 树不撑破页面' }).toBeLessThanOrEqual(1)
+})
+
+test.describe('文件面板档位(英文)', () => {
   test.use({ locale: 'en-US' })
 
-  test('英文下三档视图与渲染态文案同步', async ({ page }) => {
+  test('英文下档位与预览态文案同步', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
     await login(page, 'Sign in')
     await waitForStable(page, 'ready', enHeadingFor('ready'))
     await clickFileRow(page, README)
     const panel = page.locator(FILE_PANEL)
     await expect(panel).toHaveAttribute('data-status', 'ready')
-    expect(await panel.locator(FILE_MODE).evaluateAll((els) => els.map((el) => el.textContent))).toEqual(['Rendered', 'Source', 'Changes'])
-    // 编辑入口唯一:渲染档里没有第二条工具行(历史上的实心「Edit」按钮已删)。
+    expect(await panel.locator(FILE_MODE).evaluateAll((els) => els.map((el) => el.textContent))).toEqual(['Preview', 'Source', 'Changes'])
+    // 编辑入口唯一:预览档里没有第二条工具行(历史上的实心「Edit」按钮已删)。
     await expect(panel.locator('.file-panel__subtools')).toHaveCount(0)
     await expect(panel.locator('.file-render--markdown h1')).toHaveText('weekly-report')
     // 文案随语言走,故这里按位置切到「Source」(showPane 里的文案是中文)。

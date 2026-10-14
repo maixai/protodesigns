@@ -370,7 +370,12 @@ test('两块区域各承载一段对话:各有自己的输入坞,输入框内容
 
   // 新建对话的落点在**承载该 ＋ 的那块区域**,新会话的输入框随即拿到焦点。
   // 每块区域各有一枚 ＋(功能完全对等),故按区域收窄,否则命中多枚。
+  // 该 Agent 打开了多个项目 → ＋ 会先弹出项目选择浮层,选首个项目后才真正建会话。
   await page.locator(SURFACES).nth(0).getByRole('button', { name: '新建对话', exact: true }).click()
+  const picker = page.locator('.project-picker')
+  await expect(picker, '多项目下先选归属').toHaveCount(1)
+  await picker.locator('[role="option"]').first().click()
+  await expect(picker).toHaveCount(0)
   await expect.poll(() => page.evaluate(() => document.activeElement?.id ?? ''), { message: '新建后输入框自动聚焦' }).toMatch(/^workspace-composer-/)
 })
 
@@ -559,12 +564,12 @@ test('根区域为唯一区域时关掉最后一个 tab → 引导页;主按钮�
 
   // 主按钮 = 与区域 ＋ 同一个动作:恢复一块带 tab 的区域 + 一段新会话,输入框自动聚焦。
   // 平权之后没有「当前项目」:引导页 + 有多个已打开项目 ⇒ 先弹出项目选择浮层(归属需用户拍板),
-  // 选一个项目才真正建会话。
+  // 选一个项目才真正建会话。浮层是 listbox 单选的锚定浮层(不是居中模态),锚在触发点下方。
   await page.locator('.onboarding__primary').click()
-  const chooser = page.locator('.project-chooser')
-  await expect(chooser, '多项目下先让用户选归属').toHaveCount(1)
-  await chooser.locator('.project-chooser__button').first().click()
-  await expect(chooser, '选完即收起').toHaveCount(0)
+  const picker = page.locator('.project-picker')
+  await expect(picker, '多项目下先让用户选归属').toHaveCount(1)
+  await picker.locator('[role="option"]').first().click()
+  await expect(picker, '选完即收起').toHaveCount(0)
   await expect(page.locator('.onboarding'), '引导页退出').toHaveCount(0)
   await expect(page.locator(SURFACES), '恢复一块带 tab 的区域').toHaveCount(1)
   await expect(page.locator('.tab-slot'), '新会话占一个 tab').toHaveCount(1)

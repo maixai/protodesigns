@@ -442,6 +442,36 @@ export function seedChatWindow(layout: WorkspaceLayout, surfaceId: string, conte
   }
 }
 
+// 把一段对话改归另一个项目(**空对话可改归属**那一条动作的数据层落点)。
+//
+// 对话窗体的身份是**复合键** chat://<项目>/<会话> —— 归属一变,id 也跟着变。故这不是「改一个字段」,
+// 而是一次**同一窗体的改名**:窗体的 content.projectId 换成新项目,同时把它在**所有**区域的
+// members / activeId、全页 focus、最近打开里的旧 id 一并换成新 id(漏掉任何一处,条上的那枚 tab
+// 就会「成员里挂着旧 id、sessions 里按新键回查」而对不上,直接从条上消失)。
+// 几何 / 层序 / placement / visible 全数保留 —— 换的只是归属,不是位置。
+// 目标 id 已被占用时原样返回(会话 id 唯一,正常路径不会发生;真发生也不制造重复 id)。
+export function reassignChatWindow(layout: WorkspaceLayout, windowId: string, projectId: string): WorkspaceLayout {
+  const win = layout.windows.find((item) => item.id === windowId)
+  if (win === undefined || win.content.kind !== 'chat') return layout
+  const sessionId = win.content.sessionId
+  if (win.content.projectId === projectId) return layout
+  const nextId = chatWindowId(projectId, sessionId)
+  if (layout.windows.some((item) => item.id === nextId)) return layout
+  const rename = (id: string): string => (id === windowId ? nextId : id)
+  const content: ChatTab = { kind: 'chat', projectId, sessionId }
+  return {
+    ...layout,
+    surfaces: layout.surfaces.map((surface) => ({
+      ...surface,
+      members: surface.members.map(rename),
+      activeId: rename(surface.activeId),
+    })),
+    windows: layout.windows.map((item) => (item.id === windowId ? { ...item, id: nextId, content } : item)),
+    focus: rename(layout.focus),
+    recent: layout.recent.map(rename),
+  }
+}
+
 // 一并**移除**若干窗体(≠ hideWindows 的「隐藏」):用于「关闭项目 → 连带关掉它在该域里的所有窗口」。
 // 与隐藏的区别:窗体从 windows 数组中**删除**,并从所有区域的成员里摘掉;区域的活动位被摘走时
 // 交给**相邻成员**(与 closeTab 同一条规则);焦点 / 最近打开里也一并清掉。区域被摘空由调用方

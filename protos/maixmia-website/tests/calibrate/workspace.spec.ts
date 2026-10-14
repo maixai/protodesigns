@@ -79,6 +79,18 @@ async function selectAgent(page: Page, name: string): Promise<void> {
   await page.locator(`${AGENT_PANEL} .agent-bar__option`, { hasText: name }).click()
 }
 
+// 新建一段对话的**完整动作**(测试用):点触发钮(默认 = 会话头里的 ＋)。该 Agent 打开了
+// 多个项目时,＋ 会先弹出项目选择浮层 —— 归属必须让用户拍板,故这里接着选首个项目;
+// 两步合起来才是用户眼里的「新建对话」。
+async function startNewConversation(page: Page, trigger?: Locator): Promise<void> {
+  const button = trigger ?? page.getByRole('button', { name: '新建对话', exact: true })
+  await button.click()
+  const picker = page.locator('.project-picker')
+  await expect(picker, '多项目下 ＋ 先弹归属浮层').toHaveCount(1)
+  await picker.locator('[role="option"]').first().click()
+  await expect(picker, '选完即收起').toHaveCount(0)
+}
+
 // 空态没有活跃会话,h1 回退到 newChat;其余态是 weekly。
 function zhHeadingFor(state: string): string {
   return state === 'empty' ? HEADINGS['zh-CN'].newChat : HEADINGS['zh-CN'].weekly
@@ -230,7 +242,12 @@ for (const width of WIDTHS) {
     //   ⑦ **侧栏文件行**的「加入当前对话」钮(.entry-row__add,24)—— 树行的行内控件,属密集行档;
     //      整行 button 仍是整行宽(它是绝对定位浮在行右端,不切走命中区),故「整行为命中区」不破。
     //      它在「侧栏文件:拖入…;点「加入当前对话」是等价通路」用例里逐条核对(命中区 ≥24 + 键盘可达)。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger)').evaluateAll((buttons) => buttons.map((button) => {
+    //   ⑧ **输入坞底行**的模型钮(.model-menu__trigger)—— 密集行内控件档(24),与同行 ⊕(44)并列;
+    //      触达 ≥24×24 恰为 WCAG 2.5.8(AA)下限。它由「模型钮仍是密集行档的紧凑 chip」用例逐条核对。
+    //      **卡片外**的项目挂耳标签属独立控件档(44),不适用本档;本用例的语料(weekly 已有消息 →
+    //      标签为只读纯文本 span,不是 button)不渲染那个按钮,故无需排除,它的 44×44 命中区
+    //      在「空对话可改归属」用例里核对。
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.agent-bar__tab):not(.agent-bar__trigger):not(.model-menu__trigger)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -304,7 +321,7 @@ for (const width of WIDTHS) {
         await expect(page.getByRole('log')).toContainText('一舟，今天一起完成什么？')
         // 空位占位**没有输入坞**(见上方断言),故「输入框为空」改由「新对话不再被卡片预填」来验:
         // 点区域 ＋ 建一段新会话 → 输入框必为空。这也替换了原先「点卡片 → 输入框出现建议正文」那条链。
-        await page.getByRole('button', { name: '新建对话', exact: true }).click()
+        await startNewConversation(page)
         await expect(page.getByRole('textbox', { name: /与「.+」对话/ })).toHaveValue('')
         await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
       }
@@ -1318,7 +1335,7 @@ test('加载骨架、新建与会话切换', async ({ page }, testInfo) => {
   await openSwitcher(page)
   await expect(page.locator('.session-item', { hasText: pickedTitle })).toHaveCount(0)
   await closeSwitcher(page)
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await startNewConversation(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请帮我准备访谈提纲。')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
@@ -1385,7 +1402,7 @@ test('空态发送回到正常路由，切语言保留新对话', async ({ page 
   await expectEmptyAtTop(page)
   // 建议卡已下线:空态不再有「点卡片建会话并预填草稿」这条链。改用区域 ＋ 建一段空会话,
   // 再直接在输入框里打字发送 —— 替换的只是选一段话的方式,意图(空态发送回到常规路由)不变。
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await startNewConversation(page)
   await page.getByRole('textbox').fill('帮我把团队知识库整理工作拆成一周内可执行的计划。')
   await page.getByRole('textbox').press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
@@ -1484,7 +1501,7 @@ test('侧栏换 Agent → 项目区更换 → 新建会话归属当前项目', a
   await closeSwitcher(page)
 
   // 新建对话 + 发送:新会话必须归属**当前项目**(product-docs)。
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await startNewConversation(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请帮我写一段发布说明。')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
@@ -1873,14 +1890,14 @@ test('遥测条:五项齐备、状态项为唯一 live region、Context 文本�
   await expect(page.locator('.telemetry [role="status"]'), '遥测条里只有一个 live region').toHaveCount(1)
   await expect(page.locator('.workspace-page [role="status"]'), '整页两处:遥测状态项 + 停靠播报').toHaveCount(2)
 
-  // 五项:状态 · 模型 · Context · 时长 · 项目。最后一项表达**当前项目**(CLI 的 cwd)——
-  // 项目名是技术标识(目录名),条内只显示名;完整路径放进 title(悬停可见)。
+  // 四项:状态 · 模型 · Context · 时长。**归属项目**已从底行移出(它挪到卡片外左上角的挂耳
+  // 标签),故这里只核对它仍在页面上、且完整路径挂在 title 上(悬停可读)。
   await expect(status).toBeVisible()
   await expect(page.locator('.telemetry__model')).toHaveText('Claude Sonnet 4.5')
   await expect(page.locator('.telemetry__context-text')).toHaveText('41% (82K/200K)')
   await expect(page.locator('.telemetry__elapsed')).toHaveText(/^\d+:\d{2}$/)
-  await expect(page.locator('.telemetry__item--workspace')).toContainText(PROJECT_NAMES.planning[0])
-  await expect(page.locator('.telemetry__item--workspace')).toHaveAttribute('title', '~/work/weekly-report')
+  await expect(page.locator(PROJECT_LABEL)).toContainText(PROJECT_NAMES.planning[0])
+  await expect(page.locator(PROJECT_LABEL)).toHaveAttribute('title', '~/work/weekly-report')
   await expect(page.locator('.telemetry__path')).toHaveCount(0)
 
   // 尺寸克制:单行、高度守在 28–32px。
@@ -2113,7 +2130,7 @@ for (const locale of ['zh-CN', 'en-US'] as const) {
           expect(await isUnclipped(page, '.telemetry__word'), `${stateCase.url} @${width} 状态词被裁切`).toBe(true)
           expect(await isUnclipped(page, '.telemetry__context-text'), `${stateCase.url} @${width} Context 文本被裁切`).toBe(true)
           if (width >= 1280) {
-            expect(await isUnclipped(page, '.telemetry__ws-name'), `${stateCase.url} @${width} 工作区名被裁切`).toBe(true)
+            expect(await isUnclipped(page, '.composer-project__name'), `${stateCase.url} @${width} 项目名被裁切`).toBe(true)
           }
         }
       })
@@ -2217,7 +2234,9 @@ test('回归路径②:?s=waiting 换 Agent 或新建对话后状态词离开「�
   await page.goto('/#/workspace?s=waiting')
   await waitForStable(page, 'ready', HEADINGS['zh-CN'].knowledge)
   await expectWaitingLinkage(page, true, 'path② restart @1280')
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  // 「＋ 新建对话」:该 Agent 打开了多个项目 → 先经项目选择浮层选一个归属,再建会话
+  // (选归属与新建同属一个动作,故这里仍是「用 ＋ 离开等待态」)。
+  await startNewConversation(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   const afterNew = await expectWaitingLinkage(page, false, 'path②-new @1280')
   console.log(`[waiting invariant] path②-new @1280 → word=${afterNew.word} cards=${afterNew.cards} chips=${afterNew.chips}`)
@@ -2518,7 +2537,7 @@ test('新建会话:初始为空,只含本次发送的两条', async ({ page }) =
   await waitForStable(page)
   // 当前项目 weekly-report 的既有会话有 4 条历史,它们一条都不该混进新会话。
   await expect(page.locator('.chat-message[data-message-id^="weekly-"]')).toHaveCount(4)
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await startNewConversation(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await expect(page.locator('.chat-message')).toHaveCount(0)
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('只应出现这两条。')
@@ -2704,12 +2723,12 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(page.locator('.workspace-live'), '关闭项目合成一条播报').toHaveText(/已关闭项目「weekly-report」.*关闭了 6 个窗口/)
   await expect(page.locator('.onboarding')).toHaveCount(1)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('这里还没有打开的窗口')
-  // 再关掉最后一个:没有项目可归属时侧栏给空态,遥测的项目项随之下线(不留上一个项目的假信息)。
+  // 再关掉最后一个:没有项目可归属时侧栏给空态,项目标签随之下线(不留上一个项目的假信息)。
   await items.first().locator('.project-menu__trigger').click()
   await page.locator('.project-menu__item').click()
   await expect(page.locator('.project-item')).toHaveCount(0)
   await expect(projects).toContainText('还没有打开的项目')
-  await expect(page.locator('.telemetry__item--workspace')).toHaveCount(0)
+  await expect(page.locator(PROJECT_LABEL)).toHaveCount(0)
 })
 
 test('打开项目:搜索过滤 → 勾选 → 打开后进入侧栏并自动选中;已打开不可重复勾选', async ({ page }) => {
@@ -2792,7 +2811,7 @@ test('端到端:在同一 Agent 下新建会话,展开别的项目不丢它(tab 
   await login(page)
   await waitForStable(page)
   // 在 weekly-report(首个项目)下新建并发送。
-  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await startNewConversation(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'empty')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('请整理一下本季度的目标。')
   await page.getByRole('textbox', { name: /与「.+」对话/ }).press('Enter')
@@ -4761,9 +4780,12 @@ test('文件面板:文件栏 tab 带状态芯片;面板打开时「回到底部�
   expect(dockBox).not.toBeNull()
   if (buttonBox === null || panelBox === null || dockBox === null) return
   console.log(`[file panel occlude] 按钮顶 ${buttonBox.y.toFixed(1)} / 面板底 ${(panelBox.y + panelBox.height).toFixed(1)} / 坞顶 ${dockBox.y.toFixed(1)}`)
-  // 面板底边 ≤ 按钮顶边 → 按钮完整露在面板之外(不被遮挡)。
-  expect(panelBox.y + panelBox.height, '面板不遮「回到底部」').toBeLessThanOrEqual(buttonBox.y + 1)
-  // 两者纵向不相交:回到底部 → 坞,自上而下(坞顶就是输入框顶)。
+  // 面板底边 ≤ 坞顶边 → 面板不压住输入坞。
+  expect(panelBox.y + panelBox.height, '面板不压住输入坞').toBeLessThanOrEqual(dockBox.y + 1)
+  // 「回到底部」浮在**坞顶之上**,而窗体默认几何把「标签带 + 钮高 + 间隙 + 一档边距」一并预留了
+  // (见 use-window-frame 的 measureJumpReserve),所以钮必须**整个**露在面板之下 —— 不是「圆心可点」。
+  expect(panelBox.y + panelBox.height, '「回到底部」完整露在面板之外').toBeLessThanOrEqual(buttonBox.y + 1)
+  // 两者纵向不相交:回到底部 → 坞,自上而下(坞顶就是挂耳标签带的顶)。
   expect(buttonBox.y + buttonBox.height, '回到底部不覆盖坞').toBeLessThanOrEqual(dockBox.y + 1)
   // 顶部行里的文件组仍在坞之上 —— 次序整体是 文件组 → … → 回到底部 → 坞。
   const barBox = await page.locator(FILE_BAR).boundingBox()
@@ -7360,19 +7382,414 @@ test('悬浮窗标题栏显示的是该文件**真实所属项目**(多项目下
   await expect(page.locator(`${FILE_PANEL} .file-panel__path`).first()).toHaveText(README)
 })
 
-// 新建对话归属①:区域内的通用入口 → 归该区域**当前活动窗口**所属项目。
-test('新建对话归属①:区域内的 ＋ 归该区域当前活动窗口所属项目', async ({ page }) => {
+// ---- 新建对话的归属(项目选择浮层)与空对话改归属 ----
+// 触发规则(用户已确认):该 Agent 打开 ≥2 个项目 → 一律弹浮层让用户选(高亮推断出的那个);
+// 恰好 1 个 → 直接用;0 个 → 播报引导先打开项目。浮层是 **listbox 单选**(锚定触发点),不是菜单。
+const PICKER = '.project-picker'
+const PICKER_OPTION = `${PICKER} [role="option"]`
+const PICKER_ACTIVE = `${PICKER} [role="option"][aria-selected="true"]`
+// 输入坞**上方**(卡片之外)的**项目挂耳标签**的选择器约定:空对话时它是可改的 button
+// (常显 caret + 发丝描边),发出第一条消息后退回**只读纯文本**(span,无 caret、无描边)。
+// 它取代了原先挂在「输入坞底行末项」的归属 chip —— 那条已整条删除(归属是身份,不属运行时遥测)。
+const PROJECT_ROW = '.composer-project-row'
+const PROJECT_LABEL = '.composer-project'
+const CHAT_OWNER_ACTION = `${PROJECT_LABEL}.composer-project--action`
+const CHAT_OWNER_STATIC = `${PROJECT_LABEL}:not(.composer-project--action)`
+// 停靠对话的标题栏选择器 —— 它**必须不存在**(停靠态 tab 条下方直接是转录区)。
+const CHAT_HEADING = '.chat-heading'
+
+// 某个区域会话头里的 ＋(新建对话的触发点)。
+function newChatTrigger(page: Page, index = 0): Locator {
+  return page.locator('.conversation[data-surface-id]').nth(index).getByRole('button', { name: '新建对话', exact: true })
+}
+
+// 元素 class 里的项目标识色绑定类(dl-identity-N);没有则空串 —— 用于断言归属色条随之更新。
+function identityClassOfElement(className: string | null): string {
+  return (className ?? '').split(/\s+/).find((name) => name.startsWith('dl-identity-')) ?? ''
+}
+
+// 侧栏项目名(按侧栏顺序)—— 浮层列表的顺序必须与它逐项一致。
+async function sidebarProjectNames(page: Page): Promise<string[]> {
+  return page.locator('.project-item .project-row__name').allTextContents()
+}
+
+// 新建对话归属①:该 Agent 打开了多个项目 → **一律**弹浮层让用户选,且高亮推断出的那个项目
+// (发起区域的活动 tab 所属项目)—— 「你此刻正看着的那个」是合法的上下文推断,Enter 一步直达。
+test('新建对话归属①:多项目时点 ＋ 弹出项目选择浮层,高亮该区域活动窗口所属项目', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  await page.locator('.conversation[data-surface-id]').first().getByRole('button', { name: '新建对话', exact: true }).click()
-  // 直接建,不弹选择;新会话的 tab 带 weekly-report 的缩写。
-  await expect(page.locator('.project-chooser')).toHaveCount(0)
-  await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
+  const plus = newChatTrigger(page)
+  // 触发钮是 disclosure:带 aria-haspopup / aria-expanded。
+  await expect(plus, '触发钮声明 listbox 语义').toHaveAttribute('aria-haspopup', 'listbox')
+  await expect(plus, '未打开时 aria-expanded=false').toHaveAttribute('aria-expanded', 'false')
+
+  await plus.click()
+  const picker = page.locator(PICKER)
+  await expect(picker, '多项目 → 先让用户拍板归属').toHaveCount(1)
+  await expect(plus, '打开后 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
+  // 浮层**不设**可见的「取消」钮:点浮层外面 / Esc / 把焦点移出浮层都是取消,三处同一件事;
+  // 多一枚钮只是把同一件事再说一遍,还占掉面板底部一整行(与 model-menu 的处置一致)。
+  await expect(picker.getByRole('button', { name: '取消', exact: true }), '浮层没有取消钮').toHaveCount(0)
+  await expect(picker.locator('.project-picker__cancel'), '取消钮的样式也随之删除').toHaveCount(0)
+
+  // 列表 = 全部已打开项目,顺序与侧栏一致(不重排:项目只有 2–8 个,用户靠位置记忆)。
+  const options = picker.locator('[role="option"]')
+  await expect(options, '项数 = 已打开项目数').toHaveCount(2)
+  const optionNames = await picker.locator('.project-picker__name').allTextContents()
+  expect(optionNames, '列表顺序与侧栏一致').toEqual(await sidebarProjectNames(page))
+
+  // 高亮项 = 该区域活动 tab(weekly)所属项目 weekly-report,且**恰有一个**高亮(Enter 永远有落点)。
+  await expect(picker.locator('[role="option"][aria-selected="true"]'), '恰一个高亮项').toHaveCount(1)
+  await expect(picker.locator('[role="option"][aria-selected="true"]')).toContainText(PROJECT_NAMES.planning[0])
+  await expect(picker.locator('[role="option"][aria-selected="false"]')).toHaveCount(1)
+
+  // 每项都在高亮项之外还能被读出归属:色点 + 等宽缩写 + 名称 + 项目内路径(颜色不是唯一指示)。
+  await expect(options.first().locator('.project-picker__mark')).toHaveText('WR')
+
+  // Enter 一步接受**当前高亮项**:建一段归属 weekly-report 的会话,浮层收起。
+  await expect(picker.locator('[role="option"][aria-selected="true"]'), '焦点进入浮层(高亮项就位)').toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(picker, '选完即收起').toHaveCount(0)
+  await expect(plus, '收起后 aria-expanded 回到 false').toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark'), '新会话归属正确').toHaveText('WR')
 })
 
-// 新建对话归属②:区域为空 / 引导页 + **只有一个**已打开项目 → 直接归它(不弹选择)。
-test('新建对话归属②:只有一个已打开项目时直接归它,不弹选择', async ({ page }) => {
+// 新建对话归属②:方向键 / Home / End 移动高亮,Enter 接受的是**当前高亮项**(不是原推断项)。
+test('新建对话归属②:↓/↑/Home/End 移动高亮,Enter 接受当前高亮项', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const plus = newChatTrigger(page)
+  await plus.click()
+  const picker = page.locator(PICKER)
+  await expect(page.locator(PICKER_ACTIVE)).toBeFocused()
+
+  // ↓ 从首项走到次项(knowledge-base)。
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[1])
+  // 走到末项后再按 ↓ 不回绕(夹在两端)。
+  await page.keyboard.press('ArrowDown')
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[1])
+  // Home 回首项、End 到末项。
+  await page.keyboard.press('Home')
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[0])
+  await page.keyboard.press('End')
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[1])
+  // ↑ 回到首项。
+  await page.keyboard.press('ArrowUp')
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[0])
+
+  // 走到次项再 Enter:建的会话归 knowledge-base(KB),不是推断出的 weekly-report。
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(picker).toHaveCount(0)
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark'), 'Enter 接受的是当前高亮项').toHaveText('KB')
+})
+
+// Esc 取消:**什么都不创建**,且焦点回到触发钮(APG 要求)。
+test('新建对话:Esc 取消不创建任何会话,焦点回到 ＋', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const tabsBefore = await page.locator('.tab-slot').count()
+  const plus = newChatTrigger(page)
+  await plus.click()
+  await expect(page.locator(PICKER)).toHaveCount(1)
+  await expect(page.locator(PICKER_ACTIVE)).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(page.locator(PICKER), 'Esc 收起浮层').toHaveCount(0)
+  await expect(plus, '焦点归还触发钮').toBeFocused()
+  await expect(page.locator('.tab-slot'), '什么都不创建').toHaveCount(tabsBefore)
+  await expect(page.locator(TAB, { hasText: '新建对话' }), '没有多出「新建对话」的 tab').toHaveCount(0)
+})
+
+// 点浮层外部取消:同样什么都不创建。
+test('新建对话:点浮层外部取消,什么都不创建', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const tabsBefore = await page.locator('.tab-slot').count()
+  await newChatTrigger(page).click()
+  await expect(page.locator(PICKER)).toHaveCount(1)
+  // 点侧栏的区块标题(它没有任何动作,不会改变工作台状态)。
+  await page.locator('.sidebar-label').first().click()
+  await expect(page.locator(PICKER), '点外部即取消').toHaveCount(0)
+  await expect(page.locator('.tab-slot'), '什么都不创建').toHaveCount(tabsBefore)
+})
+
+// 触发钮是 **disclosure**(带 aria-expanded):浮层开着时再点同一个触发钮 = **关闭**(toggle)。
+// 反例(修前):浮层的「点浮层外取消」挂在 document 的 pointerdown 上,按下触发钮先判成点外面 →
+// 取消,紧接着触发钮自己的 click 又把它打开,净效果是「再点没反应」、aria-expanded 恒为 true。
+test('新建对话:浮层开着时再点 ＋ 即关闭(toggle),什么都不创建', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const tabsBefore = await page.locator('.tab-slot').count()
+  const plus = newChatTrigger(page)
+  await plus.click()
+  await expect(page.locator(PICKER)).toHaveCount(1)
+  await expect(plus).toHaveAttribute('aria-expanded', 'true')
+
+  await plus.click()
+  await expect(page.locator(PICKER), '再点同一个触发钮 → 关闭').toHaveCount(0)
+  await expect(plus, 'aria-expanded 回到 false').toHaveAttribute('aria-expanded', 'false')
+  await expect(plus, '关闭后焦点仍在触发钮').toBeFocused()
+  await expect(page.locator('.tab-slot'), '没有新建任何会话').toHaveCount(tabsBefore)
+
+  // 关着时再点又开:开关是双向的,不是单向的「只能开」。
+  await plus.click()
+  await expect(page.locator(PICKER)).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(page.locator(PICKER)).toHaveCount(0)
+})
+
+// 同一个浮层的**第三个触发点**(输入坞上方、卡片外的项目挂耳标签)同源同病,故一并锁住。
+// (引导页主按钮与 ＋ 走同一个 emit、由页面同一处 toggle 裁决,故不重复立例。)
+test('空对话改归属:浮层开着时再点归属控件即关闭(toggle),归属不变', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+  const owner = page.locator(CHAT_OWNER_ACTION)
+  await expect(owner).toHaveCount(1)
+  await owner.click()
+  await expect(page.locator(PICKER)).toHaveCount(1)
+  await expect(owner).toHaveAttribute('aria-expanded', 'true')
+
+  await owner.click()
+  await expect(page.locator(PICKER), '再点同一个归属控件 → 关闭').toHaveCount(0)
+  await expect(owner, 'aria-expanded 回到 false').toHaveAttribute('aria-expanded', 'false')
+  await expect(owner, '关闭后焦点仍在归属控件').toBeFocused()
+  // 什么都没发生:归属仍是 weekly-report,且会话数未变。
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark'), '归属未被改动').toHaveText('WR')
+})
+
+// 浮层被**另一个触发点**接管:同一时刻只有一个浮层,换触发点时面板要跟着换锚点
+// (否则它会留在上一个触发点下方,指着错误的来源)。
+test('浮层:从一个触发钮换到另一个触发钮时,锚点随之切换', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+  // 从卡片外的项目标签打开:它在面板**底部**,故浮层上翻,落在它上方。
+  const owner = page.locator(CHAT_OWNER_ACTION)
+  await owner.click()
+  const picker = page.locator(PICKER)
+  await expect(picker).toHaveCount(1)
+  const underOwner = await picker.boundingBox()
+  // 再点 tab 条的 ＋(另一个触发点):浮层不消失,改建到 ＋ 下方(它在面板顶部)。
+  const plus = newChatTrigger(page)
+  await plus.click()
+  await expect(picker, '换触发点不关浮层').toHaveCount(1)
+  await expect(plus, '新的触发钮 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
+  await expect(owner, '旧触发钮 aria-expanded 归 false').toHaveAttribute('aria-expanded', 'false')
+  const underPlus = await picker.boundingBox()
+  expect(underPlus?.y ?? 0, '面板上移到 ＋ 下方').toBeLessThan(underOwner?.y ?? 0)
+  await page.keyboard.press('Escape')
+  await expect(picker).toHaveCount(0)
+})
+
+// 空对话可改归属:卡片外的项目标签 → 选另一个项目 → tab 上的缩写与色条随之更新 + 有播报。
+// 「移动」这套动作的文案必须与「它真的换了地方」一致 —— 故这里同时验 tab 的两条归属通道。
+test('空对话可改归属:卡片外的项目标签选另一个项目 → tab 缩写与色条随之更新 + 播报', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await newChatTrigger(page).click()
+  await expect(page.locator(PICKER_ACTIVE)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(PICKER)).toHaveCount(0)
+
+  // 新会话是**空对话** → 卡片外的项目标签是个**控件**:带 caret、带可见描边(静态可点提示,
+  // 不许只在 hover 时显现),并带 disclosure 属性。
+  const owner = page.locator(CHAT_OWNER_ACTION)
+  await expect(owner, '空对话的归属是个可点的控件').toHaveCount(1)
+  await expect(owner).toHaveAttribute('aria-haspopup', 'listbox')
+  await expect(owner).toHaveAttribute('aria-expanded', 'false')
+  await expect(owner).toContainText(PROJECT_NAMES.planning[0])
+  await expect(owner.locator('.composer-project__caret'), '控件态带 caret(常显)。').toHaveCount(1)
+  // 描边是**静态**的:静置(未 hover)下 computed border 已经非零宽 —— 这正是「可点性有静态提示」。
+  expect(await owner.locator('.composer-project__chip').evaluate((element) => getComputedStyle(element).borderInlineStartWidth), '静置态就有可见描边').not.toBe('0px')
+  // 命中区:标签挪出卡片底行后不再属密集行,按独立控件默认档守 44×44(本仓 ⑥ 默认档)。
+  const ownerBox = await owner.boundingBox()
+  expect(ownerBox?.width ?? 0, '命中区宽 ≥ 44(独立控件档)').toBeGreaterThanOrEqual(44)
+  expect(ownerBox?.height ?? 0, '命中区高 ≥ 44(独立控件档)').toBeGreaterThanOrEqual(44)
+  // 视觉 chip 仍更紧凑(约 28 高):命中区靠标签外壳的留白撑开,而不是把 chip 撑到 44。
+  const chipBox = await owner.locator('.composer-project__chip').boundingBox()
+  expect(chipBox?.height ?? 0, '视觉 chip 高 ≥ 24').toBeGreaterThanOrEqual(24)
+  expect(chipBox?.height ?? 0, '视觉 chip 高 ≤ 32(不是 44)').toBeLessThanOrEqual(32)
+  await expect(owner, '可访问名说清点它会怎样').toHaveAttribute('aria-label', /当前项目「weekly-report」，点击可更改/)
+
+  const tab = page.locator(TAB).first()
+  const markBefore = await tab.locator('.conversation-tab__mark').textContent()
+  const identityBefore = identityClassOfElement(await tab.getAttribute('class'))
+  expect(markBefore, '改之前归 weekly-report').toBe('WR')
+
+  await owner.click()
+  const picker = page.locator(PICKER)
+  await expect(picker, '归属控件也开同一个浮层').toHaveCount(1)
+  await expect(owner, '打开时 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
+  // 高亮 = 该会话**当前**所属项目(改之前它在哪)。
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[0])
+  // 选 knowledge-base。
+  await picker.locator('[role="option"]', { hasText: PROJECT_NAMES.planning[1] }).click()
+  await expect(picker).toHaveCount(0)
+
+  // tab 的两条归属通道都随之更新:文字前缀 + 标识色条绑定类。
+  await expect(tab.locator('.conversation-tab__mark'), 'tab 缩写随之更新').toHaveText('KB')
+  const identityAfter = identityClassOfElement(await tab.getAttribute('class'))
+  expect(identityAfter, '标识色条随之更新').not.toBe(identityBefore)
+  // 卡片外归属控件的文字也随之更新(它读的是同一份 projects)。
+  await expect(page.locator(CHAT_OWNER_ACTION)).toContainText(PROJECT_NAMES.planning[1])
+  // role="status" 播报一次「移动」(动作词与真实结果一致)。
+  await expect(page.locator('.workspace-live'), '改归属有播报').toHaveText(/已把「新建对话」移到 knowledge-base/)
+})
+
+// 「统一下风格」那条等价断言**已废除**:模型钮与归属标签此后**不再同规格、也不再同行**,
+// 这是正确的 —— 模型钮仍在卡片内的密集行里(适用 24px 例外档),归属标签在卡片外
+// (适用独立控件 44px 默认档)。两条各自守住自己的档位,不互相迁就。
+// 模型钮这条仍要锁:模型名必须**完整显示**(它只有这一处能读;截成省略号等于「先点开才知道模型」)。
+test('模型钮仍是密集行档的紧凑 chip(24 高、胶囊),且模型名完整显示', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+  const model = page.locator('.model-menu__trigger')
+  await expect(model, '模型 chip 在场').toHaveCount(1)
+
+  const mBox = await model.boundingBox()
+  expect(mBox?.height ?? 0, '模型 chip 高 = 24(密集行内控件档)').toBeGreaterThanOrEqual(23)
+  expect(mBox?.height ?? 0, '模型 chip 高 = 24(密集行内控件档)').toBeLessThanOrEqual(25)
+  expect(mBox?.width ?? 0, '模型 chip 宽 ≥ 24').toBeGreaterThanOrEqual(24)
+  const mSpec = await model.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { radius: Number.parseFloat(style.borderRadius), border: style.borderInlineStartWidth, font: style.fontSize }
+  })
+  expect(mSpec.radius, '模型 chip 是胶囊').toBeGreaterThan(12)
+  expect(mSpec.border, '模型 chip 有静态描边').not.toBe('0px')
+  expect(mSpec.font).toBe('12px')
+
+  // 模型名完整显示(不截断):label 的 scrollWidth 不得超过 clientWidth。
+  const labelTruncated = await page.locator('.telemetry__model').evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+  expect(labelTruncated, '模型名完整显示,不被截成省略号').toBe(false)
+})
+
+// 卡片外的归属标签与卡片内的模型钮**不再同规格**(前者独立控件 44,后者密集行 24)——
+// 这条断言把「它们确实分属两档」钉死,防止有人为了「看起来是一套」把两者硬凑。
+test('归属标签属独立控件档(44),与卡片内模型钮(24)分属两档', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+  const owner = page.locator(CHAT_OWNER_ACTION)
+  const model = page.locator('.model-menu__trigger')
+  await expect(owner, '归属标签在场(空对话)').toHaveCount(1)
+  const ownerBox = await owner.boundingBox()
+  const modelBox = await model.boundingBox()
+  expect(ownerBox?.height ?? 0, '归属标签命中区 ≥ 44').toBeGreaterThanOrEqual(44)
+  expect(modelBox?.height ?? 0, '模型钮仍是密集行档的 24').toBeLessThanOrEqual(25)
+  // 圆角:标签取 --dl-radius-md(8,呼应同心公式),模型钮是胶囊 —— 两者**故意不同**。
+  const ownerRadius = await page.locator('.composer-project__chip').evaluate((element) => Number.parseFloat(getComputedStyle(element).borderRadius))
+  const modelRadius = await model.evaluate((element) => Number.parseFloat(getComputedStyle(element).borderRadius))
+  expect(ownerRadius, '归属标签圆角 = 8(--dl-radius-md)').toBe(8)
+  expect(modelRadius, '模型钮仍是胶囊').toBeGreaterThan(12)
+})
+
+// 归属控件的**键盘与语义**(APG disclosure):Enter 打开 → Esc 取消(归属不变、焦点回到控件)→
+// aria-expanded 往返。
+test('卡片外归属标签:键盘打开浮层、Esc 取消归属不变且焦点还标签、aria-expanded 往返', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+  const owner = page.locator(CHAT_OWNER_ACTION)
+  await expect(owner).toHaveAttribute('aria-expanded', 'false')
+
+  // 键盘通路:聚焦控件后用 Enter 打开(原生 button 的 click 由此承担)。
+  await owner.focus()
+  await expect(owner).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(PICKER), 'Enter 打开浮层').toHaveCount(1)
+  await expect(owner, '打开后 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
+  // 焦点进入浮层的高亮项(Enter 永远有确定落点)。
+  await expect(page.locator(PICKER_ACTIVE)).toBeFocused()
+
+  // Esc 取消:浮层收起、归属不变、焦点回到触发控件。
+  await page.keyboard.press('Escape')
+  await expect(page.locator(PICKER), 'Esc 即收起浮层').toHaveCount(0)
+  await expect(owner, 'aria-expanded 回到 false').toHaveAttribute('aria-expanded', 'false')
+  await expect(owner, '焦点归还触发控件').toBeFocused()
+  await expect(page.locator(TAB).first().locator('.conversation-tab__mark'), '归属未被改动').toHaveText('WR')
+})
+
+// 有消息之后归属冻结:控件**退回只读纯文本**(不是禁用)—— caret 与描边一起消失、不再是按钮。
+test('有消息后归属冻结:发一条消息后标签退回只读纯文本(caret 与描边一起消失)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await newChatTrigger(page).click()
+  await expect(page.locator(PICKER_ACTIVE)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(CHAT_OWNER_ACTION), '空对话时入口在场').toHaveCount(1)
+  // 空对话时它是**按钮**(原生 tagName),且带 caret。
+  expect(await page.locator(CHAT_OWNER_ACTION).evaluate((element) => element.tagName)).toBe('BUTTON')
+  await expect(page.locator(CHAT_OWNER_ACTION).locator('.composer-project__caret')).toHaveCount(1)
+
+  const composer = page.getByRole('textbox').first()
+  await composer.fill('这条消息一发出去，归属就定了')
+  await composer.press('Enter')
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+
+  // 控件**不再渲染**(整枚 button 从 DOM 消失),标签退化成纯文本;caret 一并消失。
+  await expect(page.locator(CHAT_OWNER_ACTION), '有消息后不再是控件').toHaveCount(0)
+  await expect(page.locator(CHAT_OWNER_STATIC), '退化成只读纯文本').toHaveCount(1)
+  expect(await page.locator(CHAT_OWNER_STATIC).evaluate((element) => element.tagName), '只读态是 span').toBe('SPAN')
+  await expect(page.locator(`${PROJECT_LABEL} .composer-project__caret`), 'caret 随之消失').toHaveCount(0)
+  // 项目名仍在(信息不丢),只是不再可点。
+  await expect(page.locator(CHAT_OWNER_STATIC)).toHaveText(PROJECT_NAMES.planning[0])
+})
+
+// 停靠态对话**没有标题栏**:tab 条下方直接就是转录区(归属由 tab 自己承担)。
+test('停靠态对话没有标题栏:那一行不在场,tab 条下方直接是转录区', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+
+  // 那行(纯信息面包屑)不在 DOM 里。
+  await expect(page.locator(CHAT_HEADING), '停靠态没有标题栏').toHaveCount(0)
+  // 转录区(区域内容区)**直接**跟在会话头(tab 条)之后:tabpanel 的第一个孩子就是内容本体,
+  // 不再有夹在中间的标题栏。结构上「tab 条 → tabpanel → transcript-area → 内容本体」。
+  await expect(page.locator(TABPANEL), 'tabpanel 紧跟会话头').toHaveCount(1)
+  await expect(page.locator(`${TABPANEL} > .transcript-area > .chat-session-view`), '内容本体是 tabpanel 下的第一个孩子').toHaveCount(1)
+  await expect(page.locator(`${TABPANEL} > .transcript-area > :first-child`), '内容本体的前一个兄弟节点不存在(标题栏已删)').toHaveClass(/chat-session-view/)
+  // 转录区与输入坞都在,对话本身照常可用。
+  await expect(page.locator('.transcript')).toBeVisible()
+  await expect(page.locator('.composer-dock')).toHaveCount(1)
+})
+
+// 本次唯一保留的例外:悬浮对话窗的标题栏**仍在**(它是窗口外壳,要用来拖动;且悬浮窗没有 tab 条,
+// 标题栏是它唯一的身份载体)。这条用例防止「删停靠态标题栏」时连带误删悬浮态。
+test('悬浮对话窗的标题栏仍在(本次唯一保留的例外)', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  // 用 tab 上的「拆出」钮把一段对话拆成悬浮窗(与对话窗体⑥ 同一条非拖拽通路)。
+  const pop = page.locator('.tab-slot').first().locator('.tab-pop')
+  await pop.focus()
+  await page.keyboard.press('Enter')
+  const chatPanel = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
+  await expect(chatPanel, '拆出为悬浮对话窗').toHaveCount(1)
+  // 悬浮窗的标题栏在场:外壳的 .dl-window__meta + 其内的对话标题。
+  const header = chatPanel.locator('.dl-window__meta')
+  await expect(header, '悬浮窗有标题栏').toHaveCount(1)
+  await expect(header.locator('.chat-panel__title')).toBeVisible()
+  // 它仍是拖拽手柄(可用于移动窗口)。
+  await expect(header).toHaveCount(1)
+})
+
+// 新建对话归属③:区域为空 / 引导页 + **只有一个**已打开项目 → 直接归它(不弹浮层)。
+test('新建对话归属③:只有一个已打开项目时直接归它,不弹浮层', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -7390,13 +7807,13 @@ test('新建对话归属②:只有一个已打开项目时直接归它,不弹选
   }
   await expect(page.locator('.onboarding')).toHaveCount(1)
   await page.locator('.onboarding__primary').click()
-  await expect(page.locator('.project-chooser'), '唯一项目 → 不弹选择').toHaveCount(0)
+  await expect(page.locator(PICKER), '唯一项目 → 不弹选择').toHaveCount(0)
   await expect(page.locator('.onboarding')).toHaveCount(0)
   await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
 })
 
-// 新建对话归属③:区域为空 / 引导页 + 多个已打开项目 → 列出项目让用户选。
-test('新建对话归属③:多个已打开项目时列出项目让用户选', async ({ page }) => {
+// 新建对话归属④:区域为空 / 引导页 + 多个已打开项目 → 同样弹浮层让用户选(触发点换到引导页主按钮)。
+test('新建对话归属④:引导页 + 多项目时弹浮层,锚到主按钮', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -7407,13 +7824,23 @@ test('新建对话归属③:多个已打开项目时列出项目让用户选', a
     await slots.first().locator('.tab-close').click()
   }
   await expect(page.locator('.onboarding')).toHaveCount(1)
-  await page.locator('.onboarding__primary').click()
-  const chooser = page.locator('.project-chooser')
-  await expect(chooser, '多个项目 → 列出来让用户选').toHaveCount(1)
-  await expect(chooser.locator('.project-chooser__button')).toHaveCount(2)
-  // 选 weekly-report → 建一段归属它的会话,选择浮层收起。
-  await chooser.locator('.project-chooser__button', { hasText: PROJECT_NAMES.planning[0] }).click()
-  await expect(chooser).toHaveCount(0)
+  const primary = page.locator('.onboarding__primary')
+  await expect(primary, '引导页主按钮也是 disclosure 触发点').toHaveAttribute('aria-haspopup', 'listbox')
+  await expect(primary).toHaveAttribute('aria-expanded', 'false')
+  await primary.click()
+  const picker = page.locator(PICKER)
+  await expect(picker, '多个项目 → 列出来让用户选').toHaveCount(1)
+  await expect(primary, '打开后 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator(PICKER_OPTION)).toHaveCount(2)
+  // 从引导页发起时推断不出归属(没有活动窗口)→ 高亮首项。
+  await expect(page.locator(PICKER_ACTIVE)).toContainText(PROJECT_NAMES.planning[0])
+  // 浮层锚在主按钮下方(不是居中模态):面板上缘在主按钮下缘之下。
+  const anchorBox = await primary.boundingBox()
+  const panelBox = await picker.boundingBox()
+  expect(panelBox?.y ?? 0, '浮层落在触发点下方').toBeGreaterThanOrEqual((anchorBox?.y ?? 0) + (anchorBox?.height ?? 0))
+  // 选 weekly-report → 建一段归属它的会话,浮层收起。
+  await page.locator(PICKER_OPTION, { hasText: PROJECT_NAMES.planning[0] }).click()
+  await expect(picker).toHaveCount(0)
   await expect(page.locator('.onboarding')).toHaveCount(0)
   await expect(page.locator(TAB).first().locator('.conversation-tab__mark')).toHaveText('WR')
 })

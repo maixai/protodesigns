@@ -130,6 +130,9 @@ const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 // 停靠区(根区域内容区)里的那个输入坞 —— 输入坞属于对话窗体,悬浮的对话窗体也会各带一个;
 // 不限定范围就会命中 DOM 里第一个(可能正是某个悬浮窗的)。
 const COMPOSER_SELECTOR = '#conversation-panel-body .composer-form'
+// 「回到底部」钮锚在**坞顶**之上(见 chat-composer 的 .scroll-to-bottom),而坞顶未必就是卡片顶 ——
+// 卡片之上还可能有一条挂耳标签带。预留高度必须按「坞顶 → 卡片顶」这段实测来算,见 measureJumpReserve。
+const COMPOSER_DOCK_SELECTOR = '#conversation-panel-body .composer-dock'
 const HEADING_SELECTOR = '.conversation-heading'
 
 export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
@@ -185,9 +188,21 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
     return { box: viewportBox(), margin: viewportMargin.value, minW: options.minWidth, minH: options.minHeight }
   }
 
+  // 「坞顶 → 卡片顶」的高度(卡片之上那条挂耳标签带)。读不到锚点时回落 0 —— 与没有那条带时同值。
+  function measuredDockBand(): number {
+    const dock = document.querySelector(COMPOSER_DOCK_SELECTOR)
+    const card = document.querySelector(COMPOSER_SELECTOR)
+    if (!(dock instanceof HTMLElement) || !(card instanceof HTMLElement)) return 0
+    return Math.max(0, card.getBoundingClientRect().top - dock.getBoundingClientRect().top)
+  }
+
+  // 「回到底部」钮的预留高度:钮浮在**坞顶之上**(底边 = 坞顶 − 一档间隙,高 = 独立控件档),
+  // 所以从卡片顶往上要留出「标签带 + 间隙 + 钮高 + 一档边距」。只按钮高预留会漏掉标签带 ——
+  // 卡片上方的悬浮窗体就会压住那枚钮。
   function measureJumpReserve(): void {
     if (options.composerJumpReserve !== true) return
-    jumpReserve.value = (resolveLength('--dl-target-size') || 44) + 2 * (resolveLength('--dl-space-2') || 8)
+    jumpReserve.value =
+      measuredDockBand() + (resolveLength('--dl-target-size') || 44) + 2 * (resolveLength('--dl-space-2') || 8)
   }
 
   // 默认几何:DOM 读取都留在这里,纯计算交给 window-geometry 的 defaultRect。

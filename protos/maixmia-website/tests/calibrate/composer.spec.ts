@@ -56,22 +56,34 @@ async function waitForComposer(page: Page, title = WEEKLY_TITLE): Promise<void> 
   await expect(page.locator('.telemetry__item--context')).toBeVisible()
 }
 
-// ---- 附件区与底行的构图 ----
+// ---- 项目挂耳标签与底行的构图 ----
 
-test('底行在卡片内:五个遥测项都是 .composer-form 后代,框外不再有遥测条', async ({ page }) => {
+// 读一个设计 token 在页面上的解析值(与 workspace.spec 同一套做法:探针 + getComputedStyle)。
+async function resolveToken(page: Page, name: string): Promise<string> {
+  return page.locator('.workspace-page').evaluate((root, token) => {
+    const probe = document.createElement('span')
+    probe.style.color = `var(${token})`
+    root.appendChild(probe)
+    const color = getComputedStyle(probe).color
+    probe.remove()
+    return color
+  }, name)
+}
+
+test('项目标签在卡片之外:它是 form 的前一个兄弟;底行只剩 ⊕ + 遥测四项', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForComposer(page)
 
-  // 用户第 2 条的机械判据:状态 / 模型 / context / 时长 / 项目五项都住在输入框卡片**内部**。
+  // 状态 / 模型 / context / 时长四项仍住在输入框卡片**内部**。
   const items = await page.evaluate(() => {
     const form = document.querySelector('.composer-form')
-    const selectors = ['.telemetry__status', '.telemetry__item--model', '.telemetry__item--context', '.telemetry__item--elapsed', '.telemetry__item--workspace']
+    const selectors = ['.telemetry__status', '.telemetry__item--model', '.telemetry__item--context', '.telemetry__item--elapsed']
     return selectors.map((selector) => ({ selector, inside: document.querySelector(selector)?.closest('.composer-form') === form }))
   })
   for (const item of items) expect(item.inside, `${item.selector} 应住在 .composer-form 内部`).toBe(true)
 
-  // 卡片内自上而下的三段:附件区(有附件才渲染)→ 输入行 → 底行。
+  // 卡片内自上而下的两段:输入行 → 底行。
   const children = await page.evaluate(() => Array.from(document.querySelector('.composer-form')?.children ?? []).map((element) => element.className))
   console.log(`[composer] 卡片内子元素 ${JSON.stringify(children)}`)
   expect(children).toContain('composer-input-row')
@@ -81,8 +93,88 @@ test('底行在卡片内:五个遥测项都是 .composer-form 后代,框外不�
   const bar = page.locator('.composer-bar')
   await expect(bar.locator('.composer-attach')).toHaveCount(1)
   await expect(bar.locator('.model-menu')).toHaveCount(1)
-  // 遥测条已从框外搬走(旧构图的那条不再存在)。
-  await expect(page.locator('.composer-inner .telemetry')).toHaveCount(0)
+  // 遥测条住在卡片**内部**,不是卡片外的第二条(卡片外只放项目标签)。
+  await expect(page.locator('.composer-form .telemetry'), '遥测条在卡片内').toHaveCount(1)
+  await expect(page.locator('.composer-dock > .composer-inner > .telemetry'), '卡片外没有第二条遥测条').toHaveCount(0)
+
+  // 归属项目已从底行**整条移出**:底行里不再有项目项。
+  await expect(page.locator('.telemetry__item--workspace'), '底行的项目项已整条移除').toHaveCount(0)
+
+  // 项目标签落在卡片**之外**:它是 form 的**前一个兄弟**(不是卡片后代)—— DOM 顺序 = 视觉顺序,
+  // 也保证了它没有成为 textarea 的 label。
+  const relation = await page.evaluate(() => {
+    const form = document.querySelector('.composer-form')
+    const label = document.querySelector('.composer-project-row')
+    return {
+      isSection: label !== null && label.tagName === 'DIV',
+      insideForm: label !== null && form !== null && form.contains(label),
+      previousSibling: label !== null && form !== null && label.nextElementSibling === form,
+    }
+  })
+  expect(relation.isSection, '项目标签在场').toBe(true)
+  expect(relation.insideForm, '标签不在卡片内').toBe(false)
+  expect(relation.previousSibling, '标签是卡片的前一个兄弟(DOM 顺序 = 视觉顺序)').toBe(true)
+})
+
+test('引线:取卡片描边色 --dl-border-base、带 8px 圆角折弯、无阴影', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForComposer(page)
+
+  const leader = page.locator('.composer-project-leader')
+  await expect(leader, '引线在场').toHaveCount(1)
+  // 纯装饰:不进无障碍树(Tab 顺序与读屏都不受它影响)。
+  await expect(leader).toHaveAttribute('aria-hidden', 'true')
+  // 折弯:路径里带 8px 半径的圆弧(A8 8 …,宽 = 高 = 8 —— 与标签圆角同为 8,两者呼应)。
+  await expect(page.locator('.composer-project-leader__line')).toHaveAttribute('d', /A8 8 0 0 0 8\.5 11\.5 H24/)
+  // 取色 = 卡片自身描边色(最低对比的一档):线元素解析出的 color 必须等于 --dl-border-base。
+  const lineColor = await page.locator('.composer-project-leader__line').evaluate((element) => getComputedStyle(element).color)
+  const tokenColor = await resolveToken(page, '--dl-border-base')
+  console.log(`[leader] color ${lineColor} / --dl-border-base ${tokenColor}`)
+  expect(lineColor, '引线取卡片描边色').toBe(tokenColor)
+  // 不叠加阴影(design-language ⑦:描边与阴影不叠用)。
+  const shadow = await leader.evaluate((element) => getComputedStyle(element).boxShadow)
+  expect(shadow, '引线不带阴影').toBe('none')
+  // 描边宽 1px(--dl-border-width)。
+  await expect(page.locator('.composer-project-leader__line')).toHaveCSS('stroke-width', '1px')
+})
+
+test('只读态(该对话已有消息):是纯文本、不是禁用按钮、不可聚焦', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForComposer(page)
+
+  // 默认会话(weekly)已有消息 → 归属冻结。
+  const label = page.locator('.composer-project')
+  await expect(label).toHaveCount(1)
+  expect(await label.evaluate((element) => element.tagName), '只读态是 span,不是 button').toBe('SPAN')
+  // 不可聚焦:没有 tabindex,且不是按钮(禁用按钮仍会被读屏读出却不可操作,是明确问题)。
+  await expect(label).not.toHaveAttribute('tabindex', /.+/)
+  await expect(label.locator('.composer-project__caret'), '只读态没有 caret').toHaveCount(0)
+  // 文字三级色、无背景块。
+  const spec = await label.locator('.composer-project__chip').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundColor }
+  })
+  expect(spec.color, '只读态文字用三级色').toBe(await resolveToken(page, '--dl-text-tertiary'))
+  expect(spec.background, '只读态没有背景块').toBe('rgba(0, 0, 0, 0)')
+  // 结构不随状态消失:引线仍在。
+  await expect(page.locator('.composer-project-leader'), '只读态引线保留').toHaveCount(1)
+})
+
+test('输入框的 aria-describedby 指向项目标签,且没覆盖它的可访问名', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForComposer(page)
+
+  const textarea = page.locator('.composer-textarea')
+  const rowId = await page.locator('.composer-project-row').getAttribute('id')
+  expect(rowId, '标签的 id 按会话唯一').toMatch(/^workspace-composer-project-/)
+  await expect(textarea, '描述指向项目标签').toHaveAttribute('aria-describedby', rowId ?? '')
+  // 可访问名(会话标题)没有被描述覆盖 —— 它仍由 aria-label 承担。
+  await expect(textarea, '可访问名仍是会话标题').toHaveAttribute('aria-label', `与「${WEEKLY_TITLE}」对话`)
+  // 两者是两件事:描述不改变可访问名。
+  await expect(textarea).toHaveAccessibleName(`与「${WEEKLY_TITLE}」对话`)
 })
 
 // ---- 模型切换(作用域 = 本会话)----
@@ -377,7 +469,14 @@ test('窄宽度下模型控件仍在:让位的是项目名与状态详情,且真
   await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
   await expect(model, '375 下模型项仍可见').toBeVisible()
   await expect(trigger, '375 下模型触发钮可用').toBeEnabled()
-  await expect(page.locator('.telemetry__item--workspace'), '窄档让位的是项目名').toBeHidden()
+  // 项目标签**绝不隐藏** —— 上一版在 ≤486 档把它 display:none 掉,窄屏的空对话因此没有改归属
+  // 入口(用户不知道自己在哪个项目)。这里锁住「375 仍可见」。
+  await expect(page.locator('.composer-project-row'), '窄屏仍保留项目标签').toBeVisible()
+  await expect(page.locator('.composer-project__name'), '窄屏项目名可见').toBeVisible()
+  // 窄屏引线:只有竖直下落,没有横向段与折弯(横向段会顶到卡片右侧控件)。
+  // 竖直路径是一根零面积的线,Playwright 的可见性判定把它当空盒 —— 故按 computed display 判。
+  await expect(page.locator('.composer-project-leader__line'), '窄屏不画折弯引线').toBeHidden()
+  await expect(page.locator('.composer-project-leader__drop'), '窄屏只留竖直下落').not.toHaveCSS('display', 'none')
   const barOverflow = await page.locator('.composer-bar').evaluate((el) => el.scrollWidth - el.clientWidth)
   expect(barOverflow, '底行自身不横向溢出').toBeLessThanOrEqual(0)
   const docOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)

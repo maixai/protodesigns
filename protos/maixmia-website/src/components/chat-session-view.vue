@@ -9,6 +9,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
 import type { Attachment } from '../contracts/generated/attachment'
+import type { WindowRect } from '../contracts/generated/workspace-window'
 import { useI18n } from '../i18n'
 import ChatComposer from './chat-composer.vue'
 import TranscriptView from './transcript-view.vue'
@@ -23,6 +24,13 @@ const props = defineProps<{
   isLive: boolean
   disabled: boolean
   canSend: boolean
+  // 该会话**归属项目**的名称与路径:输入坞上方那枚挂耳标签读它(与 tab / 侧栏同源,不由遥测派生)。
+  projectName: string
+  projectPath: string
+  // 空对话(还没有消息)才可改归属 —— 标签此时是一个控件。
+  canReassign: boolean
+  // 项目选择浮层是否正由该控件打开(供 aria-expanded)。
+  reassignPickerOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,6 +46,8 @@ const emit = defineEmits<{
   'remove-attachment': [id: string]
   'update:model': [id: string]
   announce: [text: string]
+  // 改归属:输入坞上方的挂耳标签(可改态)被按下,交出它在视口里的矩形(页面据此锚定项目选择浮层)。
+  reassign: [origin: WindowRect]
 }>()
 
 const { t } = useI18n()
@@ -175,12 +185,17 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
       :can-send="canSend"
       :is-generating="isGenerating"
       :is-live="isLive"
+      :project-name="projectName"
+      :project-path="projectPath"
+      :can-reassign="canReassign"
+      :reassign-picker-open="reassignPickerOpen"
       @send="emit('send', $event)"
       @stop="emit('stop')"
       @update:draft="emit('update:draft', $event)"
       @add-attachments="emit('add-attachments', $event)"
       @remove-attachment="emit('remove-attachment', $event)"
       @update:model="emit('update:model', $event)"
+      @reassign="emit('reassign', $event)"
       @announce="emit('announce', $event)"
       @back-to-bottom="returnToBottom"
     />

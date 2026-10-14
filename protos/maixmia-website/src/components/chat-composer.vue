@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 对话输入坞:某一段对话的输入框 + 附件区 + 底行(⊕ · 模型/遥测)+ 停止钮 + 错误行 + 「回到底部」。
+// 对话输入坞:某一段对话的项目挂耳标签 + 输入框 + 附件区 + 底行(⊕ · 模型/遥测)+ 停止钮 + 错误行 + 「回到底部」。
 //
 // 它**属于对话窗体本身**(不再属于某个区域),故随窗体走:一段对话被拆出成悬浮窗体、
 // 或停靠回条上,输入坞都在它旁边,草稿与附件也一直跟着(runtime.draft / runtime.attachments 是唯一事实源)。
@@ -8,14 +8,20 @@
 // 输入事件会被 inputKeyboard 里的 isComposing 排除,组合结束才提交。
 //
 // 底行(卡片**内部**最下方)的构图依据:Claude 把模型选择器放进 composer 内右侧、主张「模型与
-// 消耗必须在发送前可见」,ChatGPT 放在消息框内右下角 —— 故模型名 / 状态 / context / 时长 / 项目
-// 这组遥测住在卡片底行右侧,⊕ 在左侧;框架外只留发送错误行。
+// 消耗必须在发送前可见」,ChatGPT 放在消息框内右下角 —— 故模型名 / 状态 / context / 时长这组
+// **运行时遥测**住在卡片底行右侧,⊕ 在左侧;框架外只留发送错误行。
+//
+// **归属项目**不是运行时遥测,而是「这份内容属于谁」的身份 —— 故它不混进底行,单独落在卡片
+// **外部左上角**成为一枚挂耳标签,用一条引线勾回卡片(见模板里 .composer-project-row 的说明)。
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
 import type { Attachment } from '../contracts/generated/attachment'
+import type { WindowRect } from '../contracts/generated/workspace-window'
 import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, FILE_DRAG_TYPE, shouldTakeOverPaste, toFileAttachment, toImageAttachment, toLocalFileAttachment, toTextAttachment } from '../data/attachments'
 import { modelById } from '../data/models'
+import { identityClassOf } from '../data/project-identity'
 import { fileBaseName } from '../data/windows'
+import { viewportRectOf } from '../data/viewport-rect'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 import ModelMenu from './model-menu.vue'
@@ -32,6 +38,15 @@ const props = defineProps<{
   // 是否承担全页唯一的**状态播报**(见 workspace-page 的 liveSlot 判据):多对话视图并存时
   // 只有 live 那一个的遥测状态项是 live region,避免多个 polite 区域互相打断。
   isLive: boolean
+  // 该会话**归属项目**的名称与路径:输入坞上方那枚挂耳标签显示它(与 tab / 侧栏同源,不由遥测
+  // 派生 —— 归属是身份,不是运行时信息)。名称走等宽字体(它是文件系统标识、且与 tab 上的等宽
+  // 缩写同源),完整路径挂在 title 上(悬停可读)。
+  projectName: string
+  projectPath: string
+  // 空对话(还没有消息)才可改归属:标签此时是一个**控件**(常显 caret + 发丝描边),点开改归属。
+  canReassign: boolean
+  // 项目选择浮层是否正由该标签打开(供 aria-expanded)。
+  reassignPickerOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +60,8 @@ const emit = defineEmits<{
   // 新增 / 移除附件的播报:交给页面**已有的** role="status" 通道(不新造第二条全局 live)。
   announce: [text: string]
   'back-to-bottom': []
+  // 改归属:挂耳标签(可改态)被按下,交出它在视口里的矩形(页面据此把项目选择浮层锚到它上面)。
+  reassign: [origin: WindowRect]
 }>()
 
 const { t } = useI18n()
@@ -59,6 +76,26 @@ const ariaLabel = computed(() => (props.title === '' ? t.value.workspace.inputLa
 const isReadOnly = computed(() => props.disabled || props.runtime.transcript.status === 'loading' || props.runtime.transcript.status === 'error')
 // 「回到底部」只在「转录已就绪且用户已上滚」时出现(空 / 加载 / 错误态没有「底部」可言)。
 const showBackToBottom = computed(() => !props.runtime.isPinned && props.runtime.transcript.status === 'ready')
+
+// 底行末项(归属项目)的可访问名:空对话时它是控件,读屏必须说清「点它会发生什么」
+// —— 与悬浮对话窗标题栏的归属钮用**同一句**(reassignProjectLabel)。
+const reassignLabel = computed(() => t.value.workspace.reassignProjectLabel.replace('{name}', props.projectName))
+
+// 挂耳标签的 DOM id:**按会话唯一**(同屏可能有多张输入坞,同一个 id 不得出现两次)。
+const projectLabelId = computed(() => `workspace-composer-project-${props.sessionId}`)
+// 标签的标识色绑定类(色点用):按**项目路径**取号 —— 与 tab 色条 / 悬浮窗色点是同一套,
+// path → 色号的映射稳定,项目重开后颜色不跳变(见 data/project-identity.ts)。
+const identityClass = computed(() => identityClassOf(props.projectPath))
+// 输入框的 aria-describedby:指向「归属项目」标签 —— 读屏聚焦输入框时也能听出这段对话属于哪个
+// 项目(W3C ARIA1 的用途)。用**数组拼装**而非直接赋值:将来再加描述(如附件错误)时往数组里
+// 追加即可,不会把已有 id 覆盖掉。注意它只补**描述**,不动输入框的可访问名(那是 aria-label)。
+const describedByIds = computed<string[]>(() => (props.projectName === '' ? [] : [projectLabelId.value]))
+const describedBy = computed(() => (describedByIds.value.length === 0 ? undefined : describedByIds.value.join(' ')))
+
+// 按下项目控件:只负责交上它在视口里的矩形,浮层开 / 关的裁决归页面(与另外两处触发点同一套)。
+function openReassign(event: MouseEvent): void {
+  emit('reassign', viewportRectOf(event.currentTarget instanceof Element ? event.currentTarget : null))
+}
 
 function onInput(event: Event): void {
   const target = event.target
@@ -350,75 +387,120 @@ function formatElapsed(seconds: number): string {
         <DliIcon name="arrowDown" />
       </button>
     </Transition>
-    <!-- 输入框卡片:内部自上而下 = 附件区 / textarea / 底行(⊕ + 模型与遥测)。它是坞内的**流内**
-         首位元素,发送由 Enter 承担,生成中的「停止」仍在框内。 -->
-    <form
-      ref="formRef" class="composer-form" :class="{ 'is-drop-target': dropActive }"
-      :title="t.workspace.inputHint" @submit.prevent="submit"
-      @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"
-    >
-      <!-- 附件区:有附件才渲染;在 textarea 之上、仍在卡片内。每枚芯片带一枚原生删除按钮。 -->
-      <ul v-if="attachments.length" class="composer-attachments" :aria-label="t.workspace.composer.attachments">
-        <li v-for="attachment in attachments" :key="attachment.id" class="attachment-chip" :data-kind="attachment.kind">
-          <!-- 图片:缩略图(objectURL);对象 URL 未就绪(如卸载后重挂)时回落图标。 -->
-          <img v-if="attachment.kind === 'image' && previewUrls[attachment.id]" class="attachment-chip__thumb" :src="previewUrls[attachment.id]" :alt="attachment.name" />
-          <DliIcon v-else-if="attachment.kind === 'image'" name="image" size="sm" class="attachment-chip__icon" />
-          <DliIcon v-else-if="attachment.kind === 'file'" name="fileText" size="sm" class="attachment-chip__icon" />
-          <!-- 粘贴文本:只报「N 行 · M 字符」,全文存在附件的 content 里(发送时发全文)。 -->
-          <span v-if="attachment.kind === 'text'" class="attachment-chip__summary">[{{ attachment.name }} · {{ linesLabel(attachment.lineCount ?? 0) }} · {{ t.workspace.composer.chars.replace('{count}', String(attachment.charCount ?? 0)) }}]</span>
-          <template v-else>
-            <span class="attachment-chip__name">{{ attachment.name }}</span>
-            <!-- 路径是**补充信息**,只在它比名字多给出东西时才显示:项目根目录下的文件
-                 (README.md、progress.csv 这类)名字与路径完全相同,再写一遍就是纯噪声。 -->
-            <code v-if="attachment.path && attachment.path !== attachment.name" class="attachment-chip__meta">{{ attachment.path }}</code>
-            <span v-else-if="attachment.sizeBytes" class="attachment-chip__meta">{{ formatBytes(attachment.sizeBytes) }}</span>
-          </template>
-          <button type="button" class="attachment-chip__remove" :aria-label="t.workspace.composer.remove.replace('{name}', attachment.name)" @click="removeAttachment(attachment.id)"><span aria-hidden="true">×</span></button>
-        </li>
-      </ul>
-      <p v-if="dropActive" class="composer-drop-hint">{{ t.workspace.composer.dropHint }}</p>
-      <p v-if="attachmentError" class="composer-attachment-error" role="alert">{{ attachmentError }}</p>
-      <div class="composer-input-row">
-        <div class="textarea-sizer" :data-value="(runtime.draft || t.workspace.placeholder) + ' '">
-          <textarea
-            :id="composerId" :name="composerId" class="composer-textarea" :value="runtime.draft" rows="1"
-            :aria-label="ariaLabel" :placeholder="t.workspace.placeholder" :readonly="isReadOnly"
-            @input="onInput" @keydown="onKeydown" @paste="onPaste"
-          />
-        </div>
-        <button v-if="isGenerating" class="workspace-button send-button stop-button" type="button" :aria-label="t.workspace.stop" @click="emit('stop')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" /></svg></button>
-      </div>
-      <!-- 底行:左 ⊕(上传),右「模型 ▾ + 遥测项」。遥测项沿用 │ 分隔与容器查询逐项降级。 -->
-      <div class="composer-bar">
-        <button type="button" class="composer-attach" :aria-label="t.workspace.composer.add" :disabled="isReadOnly" @click="openFilePicker">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-        </button>
-        <input ref="fileInputRef" class="composer-file-input" type="file" multiple :accept="ACCEPT" tabindex="-1" aria-hidden="true" @change="onFilesChosen" />
-        <!-- 遥测条:只有状态项是 live region(状态 / 具体动作变化时播报);其余部分不做 live,避免整条太吵。 -->
-        <div class="telemetry" role="group" :aria-label="t.workspace.telemetry.label">
-          <div class="telemetry__status" :role="isLive ? 'status' : undefined" :aria-live="isLive ? 'polite' : undefined">
-            <span class="telemetry__status-head">
-              <span class="telemetry__dot" :data-level="statusLevel" aria-hidden="true" />
-              <span class="telemetry__word">{{ statusWord }}</span>
-            </span>
-            <span v-if="statusDetail" class="telemetry__detail" :title="statusDetail">· {{ statusDetail }}</span>
-          </div>
-          <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--model">
-            <span class="telemetry__sep" aria-hidden="true">│</span>
-            <ModelMenu :model-id="runtime.modelId" @select="onModelSelect" />
-          </span>
-          <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--context">
-            <span class="telemetry__sep" aria-hidden="true">│</span>
-            <span class="telemetry__context-text" :title="contextText"><span class="telemetry__context-percent">{{ contextPercent }}%</span><span class="telemetry__context-counts"> ({{ contextUsed }}/{{ contextWindow }})</span></span>
-            <span class="telemetry__meter" role="progressbar" :aria-label="t.workspace.telemetry.context" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span class="telemetry__meter-fill" :data-level="contextLevel" :style="{ width: `${contextPercent}%` }" /></span>
-          </span>
-          <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--elapsed"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__elapsed">{{ formatElapsed(elapsed) }}</span></span>
-          <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--workspace" :title="runtime.telemetry.projectPath"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__ws-name">{{ runtime.telemetry.projectName }}</span></span>
-        </div>
-      </div>
-    </form>
-    <!-- 流内区域(框外):只剩发送错误行与必要的留白;遥测条已搬进卡片底行。 -->
+    <!-- 定宽居中容器:自上而下 = 项目挂耳标签(**在卡片之外**、其上方)→ 输入卡片 → 发送错误行。
+         它把坞内的内容统一收在同一条阅读列上(与 .transcript-inner 同轴,见 workspace.spec 的
+         「消息列与输入框同轴」)。 -->
     <div class="composer-inner">
+      <!-- 项目挂耳标签:归属是「身份」而非运行时遥测,故从底行移出、落在卡片左上角,并用一条引线
+           勾回卡片(读者一眼看出它属于哪张卡)。结构上它是 form 的**前一个兄弟**且在它之前,
+           故 DOM 顺序 = 视觉顺序(WCAG 2.4.3;也是「它不是 textarea 的 label」的机械保证)。
+           两种状态:空对话可改(button)/ 有消息冻结(纯文本);外观差别是**静态可见**的,
+           不靠 hover 才能看出可点(见各自样式)。 -->
+      <div v-if="projectName" :id="projectLabelId" class="composer-project-row" :class="identityClass">
+        <!-- 引线:1px 竖线自标签底边下落、跨过 4px 间隙 → 8px 圆角折弯 → 沿卡片上边向右延伸并渐隐。
+             颜色取 `--dl-border-base`(与卡片自身描边同级,最低对比),不叠加阴影(design-language ⑦)。
+             渐隐用 mask(向透明渐变),见样式;圆角折弯由路径里的 A 弧线给出。
+             窄屏换另一条只含竖直下落的路径(见样式的窄屏降级)。 -->
+        <svg class="composer-project-leader" width="24" height="12" viewBox="0 0 24 12" aria-hidden="true" focusable="false">
+          <path class="composer-project-leader__line" d="M0.5 0 V3.5 A8 8 0 0 0 8.5 11.5 H24" />
+          <path class="composer-project-leader__drop" d="M0.5 0 V11.5" />
+        </svg>
+        <!-- 可改态(空对话):原生 button,常显 caret + 发丝描边 + elevated 底 —— **静止态就长得像
+             控件**;hover 只做加深,不承担「告不告诉你能点」的职责(base state is the accessible state)。 -->
+        <button
+          v-if="canReassign"
+          type="button"
+          class="composer-project composer-project--action"
+          :title="projectPath"
+          aria-haspopup="listbox"
+          :aria-expanded="reassignPickerOpen"
+          :aria-label="reassignLabel"
+          data-project-picker-trigger
+          @click="openReassign"
+        >
+          <span class="composer-project__chip">
+            <span class="composer-project__dot" aria-hidden="true" />
+            <span class="composer-project__name">{{ projectName }}</span>
+            <svg class="composer-project__caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+          </span>
+        </button>
+        <!-- 只读态(已有消息):纯文本,**不是禁用按钮**(禁用控件被读屏读出却不可操作是明确问题)。
+             不可聚焦、无 caret、无底、无可见描边,文字降为三级色;引线**保留**(结构不随状态消失)。 -->
+        <span v-else class="composer-project" :title="projectPath">
+          <span class="composer-project__chip">
+            <span class="composer-project__dot" aria-hidden="true" />
+            <span class="composer-project__name">{{ projectName }}</span>
+          </span>
+        </span>
+      </div>
+
+      <!-- 输入框卡片:内部自上而下 = 附件区 / textarea / 底行(⊕ + 模型与遥测)。发送由 Enter 承担,
+           生成中的「停止」仍在框内。 -->
+      <form
+        ref="formRef" class="composer-form" :class="{ 'is-drop-target': dropActive }"
+        :title="t.workspace.inputHint" @submit.prevent="submit"
+        @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"
+      >
+        <!-- 附件区:有附件才渲染;在 textarea 之上、仍在卡片内。每枚芯片带一枚原生删除按钮。 -->
+        <ul v-if="attachments.length" class="composer-attachments" :aria-label="t.workspace.composer.attachments">
+          <li v-for="attachment in attachments" :key="attachment.id" class="attachment-chip" :data-kind="attachment.kind">
+            <!-- 图片:缩略图(objectURL);对象 URL 未就绪(如卸载后重挂)时回落图标。 -->
+            <img v-if="attachment.kind === 'image' && previewUrls[attachment.id]" class="attachment-chip__thumb" :src="previewUrls[attachment.id]" :alt="attachment.name" />
+            <DliIcon v-else-if="attachment.kind === 'image'" name="image" size="sm" class="attachment-chip__icon" />
+            <DliIcon v-else-if="attachment.kind === 'file'" name="fileText" size="sm" class="attachment-chip__icon" />
+            <!-- 粘贴文本:只报「N 行 · M 字符」,全文存在附件的 content 里(发送时发全文)。 -->
+            <span v-if="attachment.kind === 'text'" class="attachment-chip__summary">[{{ attachment.name }} · {{ linesLabel(attachment.lineCount ?? 0) }} · {{ t.workspace.composer.chars.replace('{count}', String(attachment.charCount ?? 0)) }}]</span>
+            <template v-else>
+              <span class="attachment-chip__name">{{ attachment.name }}</span>
+              <!-- 路径是**补充信息**,只在它比名字多给出东西时才显示:项目根目录下的文件
+                   (README.md、progress.csv 这类)名字与路径完全相同,再写一遍就是纯噪声。 -->
+              <code v-if="attachment.path && attachment.path !== attachment.name" class="attachment-chip__meta">{{ attachment.path }}</code>
+              <span v-else-if="attachment.sizeBytes" class="attachment-chip__meta">{{ formatBytes(attachment.sizeBytes) }}</span>
+            </template>
+            <button type="button" class="attachment-chip__remove" :aria-label="t.workspace.composer.remove.replace('{name}', attachment.name)" @click="removeAttachment(attachment.id)"><span aria-hidden="true">×</span></button>
+          </li>
+        </ul>
+        <p v-if="dropActive" class="composer-drop-hint">{{ t.workspace.composer.dropHint }}</p>
+        <p v-if="attachmentError" class="composer-attachment-error" role="alert">{{ attachmentError }}</p>
+        <div class="composer-input-row">
+          <div class="textarea-sizer" :data-value="(runtime.draft || t.workspace.placeholder) + ' '">
+            <textarea
+              :id="composerId" :name="composerId" class="composer-textarea" :value="runtime.draft" rows="1"
+              :aria-label="ariaLabel" :aria-describedby="describedBy" :placeholder="t.workspace.placeholder" :readonly="isReadOnly"
+              @input="onInput" @keydown="onKeydown" @paste="onPaste"
+            />
+          </div>
+          <button v-if="isGenerating" class="workspace-button send-button stop-button" type="button" :aria-label="t.workspace.stop" @click="emit('stop')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" /></svg></button>
+        </div>
+        <!-- 底行:左 ⊕(上传),右「模型 ▾ + 遥测项」。遥测项沿用 │ 分隔与容器查询逐项降级。 -->
+        <div class="composer-bar">
+          <button type="button" class="composer-attach" :aria-label="t.workspace.composer.add" :disabled="isReadOnly" @click="openFilePicker">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <input ref="fileInputRef" class="composer-file-input" type="file" multiple :accept="ACCEPT" tabindex="-1" aria-hidden="true" @change="onFilesChosen" />
+          <!-- 遥测条:只有状态项是 live region(状态 / 具体动作变化时播报);其余部分不做 live,避免整条太吵。 -->
+          <div class="telemetry" role="group" :aria-label="t.workspace.telemetry.label">
+            <div class="telemetry__status" :role="isLive ? 'status' : undefined" :aria-live="isLive ? 'polite' : undefined">
+              <span class="telemetry__status-head">
+                <span class="telemetry__dot" :data-level="statusLevel" aria-hidden="true" />
+                <span class="telemetry__word">{{ statusWord }}</span>
+              </span>
+              <span v-if="statusDetail" class="telemetry__detail" :title="statusDetail">· {{ statusDetail }}</span>
+            </div>
+            <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--model">
+              <span class="telemetry__sep" aria-hidden="true">│</span>
+              <ModelMenu :model-id="runtime.modelId" @select="onModelSelect" />
+            </span>
+            <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--context">
+              <span class="telemetry__sep" aria-hidden="true">│</span>
+              <span class="telemetry__context-text" :title="contextText"><span class="telemetry__context-percent">{{ contextPercent }}%</span><span class="telemetry__context-counts"> ({{ contextUsed }}/{{ contextWindow }})</span></span>
+              <span class="telemetry__meter" role="progressbar" :aria-label="t.workspace.telemetry.context" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span class="telemetry__meter-fill" :data-level="contextLevel" :style="{ width: `${contextPercent}%` }" /></span>
+            </span>
+            <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--elapsed"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__elapsed">{{ formatElapsed(elapsed) }}</span></span>
+          </div>
+        </div>
+      </form>
+      <!-- 流内区域(框外):只剩发送错误行与必要的留白;遥测条住在卡片底行。 -->
       <p v-if="runtime.hasSendError" class="send-error" role="alert">{{ t.workspace.sendError }}</p>
     </div>
   </div>
@@ -429,10 +511,98 @@ function formatElapsed(seconds: number): string {
    遥测条因此共用同一条阅读列。它是面板 / 窗体里的**流内**元素,不设 z-index(属应用外壳那一层,
    悬浮的文件窗体可以盖住它 —— 用户要的「输入框与整个对话框做在一起,能被文件窗体覆盖」)。 */
 .composer-dock { position: relative; flex-shrink: 0; padding-inline: var(--dl-space-6); }
-/* 框外的流内区块:只剩错误行;底部留一档内边距(与输入框下缘的呼吸感)。 */
+/* 坞内容的定宽居中容器:自上而下 = 项目挂耳标签 / 输入卡片 / 发送错误行,三者共用同一条阅读列
+   (与 .transcript-inner 同轴;底部留一档内边距,给输入框下缘一点呼吸感)。 */
 .composer-inner { max-width: var(--workspace-column-max); margin-inline: auto; padding-block-end: var(--dl-space-4); }
-/* 遥测条:底行右侧的单行运行时信息(状态 · 模型 · Context · 时长 · 项目)。降级按遥测条
-   **自身可用宽度**(容器查询)决定,而非视口宽度 —— 它住在底行右侧,宽视口也未必装得下五项。
+/* ---- 项目挂耳标签:卡片**外部左上角**的一枚身份标签,由一条引线勾回卡片 ---- */
+/* 整行的布局容器:与卡片同轴定宽居中;DOM 上是 form 的**前一个兄弟**(读屏 / Tab 顺序 = 视觉顺序,
+   WCAG 2.4.3)。内容左缘 = 卡片**内容**左缘(卡片 1px 描边 + 8px 内边距),即与输入文字同一条竖线;
+   底边与卡片上边缘之间留 --dl-space-1(4px)。 --composer-content-inset 由本行给出、供引线复用。 */
+.composer-project-row {
+  --composer-content-inset: calc(var(--dl-border-width) + var(--dl-space-2));
+  position: relative;
+  display: flex;
+  max-width: var(--workspace-column-max);
+  margin-inline: auto;
+  padding-inline-start: var(--composer-content-inset);
+  padding-block-end: var(--dl-space-1);
+}
+/* 引线:1px 竖线自标签底边下落 → 8px 圆角折弯 → 沿卡片上边向右延伸并渐隐。
+   它是**纯装饰**(aria-hidden + pointer-events:none),只补偿「这张标签属于哪张卡」的从属关系。
+   取色 = 卡片自身描边色 --dl-border-base(这一带对比最低的一档)—— 若它成了最先被注意到的东西
+   就是做过头了;不叠加阴影(design-language ⑦:描边与阴影不叠用)。
+   定位:绝对贴到行盒的**左缘**(= 卡片内容左缘)与**底边**(= 卡片上边缘),故纵段跨过 4px 间隙、
+   横段正好落在卡片上边。渐隐用 mask(向透明渐变),竖段与折弯保持实色,只让横段尾端淡出。 */
+.composer-project-leader {
+  position: absolute;
+  inset-inline-start: var(--composer-content-inset);
+  inset-block-end: 0;
+  display: block;
+  color: var(--dl-border-base);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, currentColor 55%, transparent 100%);
+  mask-image: linear-gradient(to right, currentColor 55%, transparent 100%);
+}
+.composer-project-leader__line { fill: none; stroke: currentColor; stroke-width: var(--dl-border-width); }
+/* 窄屏形态的引线(只有竖直下落、不折弯也不横向延伸),默认不显示 —— 由下方窄屏规则切换。 */
+.composer-project-leader__drop { display: none; fill: none; stroke: currentColor; stroke-width: var(--dl-border-width); }
+/* 标签的**命中区**:挪出卡片底行后它不再属密集行,按独立控件默认档守 44×44(视觉 chip 约 28 高、
+   居中其中,靠周围留白撑开命中区)。两态共用同一外壳高度,故行高恒定、引线几何不随状态漂移。 */
+.composer-project {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 0;
+  /* 名字再长也不顶出阅读列:超出即由 .composer-project__name 单行省略。 */
+  max-inline-size: 100%;
+  min-block-size: var(--dl-target-size);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+/* 视觉 chip:项目名(等宽字体、xs 号 —— 它是文件系统标识,与 tab 上的等宽缩写同源)+ 标识色点
+   + 可改态的 caret。圆角取 --dl-radius-md(8px,呼应同心公式「内圆角 = 外圆角 −(间距 + 描边)」),
+   不用 pill(胶囊会把这类身份标签读成过于亲和的徽标 —— Stripe / Vercel 都明确规避)。
+   柔和的来源是**发丝描边 + 低对比文字色 + 无阴影**,而不是更大的圆角。 */
+.composer-project__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dl-space-1);
+  min-inline-size: 0;
+  padding-block: var(--dl-space-1);
+  border-radius: var(--dl-radius-md);
+  font-family: var(--dl-font-mono);
+  font-size: var(--dl-font-size-xs);
+  line-height: var(--dl-line-snug);
+  /* 只读态:低对比纯文本 —— 无底、无可见描边、无 caret。 */
+  color: var(--dl-text-tertiary);
+}
+.composer-project__dot { flex: none; inline-size: var(--dl-identity-dot-size); block-size: var(--dl-identity-dot-size); border-radius: var(--dl-radius-pill); background: var(--dl-identity); }
+/* 单行省略:项目名可能很长,窄屏由 .composer-project-row 收紧 max-inline-size 后在此截断。 */
+.composer-project__name { min-inline-size: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-project__caret { flex: none; inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); }
+.composer-project__caret path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
+/* 可改态(空对话):原生 button。**静止态就长得像控件** —— 常显 caret + 发丝描边 + elevated 底 +
+   二级文字色;hover 只做加深,不承担「告不告诉你能点」的职责(base state is the accessible state)。
+   命中区 ≥44×44:min-block-size 撑高,.composer-project--action 的 min-inline-size 兜宽(短名也达标)。 */
+.composer-project--action { min-inline-size: var(--dl-target-size); cursor: pointer; border-radius: var(--dl-radius-md); }
+.composer-project--action .composer-project__chip {
+  padding-inline: var(--dl-space-2);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  background: var(--dl-bg-elevated);
+  color: var(--dl-text-secondary);
+  transition: background-color var(--dl-duration-fast) var(--dl-ease-standard), border-color var(--dl-duration-fast) var(--dl-ease-standard), color var(--dl-duration-fast) var(--dl-ease-standard);
+}
+.composer-project--action:hover .composer-project__chip { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); color: var(--dl-text-primary); }
+.composer-project--action:active .composer-project__chip { background: var(--dl-bg-sunken); }
+.composer-project--action[aria-expanded='true'] .composer-project__chip { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); color: var(--dl-text-primary); }
+/* 焦点环画在**可见 chip**上(而不是 44 的命中区外壳),这样它紧贴用户看到的那个控件。
+   行 / 坞 / 面板祖先都没有 overflow:hidden,环不会被裁(本仓有过祖先裁掉后代焦点环的前科)。 */
+.composer-project--action:focus-visible { box-shadow: none; }
+.composer-project--action:focus-visible .composer-project__chip { box-shadow: var(--dl-focus-ring); }
+/* 遥测条:底行右侧的单行运行时信息(状态 · 模型 · Context · 时长)。降级按遥测条
+   **自身可用宽度**(容器查询)决定,而非视口宽度 —— 它住在底行右侧,宽视口也未必装得下四项。
    行高固定 32:底行比它高(⊕ 与模型钮是独立控件,守 44),遥测条自身仍守「克制」那一档。
    各项允许收缩(见下面的 min-width / 省略号)—— 极窄面板(如 375 下的左右切分)里宁可把
    文字截短,也不把内容顶出卡片、污染整页的横向溢出。 */
@@ -449,10 +619,11 @@ function formatElapsed(seconds: number): string {
 .telemetry__word { flex-shrink: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dl-text-primary); font-weight: 500; }
 .telemetry__detail { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .telemetry__item { display: inline-flex; align-items: center; gap: var(--dl-space-2); flex-shrink: 0; min-width: 0; white-space: nowrap; }
-/* 让位次序(窄面板里空间不够时谁先缩):
-   ① 状态详情(已在 ≤486 档隐去)→ ② **模型标签**(截成省略号,触发钮仍有 44 命中区,
-   全名在 aria-label / title 上)→ ③ Context。状态词与 Context 文本是不许被裁的两件。 */
-.telemetry__item--model { flex-shrink: 100; }
+/* 让位次序(空间不够时谁先缩):**状态详情**(已在 ≤486 档整条隐去)→ **Context**(最窄档只留
+   百分比)。状态词与 Context 文本是不许被裁的两件。模型钮默认**不参与收缩**(shrink 0):模型名
+   是用户点开前必须读全的信息,截成省略号等于「我得先点开才知道现在用的是什么模型」;唯一例外是
+   底行本身已被挤到 ≤486 的窄档(见下方容器查询),那一档才允许它让位。 */
+.telemetry__item--model { flex-shrink: 0; }
 .telemetry__sep { flex: none; color: var(--dl-text-disabled); }
 .telemetry__context-text, .telemetry__elapsed { font-variant-numeric: tabular-nums; }
 .telemetry__context-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -460,21 +631,24 @@ function formatElapsed(seconds: number): string {
 .telemetry__meter-fill { display: block; height: 100%; border-radius: var(--dl-radius-pill); background: var(--dl-info); }
 .telemetry__meter-fill[data-level='warning'] { background: var(--dl-warning); }
 .telemetry__meter-fill[data-level='error'] { background: var(--dl-error); }
-.telemetry__item--workspace { flex: 0 1 auto; min-width: 0; }
-.telemetry__ws-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* 降级按遥测条自身宽度(容器查询),逐项降低优先级;状态词、Context 与**模型控件**在任何宽度
    都不隐藏 —— 模型是用户点得到的控件(不是只读文本),隐藏它等于窄屏没法切模型。 */
 @container (max-width: 611px) { .telemetry__meter { display: none; } }
 @container (max-width: 555px) { .telemetry__item--elapsed { display: none; } }
-/* 让位次序:先项目名,再状态详情(它仍在 title 上,信息不丢)—— 两者都比模型控件次要。 */
-@container (max-width: 486px) { .telemetry__item--workspace { display: none; } .telemetry__detail { display: none; } }
+/* 让位次序:底行容不下「状态词 + 模型 + Context」时,先让状态详情(它仍在 title 上,信息不丢)。 */
+@container (max-width: 486px) {
+  .telemetry__detail { display: none; }
+  /* 底行被挤到这一档(含 375 切分后的窄窗格)时,模型名**允许**让位 —— 这是唯一会截它的场合;
+     其余宽度它都完整显示(见 .telemetry__item--model 的说明)。 */
+  .telemetry__item--model { flex-shrink: 100; }
+}
 /* 最窄一档:Context 只留百分比,「(已用 / 上限)」让位(完整文本仍在 title 上)。
    英语的「Waiting for confirmation + (186K/200K)」正是这一档要腾出来的那点宽度。 */
 @container (max-width: 359px) { .telemetry__context-counts { display: none; } }
 .send-error { color: var(--dl-error); margin-bottom: var(--dl-space-2); font-size: var(--dl-font-size-sm); }
-/* 输入框卡片:坞内的流内首位元素,自身仍抬起(elevated 底 + 发丝描边 + md 阴影 + lg 圆角);
-   margin-inline:auto + max-width 让它与阅读列同宽同轴。多行时向下长高、把坞顶推高。
-   内部**纵向三段**:附件区 / 输入行 / 底行。 */
+/* 输入框卡片:自身仍抬起(elevated 底 + 发丝描边 + md 阴影 + lg 圆角);它是 .composer-inner
+   的流内首个子块(定宽居中由 .composer-inner 给出,这里保留同值约束以防单独复用)。多行时向下
+   长高、把坞顶推高。内部**纵向三段**:附件区 / 输入行 / 底行。 */
 .composer-form { container: composer / inline-size; margin-inline: auto; max-width: var(--workspace-column-max); display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
 /* 侧栏文件拖到卡片上:整体描边 + 焦点环同款强调(只动 border-color / box-shadow,不触发布局)。 */
 .composer-form.is-drop-target { border-color: var(--dl-accent); box-shadow: var(--dl-shadow-md), var(--dl-focus-ring); }
@@ -572,6 +746,17 @@ textarea:focus-visible { outline: none; box-shadow: none; }
 /* 窄屏:坞的横向内缩收一档。 */
 @media (max-width: 1023px) {
   .composer-dock { padding-inline: var(--dl-space-4); }
+}
+/* 窄屏(375 一档)的挂耳标签降级。**绝不隐藏标签** —— 隐藏它等于回到「用户不知道自己在哪个
+   项目」的失败态,窄屏的空对话必须仍有改归属的入口。降级只做三件事:
+   · 标签收紧 max-inline-size,长名走单行省略(不与卡片争宽,也不顶出阅读列);
+   · chip 的横向内边距收一档,省出宽度给项目名;
+   · 引线去掉横向段与折弯,只留竖直下落 —— 横向段在窄屏会伸到卡片右侧控件那一片。 */
+@media (max-width: 480px) {
+  .composer-project { max-inline-size: 60%; }
+  .composer-project--action .composer-project__chip { padding-inline: var(--dl-space-1); }
+  .composer-project-leader__line { display: none; }
+  .composer-project-leader__drop { display: inline; }
 }
 @media (prefers-reduced-motion: reduce) {
   .workspace-button:active { transform: none; }

@@ -34,12 +34,18 @@ export const workspace = {
   // 关闭项目的播报:把「已关闭项目 X」与「连带关闭了 N 个窗口」**合成一条**
   // (announcePlacement 是后写覆盖先写的单通道,分两次调用会丢前一条)。
   closedProject: '已关闭项目「{name}」· 关闭了 {count} 个窗口',
-  // 新建对话**归属**相关的文案(平权之后没有「当前项目」):
-  //   · newChatProject / newChatProjectHint —— 区域为空且有多个已打开项目时,列出项目让用户选;
+  // 新建对话 / 改归属共用的**项目选择浮层**(锚定触发点、listbox 单选的浮层):
+  //   · newChatProject —— 新建对话时问「在哪个项目里新建」(该 Agent 打开了多个项目才问);
+  //   · reassignProject —— 空对话改归属时问「移到哪个项目」;
   //   · newChatNeedProject —— 一个项目都没打开时,引导先打开项目。
   newChatProject: '在哪个项目里新建对话',
-  newChatProjectHint: '当前没有可推断归属的窗口，请选择一个项目。',
+  reassignProject: '把这段对话移到哪个项目',
   newChatNeedProject: '请先打开一个项目，再新建对话',
+  // 对话标题栏归属钮的可访问名:归属露在那里(又只对空对话开放),读屏必须说清「点它会发生什么」。
+  reassignProjectLabel: '当前项目「{name}」，点击可更改',
+  // 改归属后的播报:{title} 是会话标题,{project} 是目标项目名。动作词用「移动」,
+  // 与「它真的换了地方」保持一致(tab 上的缩写与色条会同步更新)。
+  reassignDone: '已把「{title}」移到 {project}',
   // 项目行的「⋯」操作菜单的可访问名。(原 expandProject / collapseProject 已随目录行改用
   // 「整行 button + aria-expanded」而下线,不再有「动作词 + 项目名」拼出的可访问名。)
   projectActions: '项目操作',

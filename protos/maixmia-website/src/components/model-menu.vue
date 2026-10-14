@@ -177,27 +177,35 @@ defineExpose({ close })
 
 <style scoped>
 .model-menu { position: relative; display: inline-flex; min-width: 0; }
-/* 触发钮:底行右侧的独立控件,守 44 高(--dl-target-size);可视化上是文字 + 一枚 chevron。
-   极窄卡片下可收缩:min-inline-size 保底一枚 44 命中区(名字截成省略号也不影响可点),
-   全名仍在 aria-label / title 上 —— 模型控件在任何宽度都不该消失。 */
+/* 触发钮:底行右侧的一枚**紧凑 chip**(与同行「归属项目」那枚 chip 同一套规格 —— 两者是
+   这一行里相邻的、可切换的会话设定,必须看起来是一套东西)。形态依据(chip 通行最佳实践):
+   · 高度取本仓密集行内控件档的下限 **24px**(胶囊),与遥测条 32 的行高留一档呼吸;
+     触达 ≥24×24,正是 WCAG 2.5.8(AA)的尺寸下限;用 `min-block-size` 而非固定高,字号被
+     用户放大时它是长高、不被裁(WCAG 1.4.4 / 1.4.12);
+   · 一圈**发丝描边 + 圆角胶囊**把它读成「一枚标签」而非「一颗按钮」(层级以发丝描边为主);
+   · 极窄卡片下名字截成省略号(全名仍在 aria-label / title 上),但 min-inline-size 保底一枚
+     24 命中区,模型控件在任何宽度都不消失。 */
 .model-menu__trigger {
   display: inline-flex;
   align-items: center;
   gap: var(--dl-space-1);
-  min-height: var(--dl-target-size);
-  min-inline-size: var(--dl-target-size);
+  min-block-size: var(--dl-space-6);
+  min-inline-size: var(--dl-space-6);
   max-inline-size: 100%;
-  padding-inline: var(--dl-space-1);
-  border-radius: var(--dl-radius-sm);
+  padding-inline: var(--dl-space-2);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-pill);
   color: var(--dl-text-secondary);
   font-size: var(--dl-font-size-xs);
   line-height: var(--dl-line-snug);
   white-space: nowrap;
+  transition: background-color var(--dl-duration-fast) var(--dl-ease-standard), border-color var(--dl-duration-fast) var(--dl-ease-standard), color var(--dl-duration-fast) var(--dl-ease-standard);
 }
 /* 模型名:可收缩 + 省略号(窄卡片里让位于上下文与状态,自己截字)。 */
 .telemetry__model { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.model-menu__trigger:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.model-menu__trigger[aria-expanded='true'] { color: var(--dl-text-primary); background: var(--dl-bg-hover); }
+.model-menu__trigger:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); color: var(--dl-text-primary); }
+.model-menu__trigger:active { background: var(--dl-bg-sunken); }
+.model-menu__trigger[aria-expanded='true'] { color: var(--dl-text-primary); background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
 .model-menu__trigger:focus-visible { box-shadow: var(--dl-focus-ring); }
 .model-menu__caret { width: var(--dl-icon-sm); height: var(--dl-icon-sm); flex: none; }
 .model-menu__caret path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }

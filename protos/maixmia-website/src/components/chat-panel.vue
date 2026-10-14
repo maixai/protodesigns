@@ -11,10 +11,13 @@
 import { computed } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
 import type { Attachment } from '../contracts/generated/attachment'
+import type { Project } from '../contracts/generated/project'
 import type { WindowRect } from '../contracts/generated/workspace-window'
+import { badgeMapOf } from '../data/project-identity'
 import { useI18n } from '../i18n'
 import { useWindowFrame } from '../composables/use-window-frame'
 import WindowFrame from './window-frame.vue'
+import ChatProjectControl from './chat-project-control.vue'
 import ChatSessionView from './chat-session-view.vue'
 import DliIcon from './dl-icon.vue'
 
@@ -25,9 +28,14 @@ const props = defineProps<{
   sessionId: string
   // 会话标题:标题栏显示它,也是拖拽 / 停靠播报里的 {name}。
   title: string
-  // 归属项目名与它的标识色绑定类名:标题栏直接写「色 + 项目名」,多项目并行时一眼看出出处。
-  projectName: string
-  identityClass: string
+  // 归属项目:标题栏直接写「色点 + 项目名」(多项目并行时一眼看出出处);已打开的项目表由页面给,
+  // 组件按 projectId 回查名称 / 标识色。**空对话**(还没有消息)时它还是个按钮 —— 点开改归属。
+  projectId: string
+  projects: Project[]
+  // 空对话(还没有消息)才可改归属;有消息之后归属冻结,那里退化成纯文字。
+  canReassign: boolean
+  // 项目选择浮层是否正由本窗体的归属钮打开(供 aria-expanded)。
+  reassignPickerOpen: boolean
   // 该会话的运行态(草稿 / 转录 / 生成 / 遥测 / 待确认 / 粘底 —— 随会话存活,不随容器)。
   runtime: ChatRuntime
   userName: string
@@ -61,6 +69,8 @@ const emit = defineEmits<{
   'drag-end': [pointer: { x: number; y: number }]
   // 拖动被取消(Esc / 指针被系统打断):页面据此收起任何落点预览。
   'drag-cancel': []
+  // 改归属:归属钮被按下,交出它在视口里的矩形(页面据此把项目选择浮层锚到它上面)。
+  reassign: [origin: WindowRect]
   // 透传内容本体的事件(输入坞 / 转录 / 确认卡)。
   send: [text: string]
   stop: []
@@ -110,6 +120,11 @@ const frame = useWindowFrame({
 })
 
 const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
+// 归属项目的名称与路径:输入坞上方的挂耳标签读它(与标题栏的 ChatProjectControl 同一份来源
+// —— projects 按 projectId 回查)。查不到时回落 id / 空串。
+const badge = computed(() => badgeMapOf(props.projects).get(props.projectId))
+const projectName = computed(() => badge.value?.name ?? props.projectId)
+const projectPath = computed(() => badge.value?.path ?? '')
 </script>
 
 <template>
@@ -126,12 +141,15 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
     :data-focused="isFocused ? 'true' : 'false'"
     @pointerdown="emit('focus')"
   >
-    <!-- 标题栏 = [色 + 项目名] 归属 + 会话标题 + 工具钮。整块是拖拽手柄(由壳接手势),按钮不算手柄。 -->
+    <!-- 标题栏 = [归属(色 + 项目名)] + 会话标题 + 工具钮。整块是拖拽手柄(由壳接手势),按钮不算手柄。 -->
     <template #header>
-      <span class="chat-panel__attribution" :class="identityClass" :title="projectName">
-        <span class="chat-panel__identity" aria-hidden="true" />
-        <span class="chat-panel__project">{{ projectName }}</span>
-      </span>
+      <ChatProjectControl
+        :project-id="projectId"
+        :projects="projects"
+        :can-reassign="canReassign"
+        :picker-open="reassignPickerOpen"
+        @open="emit('reassign', $event)"
+      />
       <span class="chat-panel__title" :title="title">{{ title }}</span>
       <div class="chat-panel__tools">
         <!-- 停靠回条上的**原生按钮**:拖拽之外的非拖拽通路(WCAG 2.5.7)。图标纯装饰,语义由 aria-label 承担。 -->
@@ -152,6 +170,10 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
         :is-live="isLive"
         :disabled="disabled"
         :can-send="canSend"
+        :project-name="projectName"
+        :project-path="projectPath"
+        :can-reassign="canReassign"
+        :reassign-picker-open="reassignPickerOpen"
         @send="emit('send', $event)"
         @stop="emit('stop')"
         @regenerate="emit('regenerate')"
@@ -162,6 +184,7 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
         @add-attachments="emit('add-attachments', $event)"
         @remove-attachment="emit('remove-attachment', $event)"
         @update:model="emit('update:model', $event)"
+        @reassign="emit('reassign', $event)"
         @announce="emit('announce', $event)"
       />
     </div>
@@ -182,33 +205,8 @@ const headerHint = computed(() => t.value.workspace.chatWindow.headerHint)
   color: var(--dl-text-primary);
 }
 
-/* 标题栏的归属标识:[色点 + 项目名]。色点走 var(--dl-identity)(由外层 .dl-identity-N 绑定类选号),
-   只作图形、不填整块区域、不作文字色。名字用二级文字色(它是补充信息,标题才是主信息)。 */
-.chat-panel__attribution {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--dl-space-1);
-  max-inline-size: 40%;
-}
-
-.chat-panel__identity {
-  flex-shrink: 0;
-  inline-size: var(--dl-identity-dot-size);
-  block-size: var(--dl-identity-dot-size);
-  border-radius: var(--dl-radius-pill);
-  background: var(--dl-identity);
-}
-
-.chat-panel__project {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--dl-font-size-xs);
-  color: var(--dl-text-secondary);
-}
-
+/* 标题栏的归属标识由 ChatProjectControl 自己承担样式(色点走 var(--dl-identity),名字走二级
+   文字色 —— 它是补充信息,标题才是主信息);这里只剩本窗体的标题与工具钮。 */
 .chat-panel__tools {
   flex-shrink: 0;
   display: flex;

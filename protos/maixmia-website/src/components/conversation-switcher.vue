@@ -25,6 +25,7 @@ import { chatWindowId, fileBaseName, fileDirName, fileTabKey, parseWindowId } fr
 import type { FileTab } from '../data/windows'
 import { badgeMapOf } from '../data/project-identity'
 import type { ProjectBadge } from '../data/project-identity'
+import { viewportRectOf } from '../data/viewport-rect'
 import { TEAR_OUT_KEYSHORTCUTS, isTearOutShortcut } from '../data/shortcuts'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
@@ -85,6 +86,9 @@ const props = defineProps<{
   panelId: string
   // 菜单浮层的 id(每块区域各一份,同样按区域区分)。
   menuPanelId: string
+  // ＋ 触发的「项目选择浮层」是否正开着(该 Agent 打开了多个项目时才可能开)。这一块由页面持有,
+  // 组件只把它表达成 aria-expanded —— 触发钮要有 aria-haspopup / aria-expanded 是既定要求。
+  newChatPickerOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -93,7 +97,9 @@ const emit = defineEmits<{
   'search-input': [value: string]
   'clear-search': []
   'reset-search': []
-  'new-chat': []
+  // 新建对话:带上 ＋ 按钮在视口里的矩形 —— 该 Agent 打开了多个项目时,页面据此把项目选择
+  // 浮层锚到这个触发点上(归属要让用户拍板,浮层贴着发起它的那枚钮弹出)。
+  'new-chat': [origin: WindowRect]
   close: [id: string]
   // 条上对话**重排**(拖拽 / Ctrl+Shift+PageUp/Down):交出完整的新顺序,页面写回区域成员。
   reorder: [order: string[]]
@@ -193,6 +199,7 @@ function fileChipLabel(tab: FileTab): string | null {
 
 const rootRef = ref<HTMLElement | null>(null)
 const tabsRef = ref<HTMLElement | null>(null)
+const newChatRef = ref<HTMLButtonElement | null>(null)
 const menuTriggerRef = ref<HTMLButtonElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 const searchRef = ref<HTMLInputElement | null>(null)
@@ -1020,8 +1027,19 @@ onBeforeUnmount(() => {
     <slot />
     <!-- ＋ / 菜单钮**每块区域各一份** —— 每块区域功能完全一样(不再有「主区域」这一档)。
          全页唯一的地标与播报区(h1 / tab 重排 aria-live / role=status)住在页面里,不在这里:
-         空区域消失后根区域可能根本没有会话头,住在会话头里的地标会跟着一起消失。 -->
-    <button class="conversation-icon-button" :disabled="disabled" :aria-label="t.workspace.newChat" @click="emit('new-chat')"><span aria-hidden="true">＋</span></button>
+         空区域消失后根区域可能根本没有会话头,住在会话头里的地标会跟着一起消失。
+         ＋ 是「新建对话」的触发点,也是项目选择浮层的锚点(多项目时浮层贴它下方弹出),
+         故带 aria-haspopup / aria-expanded 这对 disclosure 属性。 -->
+    <button
+      ref="newChatRef"
+      class="conversation-icon-button"
+      :disabled="disabled"
+      :aria-label="t.workspace.newChat"
+      aria-haspopup="listbox"
+      :aria-expanded="newChatPickerOpen"
+      data-project-picker-trigger
+      @click="emit('new-chat', viewportRectOf(newChatRef))"
+    ><span aria-hidden="true">＋</span></button>
     <button
       ref="menuTriggerRef"
       type="button"

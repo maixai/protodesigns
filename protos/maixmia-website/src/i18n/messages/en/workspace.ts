@@ -38,13 +38,20 @@ export const workspace = {
   // Closing a project: the "closed project X" and "also closed N windows" notices are composed
   // into a single announcement (announcePlacement is a last-write-wins single channel).
   closedProject: 'Closed project "{name}" · closed {count} windows',
-  // New-conversation ownership (there is no "current project" once projects are peers):
-  //   · newChatProject / newChatProjectHint — when the region is empty and several projects are
-  //     open, list the projects for the user to pick one;
-  //   · newChatNeedProject — when no project is open, prompt the user to open one first.
+  // Project picker popover shared by "new conversation" and "change ownership":
+  //   · newChatProject — asked when starting a conversation (only when the agent has >1 project open);
+  //   · reassignProject — asked when moving an empty conversation to another project;
+  //   · newChatNeedProject — no project is open, so prompt the user to open one first.
   newChatProject: 'New conversation in which project?',
-  newChatProjectHint: 'No window here implies an owner. Pick a project to continue.',
+  reassignProject: 'Move this conversation to which project?',
   newChatNeedProject: 'Open a project first, then start a conversation',
+  // Accessible name of the conversation title bar's ownership button: the ownership is visible there
+  // (and only changeable while the conversation is empty), so screen readers must know what activating it does.
+  reassignProjectLabel: 'Current project "{name}". Activate to change.',
+  // Announcement after changing ownership: {title} is the conversation title, {project} the target
+  // project name. The wording says "moved" so it matches what actually happened (the tab prefix and
+  // color bar update too).
+  reassignDone: 'Moved "{title}" to {project}',
   // Accessible name of the project row's "⋯" action menu. (expandProject / collapseProject were
   // dropped when directory rows moved to a whole-row button with aria-expanded.)
   projectActions: 'Project actions',

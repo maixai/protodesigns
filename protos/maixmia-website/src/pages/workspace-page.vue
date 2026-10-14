@@ -23,7 +23,7 @@ import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/proj
 import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
-import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
+import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
@@ -36,6 +36,7 @@ import FileBar from '../components/file-bar.vue'
 import FilePanel from '../components/file-panel.vue'
 import ProjectMenu from '../components/project-menu.vue'
 import ProjectPickerDialog from '../components/project-picker-dialog.vue'
+import ProjectPickerPopover from '../components/project-picker-popover.vue'
 import SplitPanes from '../components/split-panes.vue'
 import TranscriptView from '../components/transcript-view.vue'
 import WorkspaceOnboarding from '../components/workspace-onboarding.vue'
@@ -94,8 +95,14 @@ const expandedDirs = ref<Set<string>>(new Set())
 const projectTrees = ref<Record<string, ProjectEntry[]>>({})
 const treeStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const isPickerOpen = ref(false)
-// 新建对话时「多个已打开项目、推断不出归属」的落点:非 null 时弹出项目选择浮层(值为发起该动作的区域 id)。
-const newChatChooserSurfaceId = ref<string | null>(null)
+// 项目选择浮层的**请求**:null = 没开。两种用途共用一个浮层 —— 新建对话时选归属、
+// 空对话时改归属(浮层本身只管「选一个项目」,标题与选中后的动作由这里给)。
+type ProjectPickerRequest =
+  | { kind: 'new-chat'; surfaceId: string }
+  | { kind: 'reassign'; sessionId: string }
+const projectPicker = ref<ProjectPickerRequest | null>(null)
+// 浮层的锚点 = 触发元素在视口里的矩形(由触发它的那个组件在点击时量好交上来)。
+const projectPickerAnchor = ref<WindowRect>({ x: 0, y: 0, width: 0, height: 0 })
 // ---- 区域与窗体(按 **Agent** 分域保存,刷新即重置)----
 const workspaceMap = ref<WorkspaceMap>(emptyWorkspace())
 const domainKey = computed(() => agentDomainKey(selectedAgent.value))
@@ -152,6 +159,12 @@ function activeChatOf(surfaceId: string): string {
   const surface = surfaceOf(layout.value, surfaceId)
   const win = surface === undefined ? null : activeMemberOf(surface)
   return win !== null && win.content.kind === 'chat' ? win.content.sessionId : ''
+}
+// 该活动对话**窗体自己**的归属项目(停靠态标题栏的归属标识读它 —— 与 tab 一样,归属由窗体带)。
+function activeChatProjectOf(surfaceId: string): string {
+  const surface = surfaceOf(layout.value, surfaceId)
+  const win = surface === undefined ? null : activeMemberOf(surface)
+  return win !== null && win.content.kind === 'chat' ? win.content.projectId : ''
 }
 // 切换器的会话列表要**隐去**的那些会话:本区域**正在显示**的那段对话(activeChatOf)∪ 任何
 // **可见的悬浮对话**(floatingChatIds)。已被打开、正摆在眼前的对话不该再作为「可切换项」列出 ——
@@ -435,8 +448,9 @@ function projectBadgeOf(projectId: string): ProjectBadge | undefined {
 function projectNameOf(projectId: string): string {
   return projectBadgeOf(projectId)?.name ?? projectId
 }
-function projectIdentityClassOf(projectId: string): string {
-  return projectBadgeOf(projectId)?.identityClass ?? identityClassOf(projectId)
+// 项目的绝对路径:输入坞底行项目项的可访问补充(悬停可见),与名称同源。
+function projectPathOf(projectId: string): string {
+  return projectBadgeOf(projectId)?.path ?? ''
 }
 // 路径的状态芯片:按**该文件所属项目**的树回查条目(不再是「当前项目」)。
 function entryStateOfPath(projectId: string, path: string): ProjectEntryStateId {
@@ -1473,41 +1487,106 @@ async function selectSession(surfaceId: string, target: ChatSession): Promise<vo
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
 }
-// 新建对话**归谁**(用户已确认的规则,平权之后没有「当前项目」,能推断就推断,推断不出就让用户选):
-//   ① 区域内的通用入口 → 归该区域**当前活动窗口**所属项目;
-//   ② 区域没有活动成员 → 看它已有成员蕴含的项目:恰好一个就用它;
-//   ③ 还推断不出(区域空 / 引导页)→ 只有一个已打开项目就归它,多个则弹出选择浮层让用户选;
-//   ④ 一个项目都没打开 → 引导先打开项目。
-function projectForNewChat(surfaceId: string): string {
+// ---- 项目选择浮层:触发规则与两种用途 ----
+// 新建对话**归谁**(用户已确认的规则,平权之后没有「当前项目」):
+//   ① 该 Agent 已打开 **≥2 个项目** → 一律弹出浮层让用户选(高亮推断出的那个,回车一步直达);
+//   ② 恰好 1 个 → 直接用,不弹(弹一个只有一项的列表是纯打扰);
+//   ③ 0 个 → 播报既有文案,引导先打开项目。
+// 推断出的那个 = **发起区域的活动成员所属项目**:用「你此刻正看着的那个项目」做预选是合法的
+// 上下文推断;而用「全局上次用的项目」做静默默认,正是 Jira 被用户抱怨的失败模式
+// (默认已提交、焦点不在归属字段 → 经常建错)。推断不出(区域空 / 成员跨项目 / 从引导页发起)时
+// 浮层高亮首项 —— 列表里永远有游标,Enter 永远有确定落点。
+function inferredProjectForNewChat(surfaceId: string): string {
   const surface = surfaceOf(layout.value, surfaceId)
   const win = surface === undefined ? null : activeMemberOf(surface)
-  if (win !== null) return win.content.projectId
-  const memberProjects = new Set((surface?.members ?? []).flatMap((id) => {
-    const found = layout.value.windows.find((item) => item.id === id)
-    return found === undefined ? [] : [found.content.projectId]
-  }))
-  if (memberProjects.size === 1) return [...memberProjects][0] ?? ''
-  if (memberProjects.size === 0 && projects.value.length === 1) return projects.value[0]?.id ?? ''
-  return ''
+  return win === null ? '' : win.content.projectId
 }
-async function newConversation(surfaceId: string): Promise<void> {
-  if (isBusy.value) return
-  openMenuSurfaceId.value = ''
-  const projectId = projectForNewChat(surfaceId)
-  if (projectId === '') {
-    if (projects.value.length === 0) {
-      announcePlacement(t.value.workspace.newChatNeedProject)
-      return
-    }
-    // 推断不出归属且有多个项目 → 列出项目让用户选(不产生「无归属」的会话)。
-    newChatChooserSurfaceId.value = surfaceId
+function openProjectPicker(request: ProjectPickerRequest, origin: WindowRect): void {
+  projectPickerAnchor.value = origin
+  projectPicker.value = request
+}
+function closeProjectPicker(): void {
+  projectPicker.value = null
+}
+// 浮层的标题(按用途给):新建问「在哪个项目里新建」,改归属问「移到哪个项目」。
+const projectPickerTitle = computed(() => {
+  const request = projectPicker.value
+  if (request === null) return ''
+  return request.kind === 'new-chat' ? t.value.workspace.newChatProject : t.value.workspace.reassignProject
+})
+// 高亮项:新建 → 发起区域的活动成员所属项目;改归属 → 该会话**当前**所属项目(改之前它在哪)。
+const projectPickerHighlightId = computed(() => {
+  const request = projectPicker.value
+  if (request === null) return ''
+  if (request.kind === 'reassign') return sessions.value.find((item) => item.id === request.sessionId)?.projectId ?? ''
+  return inferredProjectForNewChat(request.surfaceId)
+})
+// 这个触发点此刻是否开着浮层(供触发钮的 aria-expanded)。
+function newChatPickerOpenFor(surfaceId: string): boolean {
+  const request = projectPicker.value
+  return request !== null && request.kind === 'new-chat' && request.surfaceId === surfaceId
+}
+function reassignPickerOpenFor(sessionId: string): boolean {
+  const request = projectPicker.value
+  return request !== null && request.kind === 'reassign' && request.sessionId === sessionId
+}
+// 浮层的身份键:**换触发点 = 换一个浮层实例**(挂载即带新锚点渲染,不与旧锚点纠缠;
+// 同一个触发点开关则复用 / 卸载同一实例)。没有它,「开着时点另一个触发钮」会去改一个**已挂载**
+// 面板的锚点 —— 实测此时 Chromium 对 position: fixed 元素的位置更新要下一帧才落到布局上,
+// 读几何会拿到旧锚点。换键重挂载既避开这一族时序问题,也让「一个浮层只服务一个触发点」显式化。
+const projectPickerKey = computed(() => {
+  const request = projectPicker.value
+  if (request === null) return ''
+  return request.kind === 'new-chat' ? `new:${request.surfaceId}` : `reassign:${request.sessionId}`
+})
+// 浮层里选定一个项目:先收浮层,再按用途分流(新建 / 改归属)。
+function chooseProject(projectId: string): void {
+  const request = projectPicker.value
+  closeProjectPicker()
+  if (request === null) return
+  if (request.kind === 'new-chat') {
+    void createChatInProject(request.surfaceId, projectId)
     return
   }
-  await createChatInProject(surfaceId, projectId)
+  reassignSession(request.sessionId, projectId)
 }
-// 在指定项目的**发起区域**建一段会话(选择浮层与「唯一项目直接建」两条路共用)。
+// 归属钮被按下:浮层锚到它上面。**开着时再点它 = 关闭**(toggle)——
+// 触发钮是 disclosure(带 aria-expanded),开着状态下再点必须收起,否则那枚属性就成了谎话。
+function toggleReassignPicker(sessionId: string, origin: WindowRect): void {
+  if (reassignPickerOpenFor(sessionId)) {
+    closeProjectPicker()
+    return
+  }
+  openProjectPicker({ kind: 'reassign', sessionId }, origin)
+}
+async function newConversation(surfaceId: string, origin: WindowRect): Promise<void> {
+  // 触发钮是 disclosure:浮层正开着时再点它 = **关闭**。这一步必须在最前 ——
+  // 浮层本身把「按在触发钮上」排除在「点浮层外面」之外(见 project-picker-popover),
+  // 于是开关只剩这一处裁决;不在这里 toggle,第二次点击就成了空操作。
+  if (newChatPickerOpenFor(surfaceId)) {
+    closeProjectPicker()
+    return
+  }
+  if (isBusy.value) return
+  openMenuSurfaceId.value = ''
+  const only = projects.value[0]
+  if (only === undefined) {
+    // 一个项目都没打开 → 引导先打开项目。
+    announcePlacement(t.value.workspace.newChatNeedProject)
+    return
+  }
+  // 只有一个已打开项目 → 直接归它,不弹选择。
+  if (projects.value.length === 1) {
+    await createChatInProject(surfaceId, only.id)
+    return
+  }
+  // 多个已打开项目 → 让用户拍板(浮层贴着发起它的那枚钮弹出)。
+  openProjectPicker({ kind: 'new-chat', surfaceId }, origin)
+}
+// 在指定项目的**发起区域**建一段会话(浮层选完与「唯一项目直接建」两条路共用)。
+// 创建后的落点不变:仍落在发起的那块区域 —— 归属与落点是两件事。
 async function createChatInProject(surfaceId: string, projectId: string): Promise<void> {
-  newChatChooserSurfaceId.value = null
+  closeProjectPicker()
   const created = await createSession(projectId)
   if (!isAlive.value || !created.ok) return
   sessions.value.unshift(created.value)
@@ -1519,11 +1598,34 @@ async function createChatInProject(surfaceId: string, projectId: string): Promis
   await nextTick()
   focusComposer(created.value.id)
 }
-// 选择浮层里点一个项目 → 在发起该动作的区域里为它建一段会话。
-function chooseNewChatProject(projectId: string): void {
-  const surfaceId = newChatChooserSurfaceId.value
-  if (surfaceId === null) return
-  void createChatInProject(surfaceId, projectId)
+// 「这一段对话还没有第一条消息」的**单点派生**:转录处于空态即还没有消息。归属钮渲不渲染
+// (UI)与改归属的写入守卫(reassignSession)都读它,不在两处各写一遍判断。
+// 注意区分 loading:加载中/出错都不算「空」—— 那时也的确无处可改。
+function canReassignProject(sessionId: string): boolean {
+  return runtimeFor(sessionId).transcript.status === 'empty'
+}
+// 归属不变量(DEV):**有消息的会话,其 projectId 不得被改**。与 assertInvariants 同一套写法 ——
+// 只在开发构建生效,命中即 console.error 一条可读信息并**拒绝**这次写入,免得将来别处绕过去。
+function canWriteProjectId(sessionId: string): boolean {
+  if (!import.meta.env.DEV) return true
+  if (canReassignProject(sessionId)) return true
+  console.error(`[session-invariant] 会话 ${sessionId} 已有消息,归属不得更改`)
+  return false
+}
+// 改归属:把一段**空对话**换到另一个项目。会话的 projectId 与**窗体的复合键**必须一起换 ——
+// 窗体身份 chat://<项目>/<会话> 里编着归属,只改一边会让 tab 条(成员里的 id)与 sessions
+// (按复合键回查会话)各查各的,那枚 tab 直接消失。故这是「改会话 + 同名窗体改名」一对动作。
+function reassignSession(sessionId: string, projectId: string): void {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  if (session === undefined || session.projectId === projectId) return
+  if (!canWriteProjectId(sessionId)) return
+  const windowId = windowIdOf(chatTabOf(session))
+  sessions.value = sessions.value.map((item) => (item.id === sessionId ? { ...item, projectId } : item))
+  patchLayout((current) => reassignChatWindow(current, windowId, projectId))
+  // 遥测条最后一项写的是**该会话所属项目**(CLI 的 cwd):归属一变它必须跟着变,
+  // 否则「已把 X 移到 Y」这句话与界面上的项目名会对不上。重取一次即按新项目解析。
+  void loadTelemetry(sessionId)
+  announcePlacement(t.value.workspace.reassignDone.replace('{title}', session.title).replace('{project}', projectNameOf(projectId)))
 }
 // 选择器只写入自己的值;换 Agent 即换项目列表与会话,故一并重装。
 async function onSelectAgent(agent: ChatSession['agent']): Promise<void> {
@@ -1914,7 +2016,8 @@ onBeforeUnmount(() => {
             </button>
             <WorkspaceOnboarding
               class="guide-shell__body"
-              @new-chat="newConversation(surfaceId)"
+              :new-chat-picker-open="newChatPickerOpenFor(surfaceId)"
+              @new-chat="newConversation(surfaceId, $event)"
             />
           </div>
           <section
@@ -1949,6 +2052,7 @@ onBeforeUnmount(() => {
                 :pulse-key="pulseWindowId"
                 :format-time="formatTime"
                 :disabled="isBusy"
+                :new-chat-picker-open="newChatPickerOpenFor(surfaceId)"
                 :files="fileTabsOf(surfaceId)"
                 :active-file-path="focusedWindowId"
                 :visible-file-paths="visibleFilePaths"
@@ -1960,7 +2064,7 @@ onBeforeUnmount(() => {
                 @search-input="onSearchInput"
                 @clear-search="clearSearch"
                 @reset-search="resetSearch"
-                @new-chat="newConversation(surfaceId)"
+                @new-chat="newConversation(surfaceId, $event)"
                 @close="closeChatTab(surfaceId, $event)"
                 @reorder="reorderChatTabs(surfaceId, $event)"
                 @announce="onTabAnnounce"
@@ -1997,6 +2101,11 @@ onBeforeUnmount(() => {
             </header>
             <div class="conversation-panel" :id="panelIdOf(surfaceId)" role="tabpanel" :aria-labelledby="tabpanelLabelIdOf(surfaceId)">
               <div class="transcript-area">
+                <!-- 停靠的对话**没有标题栏**:tab 条下方直接就是转录区。归属由 tab 自己承担
+                     (3px 项目色条 + 等宽缩写),改归属的入口搬进了输入坞底行(空对话时项目名
+                     升格为控件)—— 这一行只是页面级的纯信息面包屑,与 tab 逐字重复且不承担导航,
+                     已删除。悬浮对话窗的标题栏**保留**:那是窗口外壳(要用来拖动),且悬浮窗没有
+                     tab 条,标题栏是它唯一的身份载体。 -->
                 <!-- 区域内容区**同一时刻只显示一件东西**:区域活动成员是文件 → 文件面板;
                      是对话 → 对话窗体(滚动容器 + 转录 + **它自己的输入坞**);没有活动成员 →
                      空位占位(转录位的空态,不含输入坞 —— 没有窗体就没有输入框)。 -->
@@ -2034,6 +2143,10 @@ onBeforeUnmount(() => {
                   :is-live="activeChatOf(surfaceId) === liveSessionId"
                   :disabled="isBusyOf(activeChatOf(surfaceId))"
                   :can-send="canSendOf(activeChatOf(surfaceId))"
+                  :project-name="projectNameOf(activeChatProjectOf(surfaceId))"
+                  :project-path="projectPathOf(activeChatProjectOf(surfaceId))"
+                  :can-reassign="canReassignProject(activeChatOf(surfaceId))"
+                  :reassign-picker-open="reassignPickerOpenFor(activeChatOf(surfaceId))"
                   @send="send(activeChatOf(surfaceId), $event)"
                   @stop="stop(activeChatOf(surfaceId))"
                   @regenerate="regenerate(activeChatOf(surfaceId))"
@@ -2044,6 +2157,7 @@ onBeforeUnmount(() => {
                   @add-attachments="addAttachments(activeChatOf(surfaceId), $event)"
                   @remove-attachment="removeAttachment(activeChatOf(surfaceId), $event)"
                   @update:model="selectModel(activeChatOf(surfaceId), $event)"
+                  @reassign="toggleReassignPicker(activeChatOf(surfaceId), $event)"
                   @announce="announcePlacement"
                 />
                 <!-- 空位占位:这块区域的「转录位」,但没有绑定会话 —— 它沿用同一套 role / data-state
@@ -2108,8 +2222,10 @@ onBeforeUnmount(() => {
           v-else
           :window-id="win.id"
           :session-id="chatSessionIdOf(win)"
-          :project-name="projectNameOf(win.content.projectId)"
-          :identity-class="projectIdentityClassOf(win.content.projectId)"
+          :project-id="win.content.projectId"
+          :projects="projects"
+          :can-reassign="canReassignProject(chatSessionIdOf(win))"
+          :reassign-picker-open="reassignPickerOpenFor(chatSessionIdOf(win))"
           :title="windowLabel(win.id)"
           :runtime="runtimeFor(chatSessionIdOf(win))"
           :user-name="userName"
@@ -2139,6 +2255,7 @@ onBeforeUnmount(() => {
           @add-attachments="addAttachments(chatSessionIdOf(win), $event)"
           @remove-attachment="removeAttachment(chatSessionIdOf(win), $event)"
           @update:model="selectModel(chatSessionIdOf(win), $event)"
+          @reassign="toggleReassignPicker(chatSessionIdOf(win), $event)"
           @announce="announcePlacement"
         />
       </template>
@@ -2152,25 +2269,19 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
-    <!-- 新建对话的**归属选择**:区域为空 / 引导页且有多个已打开项目时,列出项目让用户选 ——
-         平权之后没有「当前项目」,宁可多问一步,也不产生「无归属」的会话。 -->
-    <template v-if="newChatChooserSurfaceId !== null">
-      <div class="workspace-backdrop" aria-hidden="true" @click="newChatChooserSurfaceId = null" />
-      <div class="project-chooser" role="dialog" aria-modal="true" :aria-label="t.workspace.newChatProject">
-        <h2 class="project-chooser__title">{{ t.workspace.newChatProject }}</h2>
-        <p class="project-chooser__hint">{{ t.workspace.newChatProjectHint }}</p>
-        <ul class="project-chooser__list">
-          <li v-for="project in projects" :key="project.id" class="project-chooser__item" :class="identityClassOf(project.path)">
-            <button type="button" class="workspace-button project-chooser__button" @click="chooseNewChatProject(project.id)">
-              <span class="project-dot" aria-hidden="true" />
-              <span class="project-chooser__name">{{ project.name }}</span>
-              <span class="project-chooser__path">{{ project.path }}</span>
-            </button>
-          </li>
-        </ul>
-        <button type="button" class="workspace-button project-chooser__cancel" @click="newChatChooserSurfaceId = null">{{ t.workspace.pickerCancel }}</button>
-      </div>
-    </template>
+    <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
+         以及空对话时改归属。它挂在页面级、position: fixed,锚点是触发元素交上来的视口矩形
+         —— 触发点有三处(tab 条的 ＋、引导页主按钮、对话标题栏的归属钮),它自己不认触发点。 -->
+    <ProjectPickerPopover
+      v-if="projectPicker !== null"
+      :key="projectPickerKey"
+      :projects="projects"
+      :highlight-id="projectPickerHighlightId"
+      :title="projectPickerTitle"
+      :anchor="projectPickerAnchor"
+      @select="chooseProject"
+      @cancel="closeProjectPicker"
+    />
     <!-- 全页两条礼貌播报通道(各一条):tab 重排(aria-live,只挂属性不加 role=status)与
          区域 / 窗体变化(role=status)。它们都住在页面级 —— 与 h1 同理,不能住在某个区域的会话头里。 -->
     <span class="workspace-tab-live" aria-live="polite">{{ tabAnnounce }}</span>
@@ -2328,8 +2439,9 @@ onBeforeUnmount(() => {
 /* tabpanel:内容区(转录位 / 文件面板 / 对话窗体)这一整块。 */
 .conversation-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* 内容区的定位基准:与「转录位」等大 —— 停靠的文件面板精确覆盖这一块(不含任何输入坞,
-   输入坞现在住在对话窗体内)。 */
-.transcript-area { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+   输入坞现在住在对话窗体内)。纵向流:[内容本体];停靠的对话没有标题栏(tab 条下方直接是
+   转录区,见模板里的说明),故对话形态下这一块从顶到底都是内容本体。 */
+.transcript-area { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* 会话头 = [汉堡?][tab 条][文件组][＋][菜单钮]。 */
 .conversation-heading { position: relative; display: flex; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-1) var(--conversation-heading-pad) var(--dl-space-2); }
 .conversation-heading.is-drop-target { border-radius: var(--dl-radius-md); box-shadow: var(--dl-focus-ring); }
@@ -2365,31 +2477,6 @@ onBeforeUnmount(() => {
    一律不设 z-index;第 2 层文件窗体(可覆盖上述全部)取 calc(--dl-z-overlay + n);模态再压窗体。
    输入坞已随对话窗体回到第 1 层,故这里不写 z-index —— 文件窗体可以盖住它。 */
 .workspace-backdrop { position: fixed; inset: 0; z-index: var(--dl-z-overlay); background: color-mix(in srgb, var(--dl-bg-sunken) 80%, transparent); }
-/* 新建对话的归属选择浮层:居中一张小面板,列出每个已打开项目(色点 + 名称 + 路径)。
-   它只解决「推断不出归属」这一种情形,故只在多项目 + 区域为空时出现。 */
-.project-chooser {
-  position: fixed;
-  inset-block-start: 50%;
-  inset-inline-start: 50%;
-  transform: translate(-50%, -50%);
-  z-index: var(--dl-z-modal);
-  display: flex;
-  flex-direction: column;
-  gap: var(--dl-space-3);
-  inline-size: min(360px, calc(100vw - 2 * var(--dl-space-8)));
-  padding: var(--dl-space-4);
-  background: var(--dl-bg-elevated);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-xl);
-  box-shadow: var(--dl-shadow-lg);
-}
-.project-chooser__title { font-size: var(--dl-font-size-lg); font-weight: 600; color: var(--dl-text-primary); }
-.project-chooser__hint { font-size: var(--dl-font-size-sm); color: var(--dl-text-secondary); }
-.project-chooser__list { display: flex; flex-direction: column; gap: var(--dl-space-1); }
-.project-chooser__button { width: 100%; justify-content: flex-start; gap: var(--dl-space-3); }
-.project-chooser__name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
-.project-chooser__path { flex-shrink: 0; max-inline-size: 50%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); color: var(--dl-text-tertiary); }
-.project-chooser__cancel { align-self: flex-end; }
 @media (max-width: 1023px) {
   .workspace-page { --workspace-tree-row-height: var(--dl-target-size);
     --workspace-avatar-size: var(--dl-icon-lg);

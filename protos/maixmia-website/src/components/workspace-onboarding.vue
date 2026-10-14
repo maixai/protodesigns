@@ -10,14 +10,24 @@
 //
 // 它不是转录,故**不给** role="log" —— 全页 role="log" 恰为 1 的不变量在引导页状态下退化为 0
 // (此时全页没有任何转录视图),判据见 workspace-page 的 liveSessionId。
+import { ref } from 'vue'
+import type { WindowRect } from '../contracts/generated/workspace-window'
+import { viewportRectOf } from '../data/viewport-rect'
 import { useI18n } from '../i18n'
+
+defineProps<{
+  // 主按钮触发的「项目选择浮层」是否正开着(该 Agent 打开了多个项目、且从这里发起时才可能开)。
+  newChatPickerOpen: boolean
+}>()
 
 const emit = defineEmits<{
   // 主按钮 = 与每块区域 tab 条上的 ＋ 同一个动作(新建一段会话 + 把根区域恢复成一块带 tab 的区域)。
-  'new-chat': []
+  // 带上按钮在视口里的矩形:多项目时页面据此把项目选择浮层锚到这个触发点上。
+  'new-chat': [origin: WindowRect]
 }>()
 
 const { t } = useI18n()
+const primaryRef = ref<HTMLButtonElement | null>(null)
 </script>
 
 <template>
@@ -26,8 +36,19 @@ const { t } = useI18n()
       <h2 class="onboarding__title">{{ t.workspace.onboarding.title }}</h2>
       <p class="onboarding__body">{{ t.workspace.onboarding.body }}</p>
       <!-- 唯一的主行动:与每块区域 tab 条上的 ＋ 同一个动作。大号档(44px 触达)因为它落在
-           触屏可及的区域里,且是这个状态的唯一主按钮。 -->
-      <button type="button" class="dl-btn dl-btn--primary dl-btn--lg onboarding__primary" @click="emit('new-chat')">
+           触屏可及的区域里,且是这个状态的唯一主按钮。与 ＋ 一样带 disclosure 属性 ——
+           多项目时它也是项目选择浮层的锚点;data-project-picker-trigger 让浮层认出「这是触发钮」,
+           于是开着时再点它是**关闭**(toggle),而不是「先判成点外面、又被 click 打开」的空操作
+           (开关由页面统一裁决 —— 本按钮与 ＋ 走同一个 emit,无需自己持有状态)。 -->
+      <button
+        ref="primaryRef"
+        type="button"
+        class="dl-btn dl-btn--primary dl-btn--lg onboarding__primary"
+        aria-haspopup="listbox"
+        :aria-expanded="newChatPickerOpen"
+        data-project-picker-trigger
+        @click="emit('new-chat', viewportRectOf(primaryRef))"
+      >
         <span aria-hidden="true">＋</span>{{ t.workspace.newChat }}
       </button>
     </div>

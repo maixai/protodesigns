@@ -1,13 +1,30 @@
 <script setup lang="ts">
+import { computed, onMounted, watch } from 'vue'
 import { session } from '../auth/session'
-import { CONSOLE_NAV } from '../data/console'
+import { CONSOLE_NAV, useConsoleLabels } from '../data/console'
 import { toIconName } from '../data/icons'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import DlIcon from '../components/dl-icon.vue'
 import ConsoleOverview from '../components/console-overview.vue'
+import ConsoleDevices from '../components/console-devices.vue'
+import ConsoleDeviceDetail from '../components/console-device-detail.vue'
+import ConsoleNetworks from '../components/console-networks.vue'
+import ConsoleNetworkDetail from '../components/console-network-detail.vue'
+import ConsoleRouting from '../components/console-routing.vue'
+import ConsoleState from '../components/console-state.vue'
+import { consoleStore } from '../state/console'
+import '../components/console.css'
 
 const { t } = useI18n()
+const { networkName, lastSeen, tunnelLabel, membershipCoverage } = useConsoleLabels()
+const device = computed(() => currentRoute.value.section === 'devices' ? consoleStore.data?.devices.find((item) => item.id === currentRoute.value.detailId) : undefined)
+const network = computed(() => currentRoute.value.section === 'networks' ? consoleStore.data?.networks.find((item) => item.id === currentRoute.value.detailId) : undefined)
+const isMissing = computed(() => currentRoute.value.detailId !== null && !device.value && !network.value && consoleStore.status === 'ready')
+const title = computed(() => isMissing.value ? t.value.console.common.notFound : device.value?.name ?? (network.value ? networkName(network.value) : t.value.console.nav[currentRoute.value.section]))
+function load(): void { void consoleStore.load(currentRoute.value.demoState) }
+onMounted(load)
+watch(() => currentRoute.value.demoState, load)
 </script>
 
 <template>
@@ -26,17 +43,30 @@ const { t } = useI18n()
     </aside>
     <main id="main" class="console-content">
       <header class="console-content__header">
-        <p class="console-label">{{ session.profile?.organization }}</p>
-        <h1>{{ t.console.nav[currentRoute.section] }}</h1>
-        <p class="console-content__description">{{ t.console.descriptions[currentRoute.section] }}</p>
+        <a v-if="currentRoute.detailId !== null" class="c-link" :href="`#/console/${currentRoute.section}`">← {{ t.console.common.back }} · {{ t.console.nav[currentRoute.section] }}</a>
+        <p class="console-label">{{ device ? t.console.deviceDetail.eyebrow : network ? t.console.networkDetail.eyebrow : session.profile?.organization }}</p>
+        <h1>{{ title }}</h1>
+        <p v-if="device" class="console-content__description">{{ tunnelLabel(device.memberships.length) }} · {{ membershipCoverage(device.memberships.length, consoleStore.data?.networks.length ?? 0) }} · {{ t.console.fields.lastSeen }} {{ lastSeen(device.lastSeen) }} <span v-if="device.clientVersionState === 'outdated'" class="c-tag">{{ t.console.status.outdated }}</span></p>
+        <p v-else-if="network" class="console-content__description"><span class="dl-mono">{{ network.ipv6Prefix }}</span> · {{ t.console.scope[network.scope] }} · {{ network.memberCount }} {{ t.console.networks.members }}</p>
+        <p v-else class="console-content__description">{{ t.console.descriptions[currentRoute.section] }}</p>
       </header>
-      <ConsoleOverview v-if="currentRoute.section === 'overview'" />
-      <section v-else class="console-placeholder" :aria-label="t.console.preview">
-        <DlIcon :name="toIconName(CONSOLE_NAV.find((item) => item.id === currentRoute.section)?.icon ?? 'grid')" size="lg" />
-        <h2>{{ t.console.nav[currentRoute.section] }}</h2>
-        <p>{{ t.console.later }}</p>
-      </section>
-      <p class="console-content__sample">{{ t.console.sample }}</p>
+      <div class="console-view" :class="{ 'console-overview': currentRoute.section === 'overview' }" :data-state="consoleStore.status" :aria-busy="consoleStore.status === 'loading'">
+        <ConsoleState v-if="consoleStore.status !== 'ready' && !(consoleStore.status === 'empty' && currentRoute.section === 'networks')" :status="consoleStore.status" @retry="load" />
+        <section v-else-if="isMissing" role="status"><p>{{ t.console.common.notFoundDescription }}</p></section>
+        <template v-else-if="consoleStore.data">
+          <ConsoleOverview v-if="currentRoute.section === 'overview'" :data="consoleStore.data" />
+          <ConsoleDeviceDetail v-else-if="device" :data="consoleStore.data" :device="device" />
+          <ConsoleNetworkDetail v-else-if="network" :data="consoleStore.data" :network="network" />
+          <ConsoleDevices v-else-if="currentRoute.section === 'devices'" :data="consoleStore.data" />
+          <ConsoleNetworks v-else-if="currentRoute.section === 'networks'" :data="consoleStore.data" />
+          <ConsoleRouting v-else-if="currentRoute.section === 'routing'" :data="consoleStore.data" />
+          <section v-else class="console-placeholder" :aria-label="t.console.placeholders.preview">
+            <DlIcon :name="toIconName(CONSOLE_NAV.find((item) => item.id === currentRoute.section)?.icon ?? 'grid')" size="lg" />
+            <h2>{{ t.console.nav[currentRoute.section] }}</h2><p>{{ t.console.placeholders.later }}</p>
+          </section>
+        </template>
+      </div>
+      <p class="console-content__sample">{{ t.console.common.sample }}</p>
     </main>
   </div>
 </template>

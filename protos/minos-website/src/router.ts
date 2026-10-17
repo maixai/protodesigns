@@ -8,13 +8,14 @@ import { CONSOLE_NAV } from './data/console'
 // 仅 #/ 开头参与路由,其他 hash 保留浏览器原生滚动语义。
 function parseHash(hash: string): AppRoute {
   const [path = '', query = ''] = hash.slice(1).split('?')
-  if (!hash.startsWith('#/') || !path.startsWith('/console')) {
-    return { page: 'home', section: 'overview', demoState: 'normal' }
+  if (!hash.startsWith('#/') || (path !== '/console' && !path.startsWith('/console/'))) {
+    return { page: 'home', section: 'overview', detailId: null, demoState: 'normal' }
   }
-  const subpath = path.slice('/console'.length).replace(/^\//, '')
+  const [subpath = '', detail = ''] = path.slice('/console'.length).replace(/^\//, '').split('/')
   const section = CONSOLE_NAV.find((item) => item.id === subpath)?.id ?? 'overview'
+  const detailId = (section === 'devices' || section === 'networks') && detail !== '' ? detail : null
   const demo = new URLSearchParams(query).get('s')
-  return { page: 'console', section, demoState: demo === 'empty' || demo === 'error' ? demo : 'normal' }
+  return { page: 'console', section, detailId, demoState: demo === 'empty' || demo === 'error' ? demo : 'normal' }
 }
 
 function guardedRoute(): AppRoute {
@@ -22,7 +23,7 @@ function guardedRoute(): AppRoute {
   if (route.page === 'console' && !isAuthenticated.value) {
     // replaceState 不留下受保护路由的历史条目,且不触发 hashchange。
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/`)
-    return { page: 'home', section: 'overview', demoState: 'normal' }
+    return { page: 'home', section: 'overview', detailId: null, demoState: 'normal' }
   }
   return route
 }
@@ -37,8 +38,8 @@ function syncRoute(): void {
 window.addEventListener('hashchange', syncRoute)
 const stopSessionWatch = watch(isAuthenticated, syncRoute, { flush: 'sync' })
 
-export function navigateTo(page: AppRoute['page'], section: ConsoleSection = 'overview'): void {
-  const hash = page === 'home' ? '#/' : `#/console${section === 'overview' ? '' : `/${section}`}`
+export function navigateTo(page: AppRoute['page'], section: ConsoleSection = 'overview', detailId: string | null = null): void {
+  const hash = page === 'home' ? '#/' : `#/console${section === 'overview' ? '' : `/${section}`}${detailId === null ? '' : `/${encodeURIComponent(detailId)}`}`
   window.location.hash = hash
   syncRoute()
   window.scrollTo({ top: 0, behavior: 'instant' })

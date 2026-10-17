@@ -117,14 +117,7 @@ model AccountProfile {
   organization: string;
 }
 
-enum ConsoleSection {
-  overview,
-  networks,
-  machines,
-  access,
-  dns,
-  settings,
-}
+enum ConsoleSection { overview, devices, networks, routing, access, settings }
 
 @summary("ConsoleNavItem")
 @jsonSchema
@@ -133,29 +126,118 @@ model ConsoleNavItem {
   icon: string;
 }
 
+enum NetworkScope { workspace, external }
+enum NetworkStatus { active, paused }
+enum MembershipRole { member, subnetRouter, exitNode }
+enum MembershipState { active, paused, pending, conflict }
+enum ClientState { connected, disconnected }
+enum ClientVersionState { current, outdated }
+enum Ipv4Compat { clat, mapped, none }
+enum AddressFamily { ipv6, ipv4 }
+enum RouteState { active, paused }
+enum ConflictState { resolved, pending }
+enum ConflictKind { ipv4Overlap, customPrefix }
+
+model Ipv4Mapping {
+  ipv4Cidr: string;
+  ipv6Prefix: string;
+}
+
 @summary("NetworkSummary")
 @jsonSchema
 model NetworkSummary {
+  id: string;
   name: string;
-  cidr: string;
-  machineCount: int32;
-  status: "active" | "paused";
+  scope: NetworkScope;
+  owner: string;
+  identity: int32; // 1–8,对应标识色绑定类。
+  ipv6Prefix: string; // 网络独占的 ULA /48。
+  dnsSuffix: string;
+  reverseZone: string;
+  ipv4Mappings: Ipv4Mapping[];
+  memberCount: int32;
+  status: NetworkStatus;
 }
 
-@summary("MachineSummary")
+// 创建组织网络时只提交名称与 DNS,地址由平台分配。
+@summary("CreateNetworkInput")
 @jsonSchema
-model MachineSummary {
-  hostname: string;
-  ip: string;
-  os: "linux" | "macos" | "windows";
-  lastSeen: utcDateTime;
+model CreateNetworkInput {
+  name: string;
+  scope: "workspace";
+  dnsSuffix: string;
+}
+
+@summary("Membership")
+@jsonSchema
+model Membership {
+  networkId: string;
+  ipv6Address: string;
+  hostSuffix: string; // 同一设备跨网络保持相同主机后缀。
+  ipv4Compat: Ipv4Compat;
+  role: MembershipRole;
+  state: MembershipState;
   latencyMs: int32 | null;
-  status: "online" | "offline";
+  joinedAt: utcDateTime;
+}
+
+@summary("DeviceSummary")
+@jsonSchema
+model DeviceSummary {
+  id: string;
+  name: string;
+  os: "linux" | "macos" | "windows" | "ios" | "android";
+  clientVersion: string;
+  clientState: ClientState;
+  clientVersionState: ClientVersionState;
+  lastSeen: utcDateTime;
+  memberships: Membership[];
+}
+
+@summary("RouteEntry")
+@jsonSchema
+model RouteEntry {
+  id: string;
+  destination: string; // IPv6 前缀或 IPv4 映射前缀。
+  sourceCidr: string | null; // 映射前的 IPv4 地址段。
+  family: AddressFamily;
+  networkId: string | null; // 空值代表本地默认路由。
+  gateway: string;
+  priority: int32;
+  state: RouteState;
+}
+
+@summary("DnsZone")
+@jsonSchema
+model DnsZone {
+  networkId: string;
+  suffix: string;
+  reverseZone: string;
+  resolver: string;
+}
+
+@summary("AddressConflict")
+@jsonSchema
+model AddressConflict {
+  id: string;
+  kind: ConflictKind;
+  state: ConflictState;
+  networkIds: string[];
+  ipv4Cidrs: string[];
+  mappings: string[];
+}
+
+model AddressSpace {
+  networkPrefixCount: int32;
+  ipv4MappingCount: int32;
+  allocatedAddresses: int32;
+  unresolvedConflicts: int32;
 }
 
 model OverviewStats {
+  deviceCount: int32;
   networkCount: int32;
-  machineCount: int32;
+  membershipCount: int32;
   onlineCount: int32;
 }
 
@@ -163,8 +245,12 @@ model OverviewStats {
 @jsonSchema
 model ConsoleOverview {
   stats: OverviewStats;
+  addressSpace: AddressSpace;
   networks: NetworkSummary[];
-  machines: MachineSummary[];
+  devices: DeviceSummary[];
+  routes: RouteEntry[];
+  dnsZones: DnsZone[];
+  conflicts: AddressConflict[];
 }
 
 // 状态也由契约生成,避免载体重复手写对象形状;profile 与状态互斥。
@@ -181,6 +267,7 @@ union AccountSession {
 model AppRoute {
   page: "home" | "console";
   section: ConsoleSection;
+  detailId: string | null;
   demoState: "normal" | "empty" | "error";
 }
 

@@ -29,6 +29,18 @@
   --dl-accent-600: #2e6f63;
   --dl-accent-700: #245a50;
 
+  /* 网络归属标记:只经语义角色用于细色条与色点。 */
+  --dl-identity-1: #2c5568;
+  --dl-identity-2: #535572;
+  --dl-identity-3: #6a5b77;
+  --dl-identity-4: #7c5f76;
+  --dl-identity-5: #8d646b;
+  --dl-identity-6: #8b725a;
+  --dl-identity-7: #7d8263;
+  --dl-identity-8: #75896f;
+  --dl-identity-bar-width: 3px;
+  --dl-identity-dot-size: 10px;
+
   /* ---- 结构 token ---- */
   /* 字体族:取 design-language.md 第 ⑤ 节声明的字体栈,再补上各平台的系统中文字体兜底。
      不引入任何 webfont(保持原型自包含):未装 IBM Plex / Inter 的环境按栈回退,
@@ -116,7 +128,17 @@
 /* ==========================================================================
    语义角色层(浅色映射;组件只允许引用这一层与上面的结构 token)
    ========================================================================== */
+.dl-identity-1 { --dl-identity: var(--dl-identity-1); }
+.dl-identity-2 { --dl-identity: var(--dl-identity-2); }
+.dl-identity-3 { --dl-identity: var(--dl-identity-3); }
+.dl-identity-4 { --dl-identity: var(--dl-identity-4); }
+.dl-identity-5 { --dl-identity: var(--dl-identity-5); }
+.dl-identity-6 { --dl-identity: var(--dl-identity-6); }
+.dl-identity-7 { --dl-identity: var(--dl-identity-7); }
+.dl-identity-8 { --dl-identity: var(--dl-identity-8); }
+
 .dl-scope {
+  --dl-identity: var(--dl-identity-1);
   --dl-bg-base: var(--dl-neutral-50);
   --dl-bg-elevated: var(--dl-neutral-0);
   --dl-bg-sunken: var(--dl-neutral-100);

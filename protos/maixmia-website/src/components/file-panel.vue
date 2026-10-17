@@ -63,6 +63,7 @@ import type { WindowRect } from '../contracts/generated/workspace-window'
 import type { FileDisplayItem, FilePanelState } from '../data/windows'
 import { buildDisplayItems } from '../data/windows'
 import { enhanceMermaidDiagrams, renderMarkdown } from '../data/file-render'
+import { identityClassOf } from '../data/project-identity'
 import { useI18n } from '../i18n'
 import { useCodeEditor } from '../composables/use-code-editor'
 import { useWindowFrame } from '../composables/use-window-frame'
@@ -83,6 +84,7 @@ const props = defineProps<{
   mode: 'floating' | 'docked'
   // 文件所属项目:打开集跨项目,面板上必须写清出处(路径单独不再唯一)。
   projectName: string
+  projectPath: string
   // 文件在该会话里的状态芯片(与文件栏 / 文件树同源同值)—— 由页面派生后传入。
   chipState: ProjectEntryStateId
   // 只有**当前会话的**待确认请求才允许在面板里拍板 —— 跨项目打开时该条不渲染(不提供写动作)。
@@ -377,7 +379,8 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
     <!-- 标题栏:出处(项目›路径)+ 状态芯片 + 变更统计 + 右侧工具钮。
          整块是拖拽手柄(由壳接手势),这里的按钮不算手柄。 -->
     <template #header>
-      <div class="file-panel__identity">
+      <div class="file-panel__identity" :class="isDocked ? undefined : identityClassOf(projectPath)">
+        <span v-if="!isDocked" class="file-panel__project-dot" aria-hidden="true" />
         <!-- 出处(项目名)+ 路径:都属技术信息,等宽、可截断。 -->
         <span class="file-panel__project">{{ projectName }}</span>
         <span class="file-panel__project-sep" aria-hidden="true">›</span>
@@ -605,6 +608,15 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   display: flex;
   align-items: center;
   gap: var(--dl-space-2);
+}
+
+/* 悬浮标题栏与对话归属使用同一组绑定类、角色色与标准色点尺寸。 */
+.file-panel__project-dot {
+  flex-shrink: 0;
+  inline-size: var(--dl-identity-dot-size);
+  block-size: var(--dl-identity-dot-size);
+  border-radius: var(--dl-radius-pill);
+  background: var(--dl-identity);
 }
 
 /* 头部出处:项目名(等宽、最小字号、三级文字色)+ 分隔符;路径紧随其后。 */
@@ -961,6 +973,11 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
   font-size: var(--dl-font-size-sm);
   line-height: var(--dl-line-body);
   overflow-wrap: break-word;
+}
+
+/* 覆盖 UA 的 bold/bolder,嵌套强调也不越过设计语言的字重上限。 */
+.file-render--markdown :deep(:is(h1, h2, h3, h4, h5, h6, strong, b, th, dt, caption)) {
+  font-weight: 600;
 }
 
 .file-render--markdown :deep(h1),

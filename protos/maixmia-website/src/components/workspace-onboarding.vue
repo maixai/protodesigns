@@ -18,6 +18,8 @@ import { useI18n } from '../i18n'
 defineProps<{
   // 主按钮触发的「项目选择浮层」是否正开着(该 Agent 打开了多个项目、且从这里发起时才可能开)。
   newChatPickerOpen: boolean
+  // 零项目先引导打开目录,不显示无法执行的「新建对话」。
+  hasProjects: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,7 +36,7 @@ const primaryRef = ref<HTMLButtonElement | null>(null)
   <section class="onboarding">
     <div class="onboarding__block">
       <h2 class="onboarding__title">{{ t.workspace.onboarding.title }}</h2>
-      <p class="onboarding__body">{{ t.workspace.onboarding.body }}</p>
+      <p class="onboarding__body">{{ hasProjects ? t.workspace.onboarding.body : t.workspace.newChatNeedProject }}</p>
       <!-- 唯一的主行动:与每块区域 tab 条上的 ＋ 同一个动作。大号档(44px 触达)因为它落在
            触屏可及的区域里,且是这个状态的唯一主按钮。与 ＋ 一样带 disclosure 属性 ——
            多项目时它也是项目选择浮层的锚点;data-project-picker-trigger 让浮层认出「这是触发钮」,
@@ -44,12 +46,12 @@ const primaryRef = ref<HTMLButtonElement | null>(null)
         ref="primaryRef"
         type="button"
         class="dl-btn dl-btn--primary dl-btn--lg onboarding__primary"
-        aria-haspopup="listbox"
-        :aria-expanded="newChatPickerOpen"
+        :aria-haspopup="hasProjects ? 'listbox' : 'dialog'"
+        :aria-expanded="hasProjects ? newChatPickerOpen : undefined"
         data-project-picker-trigger
         @click="emit('new-chat', viewportRectOf(primaryRef))"
       >
-        <span aria-hidden="true">＋</span>{{ t.workspace.newChat }}
+        <span aria-hidden="true">＋</span>{{ hasProjects ? t.workspace.newChat : t.workspace.openProject }}
       </button>
     </div>
   </section>

@@ -48,11 +48,10 @@ export function stripMermaidDirectives(definition: string): string {
   return definition.replace(MERMAID_DIRECTIVE, '').trim()
 }
 
-// 清洗 SVG 的配置:保留图形与（少数主题下的）HTML 标签盒,但脚本、事件属性、外链一律没了 ——
-// DOMPurify 的默认策略本就禁止 `<script>` 与 `on*`,这里只是把 SVG 相关标签补进白名单。
+// 图表标签统一用 SVG text,不开放 foreignObject 的 HTML 集成点。
+// 只保留安全 SVG 与滤镜,脚本和 on* 事件属性继续由 DOMPurify 清除。
 const SVG_SANITIZE = {
-  USE_PROFILES: { svg: true, svgFilters: true, html: true },
-  ADD_TAGS: ['foreignObject'],
+  USE_PROFILES: { svg: true, svgFilters: true },
   ADD_ATTR: ['dominant-baseline'],
 }
 
@@ -113,6 +112,24 @@ function mermaidThemeVariables(scope: HTMLElement): Record<string, string> {
   return variables
 }
 
+// 临时渲染树给出的视盒可能没有覆盖最终 SVG 的节点位置。只在流程图越界时按已清洗、
+// 已挂载的图形边界补正,避免「DOM 有文字、实际截图却截字」;留白仍从当前作用域的 token 读取。
+function fitFlowchartViewport(figure: HTMLElement, scope: HTMLElement): void {
+  const svg = figure.querySelector('svg.flowchart')
+  if (!(svg instanceof SVGSVGElement)) return
+  const bounds = svg.getBBox()
+  const viewport = svg.viewBox.baseVal
+  if (bounds.width <= 0 || bounds.height <= 0) return
+  if (bounds.x >= viewport.x && bounds.y >= viewport.y
+    && bounds.x + bounds.width <= viewport.x + viewport.width
+    && bounds.y + bounds.height <= viewport.y + viewport.height) return
+  const padding = Number.parseFloat(cssValue(scope, '--dl-space-2')) || 0
+  const width = bounds.width + 2 * padding
+  const height = bounds.height + 2 * padding
+  svg.setAttribute('viewBox', `${bounds.x - padding} ${bounds.y - padding} ${width} ${height}`)
+  svg.setAttribute('width', String(width))
+}
+
 // mermaid 体积约 1MB,**按需动态加载**:首屏不背它,只有真的渲染到图表时才拉这一块。
 let mermaidPromise: Promise<MermaidApi> | null = null
 
@@ -120,7 +137,8 @@ function loadMermaid(scope: HTMLElement): Promise<MermaidApi> {
   mermaidPromise ??= import('mermaid').then((mod) => {
     const api = mod.default
     // securityLevel 取 'strict'(不是 'loose');startOnLoad 关掉(我们自己在容器里就地替换)。
-    api.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: mermaidThemeVariables(scope) })
+    // 根级 htmlLabels 同时约束节点与边标签,避免 HTML 标签盒被清洗后只剩空框。
+    api.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, theme: 'base', themeVariables: mermaidThemeVariables(scope) })
     // mermaid 默认把解析错误直接打到 console.error;冒烟检查把 console error 视为失败,
     // 且失败已被下面的 try/catch 变成「该块退化为代码块」的可见结果,不必再刷一遍日志。
     api.parseError = () => {}
@@ -149,19 +167,32 @@ export async function enhanceMermaidDiagrams(container: HTMLElement, fallbackNot
     const pre = code.parentElement
     if (pre === null) continue
     const definition = stripMermaidDirectives(code.textContent ?? '')
+    // 图容器先造出来(空盒无害);内容填装与替换留在下面的 try 里。
+    const figure = document.createElement('div')
+    figure.className = 'file-render__diagram'
     try {
       renderSequence += 1
       const { svg } = await api.render(`dl-mermaid-${renderSequence}`, definition)
-      const figure = document.createElement('div')
-      figure.className = 'file-render__diagram'
       figure.innerHTML = DOMPurify.sanitize(svg, SVG_SANITIZE)
       pre.replaceWith(figure)
+      // 这段 try 只覆盖「内容」:解析 / 渲染 / 清洗。一旦失败,降级说明还能挂回**仍在
+      // 文档里**的 pre —— 若把下面的视盒补正也放进同一个 try,它一旦抛错,catch 就会把
+      // 说明挂到已被替换掉的游离节点上,结果是「图在页面里、没有文字、也没有任何说明」,
+      // 正是这类静默失败的形态。
     } catch {
       pre.classList.add('is-mermaid-failed')
       const note = document.createElement('p')
       note.className = 'file-render__fallback'
       note.textContent = fallbackNote
       pre.after(note)
+      continue
+    }
+    // 视盒补正只影响几何、不碰内容,失败也不该降级成「无法渲染」:保留 mermaid 原生的
+    // viewBox 即可 —— 图与文字都还在。getBBox() 要求元素已在文档里,故只能放在替换之后。
+    try {
+      fitFlowchartViewport(figure, scope)
+    } catch {
+      /* 保持原生视盒 */
     }
   }
 }

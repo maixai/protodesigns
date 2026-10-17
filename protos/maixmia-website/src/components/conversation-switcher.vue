@@ -801,7 +801,7 @@ const groupTitle = (template: string, count: number): string => template.replace
 const closeLabel = (title: string): string => t.value.workspace.closeTab.replace('{title}', title)
 // 「拆出」钮的可访问名 = 「把 {name} 拆出为悬浮窗口」({name} = 会话标题)——与文件栏同一套词条。
 const popLabel = (title: string): string => t.value.workspace.fileBar.popOut.replace('{name}', title)
-// 悬停 title:中英双语 + 快捷键(按钮已不在 Tab 序,快捷键是它的键盘通路)。
+// 悬停 title:当前语言文案 + 快捷键(按钮已不在 Tab 序,快捷键是它的键盘通路)。
 const popTitle = (title: string): string => t.value.workspace.fileBar.popOutTitle.replaceAll('{name}', title)
 // tab 的 aria-actions:指向与它平级的行内控件(拆出钮与关闭钮恒在 —— 关闭钮不再随数量消失)。
 function tabActions(tab: ChatSession): string {
@@ -994,7 +994,7 @@ onBeforeUnmount(() => {
              语义由 aria-label / title 承担;与关闭钮并排、同在悬停 / 聚焦时显现。
              它**不在 Tab 序里**(tabindex=-1):键盘通路改由快捷键 Ctrl/Cmd+Shift+M 承担
              (在 tab 条上按即把当前聚焦的 tab 拆出),故 tab 条上少一个重复的逐项停靠点。
-             title 为中英双语,悬停即可读到快捷键(见 aria-keyshortcuts)。 -->
+             title 为当前语言文案,悬停即可读到快捷键(见 aria-keyshortcuts)。 -->
         <button
           :id="`conversation-pop-${tab.id}`"
           type="button"
@@ -1034,9 +1034,9 @@ onBeforeUnmount(() => {
       ref="newChatRef"
       class="conversation-icon-button"
       :disabled="disabled"
-      :aria-label="t.workspace.newChat"
-      aria-haspopup="listbox"
-      :aria-expanded="newChatPickerOpen"
+      :aria-label="projects.length === 0 ? t.workspace.openProject : t.workspace.newChat"
+      :aria-haspopup="projects.length === 0 ? 'dialog' : 'listbox'"
+      :aria-expanded="projects.length > 0 ? newChatPickerOpen : undefined"
       data-project-picker-trigger
       @click="emit('new-chat', viewportRectOf(newChatRef))"
     ><span aria-hidden="true">＋</span></button>
@@ -1364,6 +1364,11 @@ onBeforeUnmount(() => {
 /* 归属的**颜色通道**:贴容器左缘、通高的一条 3px 标识色条。var(--dl-identity) 由按钮上的
    .dl-identity-N 绑定类给出;只作图形,不填整块 tab 底。 */
 .tab-identity {
+  /* 选中态 tab 的底是 --dl-accent-soft(比页面底更亮):最暗的两枚标识色压在上面只有
+     2.66:1,低于图形阈值 3:1。故选中态把色条向一级文字色混一档 —— 色相不变、仍读作
+     同一个项目色,对比度却拉回 3:1 以上。权重放在自定义属性里,供回归用例读出来枚举
+     全部 8 色(屏幕上同时只可能出现两三个项目的色条)。 */
+  --identity-on-accent-weight: 75%;
   position: absolute;
   inset-block: 0;
   inset-inline-start: 0;
@@ -1373,6 +1378,11 @@ onBeforeUnmount(() => {
   border-end-start-radius: var(--dl-radius-md);
 }
 
+/* color-mix 不被支持时整条声明失效,自动回落到上面的纯标识色(降级安全)。 */
+.conversation-tab[aria-selected='true'] .tab-identity {
+  background: color-mix(in srgb, var(--dl-identity) var(--identity-on-accent-weight), var(--dl-text-primary));
+}
+
 /* 归属的**文字通道**(主通道):项目缩写前缀,等宽、小号、二级文字色 —— 它是可读的实义文本,
    不靠颜色,故色觉障碍下依然读得出归属(WCAG 1.4.1)。 */
 .conversation-tab__mark {
@@ -1380,7 +1390,7 @@ onBeforeUnmount(() => {
   font-family: var(--dl-font-mono);
   font-size: var(--dl-font-size-xs);
   letter-spacing: var(--dl-tracking-caps);
-  color: var(--dl-text-tertiary);
+  color: var(--dl-text-secondary);
 }
 
 .conversation-tab__label {

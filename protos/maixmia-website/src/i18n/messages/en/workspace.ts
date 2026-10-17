@@ -295,7 +295,7 @@ export const workspace = {
     // The pop-out button has moved out of the tab order (see the component's comment); its keyboard
     // path is now the shortcut. The title is deliberately **bilingual**: whichever the UI language is,
     // hovering shows both the action and the shortcut.
-    popOutTitle: 'Pop {name} out as a floating window · Ctrl/Cmd+Shift+M — 把 {name} 拆出为悬浮窗口',
+    popOutTitle: 'Pop {name} out as a floating window · Ctrl/Cmd+Shift+M',
     // Drop-outcome announcements while dragging (role="status"): say what releasing would do.
     tearOut: 'Popped {name} out; release to keep it floating',
     tearAttach: 'Put {name} back on the tab strip',

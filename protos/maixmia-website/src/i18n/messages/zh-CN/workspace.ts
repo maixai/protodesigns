@@ -278,7 +278,7 @@ export const workspace = {
     popOut: '把 {name} 拆出为悬浮窗口',
     // 「拆出」钮已移出 Tab 序(见组件注释),键盘等价通路改由快捷键承担。title 刻意写成
     // **中英双语**:无论界面语言是哪一种,悬停都能读到动作与快捷键。
-    popOutTitle: '把 {name} 拆出为悬浮窗口 · Ctrl/Cmd+Shift+M — Pop {name} out as a floating window',
+    popOutTitle: '把 {name} 拆出为悬浮窗口 · Ctrl/Cmd+Shift+M',
     // 拖动中的落点播报(role="status"):说清「现在松手会发生什么」。
     tearOut: '已拆出 {name},松手即成为悬浮窗口',
     tearAttach: '已把 {name} 放回标签栏',

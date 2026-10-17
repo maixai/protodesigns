@@ -35,7 +35,8 @@ export default defineConfig({
   reporter: [['list']],
   // 允许 1% 的像素差,吸收字体栅格化与抗锯齿噪声。
   expect: {
-    toHaveScreenshot: { maxDiffPixelRatio: 0.01 },
+    // 全高首拍会触发等宽字体度量的一次性变化,给连续两帧稳定留足时间;不放宽像素阈值。
+    toHaveScreenshot: { maxDiffPixelRatio: 0.01, timeout: 15_000 },
   },
   use: {
     baseURL: BASE_URL,

@@ -311,6 +311,12 @@ const projectStore: Record<AgentId, ProjectSeed[]> = {
   ],
 }
 
+// 关闭会移除 projectStore 的条目,故另留独立种子快照供重新打开同目录时恢复。
+const projectSeeds = Object.values(projectStore).flat().map((project) => ({
+  ...project,
+  entries: project.entries.map((entry) => ({ ...entry })),
+}))
+
 // Agent Host 上检测到的候选目录(供「打开项目」列表渲染与搜索),含 git / 非 git 两类。
 // fileCount 是**打开前**检测到的文件数(readdir 的粗计数),与已打开项目树里的**条目数**
 // (Project.entryCount = ProjectSeed.entries.length)概念不同;但演示里两者指同一批内容,
@@ -392,12 +398,13 @@ export function mockProjectCandidates(): ProjectCandidate[] {
 }
 
 // 打开项目:按候选目录的 path 新建一个项目并加入该 Agent 的列表。
-// 新项目的条目树按下发目录名生成一份确定的样例内容(真实场景由宿主读取磁盘)。
+// 已知目录恢复原种子条目树;真正的新目录才生成确定的样例内容(真实场景由宿主读取磁盘)。
 export function mockOpenProject(agentId: AgentId, path: string): Project {
   const candidate = projectCandidates.find((item) => item.path === path)
   const name = candidate?.name ?? path.split('/').at(-1) ?? path
   const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
-  const entries: ProjectEntry[] = [
+  const seed = projectSeeds.find((item) => item.path === path) ?? projectSeeds.find((item) => item.name === name)
+  const entries: ProjectEntry[] = seed?.entries.map((entry) => ({ ...entry })) ?? [
     { id: `${slug}-src`, path: 'src', kind: 'directory', state: 'none' },
     { id: `${slug}-index`, path: 'src/index.ts', kind: 'file', state: 'none' },
     { id: `${slug}-readme`, path: 'README.md', kind: 'file', state: 'none' },

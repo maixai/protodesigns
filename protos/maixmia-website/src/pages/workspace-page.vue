@@ -1491,7 +1491,7 @@ async function selectSession(surfaceId: string, target: ChatSession): Promise<vo
 // 新建对话**归谁**(用户已确认的规则,平权之后没有「当前项目」):
 //   ① 该 Agent 已打开 **≥2 个项目** → 一律弹出浮层让用户选(高亮推断出的那个,回车一步直达);
 //   ② 恰好 1 个 → 直接用,不弹(弹一个只有一项的列表是纯打扰);
-//   ③ 0 个 → 播报既有文案,引导先打开项目。
+//   ③ 0 个 → 直接打开项目选择对话框,先完成建对话的前置步骤。
 // 推断出的那个 = **发起区域的活动成员所属项目**:用「你此刻正看着的那个项目」做预选是合法的
 // 上下文推断;而用「全局上次用的项目」做静默默认,正是 Jira 被用户抱怨的失败模式
 // (默认已提交、焦点不在归属字段 → 经常建错)。推断不出(区域空 / 成员跨项目 / 从引导页发起)时
@@ -1571,8 +1571,8 @@ async function newConversation(surfaceId: string, origin: WindowRect): Promise<v
   openMenuSurfaceId.value = ''
   const only = projects.value[0]
   if (only === undefined) {
-    // 一个项目都没打开 → 引导先打开项目。
-    announcePlacement(t.value.workspace.newChatNeedProject)
+    // 没有归属项目时,主按钮与 tab 栏 ＋ 都明确转为「打开项目」的可见路径。
+    isPickerOpen.value = true
     return
   }
   // 只有一个已打开项目 → 直接归它,不弹选择。
@@ -2016,6 +2016,7 @@ onBeforeUnmount(() => {
             </button>
             <WorkspaceOnboarding
               class="guide-shell__body"
+              :has-projects="projects.length > 0"
               :new-chat-picker-open="newChatPickerOpenFor(surfaceId)"
               @new-chat="newConversation(surfaceId, $event)"
             />
@@ -2117,6 +2118,7 @@ onBeforeUnmount(() => {
                   :state="contentOf(activeFileWindow(surfaceId)?.id ?? '')"
                   :path="activeFilePath(surfaceId)"
                   :project-name="projectNameOf(activeFileWindow(surfaceId)?.content.projectId ?? '')"
+                  :project-path="projectPathOf(activeFileWindow(surfaceId)?.content.projectId ?? '')"
                   :chip-state="entryStateOfTab(fileContentOf(activeFileWindow(surfaceId)))"
                   :can-confirm="true"
                   :is-focused="activeFileWindow(surfaceId)?.id === focusedWindowId"
@@ -2199,6 +2201,7 @@ onBeforeUnmount(() => {
           :state="contentOf(win.id)"
           :path="windowPath(win)"
           :project-name="projectNameOf(win.content.projectId)"
+          :project-path="projectPathOf(win.content.projectId)"
           :chip-state="entryStateOfTab(fileContentOf(win))"
           :can-confirm="true"
           :is-focused="win.id === focusedWindowId"

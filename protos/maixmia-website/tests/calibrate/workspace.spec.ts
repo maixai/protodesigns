@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
+import { sampleTextContrast } from '../pixel-contrast'
 
 const WIDTHS = [375, 768, 1024, 1280, 1600]
 const VIEWPORT_HEIGHT = 900
@@ -1072,6 +1073,12 @@ test.describe('英文窄屏与无障碍回归', () => {
       await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
       await login(page, 'Sign in')
       await waitForStable(page, 'ready', enHeadingFor('ready'))
+      if (state === 'ready') {
+        const title = await page.locator('.tab-pop').first().getAttribute('title')
+        expect(title, 'EN 拆出提示只含英文,不夹中文').not.toMatch(/\p{Script=Han}/u)
+        expect(title, '保留快捷键说明').toContain('Ctrl/Cmd+Shift+M')
+        console.log(`[English pop-out title] ${title}`)
+      }
       if (state !== 'ready') await page.goto(`/#/workspace?s=${state}`)
       await waitForStable(page, state, enHeadingFor(state))
       if (state === 'empty') await expect(page.locator('.composer-dock'), '空位占位没有输入坞').toHaveCount(0)
@@ -2729,6 +2736,13 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(page.locator('.project-item')).toHaveCount(0)
   await expect(projects).toContainText('还没有打开的项目')
   await expect(page.locator(PROJECT_LABEL)).toHaveCount(0)
+  const guide = page.locator('.onboarding')
+  await expect(guide).toContainText('请先打开一个项目，再新建对话')
+  await guide.getByRole('button', { name: '打开项目', exact: true }).click()
+  await expect(page.locator('.conversation-icon-button[aria-label="新建对话"]'), '零项目不残留死路 ＋').toHaveCount(0)
+  await expect(page.locator('dialog.picker'), '零项目主行动点击后出现可见的项目选择对话框').toBeVisible()
+  await expect(page.locator('dialog.picker .picker__item').first()).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath('zero-project-open-picker.png') })
 })
 
 test('打开项目:搜索过滤 → 勾选 → 打开后进入侧栏并自动选中;已打开不可重复勾选', async ({ page }) => {
@@ -6863,7 +6877,7 @@ test('档位可用性按 kind 收敛:纯文本没有「预览」档,markdown / h
   expect(await labels(), 'binary 没有任何档位').toEqual([])
 })
 
-test('预览态:mermaid 产出 svg;注入被清洗;语法错的图只退化成代码块(不白屏、无脏日志)', async ({ page }) => {
+test('预览态:mermaid 产出带非空节点文字的 svg;注入被清洗;语法错的图只退化成代码块(不白屏、无脏日志)', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   // 降级路径不该往控制台留脏:整条用例里出现任何 console error / 页面异常即失败。
   const consoleErrors: string[] = []
@@ -6899,6 +6913,26 @@ test('预览态:mermaid 产出 svg;注入被清洗;语法错的图只退化成�
   await expect(panel.locator('.file-render__fallback'), '并给出一行说明').toHaveText('这段图表无法渲染,已按源码显示。')
   await expect(panel.locator('.file-render--markdown h1'), '面板没有白屏').toHaveCount(1)
   expect(await panel.locator('.file-render__diagram svg').count(), '其余两张图照常渲染').toBe(2)
+  const labels = await panel.locator('.file-render__diagram').first().locator('svg text').allTextContents()
+  expect(labels, '节点文字包含 mock 中的完整标签,不能只是空 SVG 框').toEqual(expect.arrayContaining(['读取源文件', '清洗', '注入 DOM']))
+  await expect(panel.locator('foreignObject'), '纯 SVG 标签不需要 HTML 集成点').toHaveCount(0)
+  for (const text of await panel.locator('.file-render__diagram').first().locator('svg text').all()) {
+    await expect(text, '标签真实可见而非隐藏文本').toBeVisible()
+    const fit = await text.evaluate((element) => {
+      const svg = element.closest('svg')
+      if (svg === null) return false
+      const label = element.getBoundingClientRect()
+      const viewport = svg.getBoundingClientRect()
+      return label.left >= viewport.left && label.right <= viewport.right
+        && label.top >= viewport.top && label.bottom <= viewport.bottom
+    })
+    expect(fit, '完整节点标签落在 SVG 视口内,不能只在 DOM 里非空却被裁掉').toBe(true)
+  }
+  console.log(`[mermaid labels] ${JSON.stringify(labels)}`)
+  await panel.locator('.file-render__diagram').first().screenshot({ path: testInfo.outputPath('mermaid-labels.png') })
+  const weights = await panel.locator('.file-render--markdown *').evaluateAll((elements) => elements.map((element) => Number(getComputedStyle(element).fontWeight)))
+  expect(Math.max(...weights), '渲染出的 markdown 子树内不存在计算字重 > 600 的元素').toBeLessThanOrEqual(600)
+  console.log(`[markdown weight] max=${Math.max(...weights)}`)
   expect(consoleErrors, '降级不留 console error / 未捕获异常').toEqual([])
 })
 
@@ -7367,6 +7401,80 @@ test('归属三通道:tab 有项目缩写前缀 + 标识色条 + 悬停 title �
   await expect(project.locator('.project-row__name')).toHaveText(PROJECT_NAMES.planning[0])
 })
 
+// 选中态 tab 的底是 --dl-accent-soft,比页面底更亮 —— 最暗的两枚标识色压在上面只有
+// 2.66:1,低于图形阈值 3:1(上一轮只量了页面底,漏了这个子情形)。选中态因此把色条向
+// 一级文字色混一档(权重见 --identity-on-accent-weight)。这条用例把**全部 8 色**都枚举
+// 一遍(屏幕上同时只可能出现两三个项目的色条),并额外实测渲染出来的那一条。
+test('标识色条:选中态 8 色对 accent-soft 底均 ≥3:1(图形阈值)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const bar = page.locator(`${TAB}[aria-selected="true"] .tab-identity`).first()
+  await expect(bar, '选中态有标识色条').toHaveCount(1)
+
+  const parseRgb = (value: string): [number, number, number] => {
+    const hex = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(value)
+    if (hex !== null) {
+      const [, r = '0', g = '0', b = '0'] = hex
+      return [parseInt(r, 16), parseInt(g, 16), parseInt(b, 16)]
+    }
+    // color-mix() 的计算值会被序列化成 color(srgb r g b)(通道 0–1),与 rgb() 的 0–255 不同。
+    const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(value)
+    if (srgb !== null) {
+      const [, r = '0', g = '0', b = '0'] = srgb
+      return [Number(r) * 255, Number(g) * 255, Number(b) * 255]
+    }
+    const parts = value.match(/\d+(?:\.\d+)?/g)
+    if (parts === null || parts.length < 3) throw new Error(`无法解析颜色:${value}`)
+    const [r = '0', g = '0', b = '0'] = parts
+    return [Number(r), Number(g), Number(b)]
+  }
+  const luminance = ([r8, g8, b8]: [number, number, number]): number => {
+    const channel = (value: number): number => {
+      const s = value / 255
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(r8) + 0.7152 * channel(g8) + 0.0722 * channel(b8)
+  }
+  const contrast = (a: [number, number, number], b: [number, number, number]): number => {
+    const la = luminance(a)
+    const lb = luminance(b)
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+  }
+  const mix = (a: [number, number, number], b: [number, number, number], weight: number): [number, number, number] => [
+    a[0] * weight + b[0] * (1 - weight),
+    a[1] * weight + b[1] * (1 - weight),
+    a[2] * weight + b[2] * (1 - weight),
+  ]
+
+  const probe = await page.evaluate(() => {
+    const barEl = document.querySelector('.conversation-tab[aria-selected="true"] .tab-identity')
+    const scope = barEl?.closest('.dl-scope--dark') ?? document.documentElement
+    const scopeStyle = getComputedStyle(scope)
+    const tabEl = barEl?.closest('.conversation-tab') ?? null
+    return {
+      colors: Array.from({ length: 8 }, (_, index) => scopeStyle.getPropertyValue(`--dl-identity-${index + 1}`).trim()),
+      textPrimary: scopeStyle.getPropertyValue('--dl-text-primary').trim(),
+      weight: barEl === null ? '' : getComputedStyle(barEl).getPropertyValue('--identity-on-accent-weight').trim(),
+      barBg: barEl === null ? '' : getComputedStyle(barEl).backgroundColor,
+      tabBg: tabEl === null ? '' : getComputedStyle(tabEl).backgroundColor,
+    }
+  })
+
+  expect(probe.colors.filter((color) => color !== ''), '8 个标识色都解析得到').toHaveLength(8)
+  const weight = Number(probe.weight.replace('%', '')) / 100
+  expect(weight, '混合权重是 0–1 的百分比').toBeGreaterThan(0)
+  expect(weight).toBeLessThanOrEqual(1)
+  const tabBg = parseRgb(probe.tabBg)
+  const ratios = probe.colors.map((color) =>
+    contrast(mix(parseRgb(color), parseRgb(probe.textPrimary), weight), tabBg),
+  )
+  console.log(`[identity contrast] 选中态 8 色最低 ${Math.min(...ratios).toFixed(2)}:1`)
+  expect(Math.min(...ratios), '选中态下 8 色均达图形阈值 3:1').toBeGreaterThanOrEqual(3)
+  // 不只是算公式:实际渲染出来的那一条也要达标。
+  expect(contrast(parseRgb(probe.barBg), tabBg), '渲染出的色条实测').toBeGreaterThanOrEqual(3)
+})
+
 test('悬浮窗标题栏显示的是该文件**真实所属项目**(多项目下不再显示错)', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -7786,6 +7894,101 @@ test('悬浮对话窗的标题栏仍在(本次唯一保留的例外)', async ({ 
   await expect(header.locator('.chat-panel__title')).toBeVisible()
   // 它仍是拖拽手柄(可用于移动窗口)。
   await expect(header).toHaveCount(1)
+})
+
+test('项目缩写逐像素对比度:深色工作台的未选中 / 悬停 / 选中均不低于 4.5:1', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  // 工作台固定深色,不把系统浅色偏好误当成该作用域的实际主题。
+  for (const theme of ['dark'] as const) {
+    await login(page)
+    await waitForStable(page)
+    const tab = page.locator(TAB).filter({ hasText: HEADINGS['zh-CN'].roadmap })
+    const mark = tab.locator('.conversation-tab__mark')
+    await expect(tab).toHaveAttribute('aria-selected', 'false')
+    for (const state of ['inactive', 'hover', 'selected'] as const) {
+      if (state === 'inactive') await page.mouse.move(0, 0)
+      if (state === 'hover') await tab.hover()
+      if (state === 'selected') { await tab.click(); await page.mouse.move(0, 0) }
+      await expect(tab, '每次采样先确认真实选中状态').toHaveAttribute('aria-selected', state === 'selected' ? 'true' : 'false')
+      expect(await tab.evaluate((element) => element.matches(':hover')), '悬停采样确实处于 hover,其余采样已移开指针').toBe(state === 'hover')
+      await expect(mark).toBeVisible()
+      const measured = await sampleTextContrast(mark)
+      expect(measured.inkDistance, '截图确实采到文字笔画,不是只有背景').toBeLessThan(30)
+      expect(measured.ratio, `${theme}/${state} 项目缩写实际像素对比度 ≥4.5:1`).toBeGreaterThanOrEqual(4.5)
+      console.log(`[project mark contrast] ${theme}/${state} ${JSON.stringify(measured)}`)
+      await mark.screenshot({ path: testInfo.outputPath(`project-mark-${theme}-${state}.png`) })
+    }
+  }
+})
+
+test('悬浮文件标题栏:与同项目对话共用标识色点,停靠态不新增色点', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator('.tab-slot').first().locator('.tab-pop').click()
+  const chatIdentity = page.locator(`${CHAT_PANEL}[data-mode="floating"] .chat-project`)
+  const identity = identityClassOfElement(await chatIdentity.getAttribute('class'))
+  const color = await chatIdentity.locator('.chat-project__dot').evaluate((element) => getComputedStyle(element).backgroundColor)
+  await clickFileRow(page, PROGRESS)
+  const file = page.locator(`${FILE_PANEL}[data-mode="floating"]`)
+  const fileIdentity = file.locator('.file-panel__identity')
+  await expect(fileIdentity.locator('.file-panel__project-dot'), '悬浮文件有可见标准色点').toBeVisible()
+  expect(identityClassOfElement(await fileIdentity.getAttribute('class')), '与对话共用 identityClass').toBe(identity)
+  expect(await fileIdentity.locator('.file-panel__project-dot').evaluate((element) => getComputedStyle(element).backgroundColor), '与对话共用 --dl-identity 色值').toBe(color)
+  console.log(`[file identity] ${identity} ${color}`)
+  await file.locator('.dl-window__meta').screenshot({ path: testInfo.outputPath('file-title-identity.png') })
+  await file.locator('.file-panel__placement').click()
+  await expect(page.locator(`${FILE_PANEL}[data-mode="docked"] .file-panel__project-dot`), '停靠态不加重复标记').toHaveCount(0)
+})
+
+test('Markdown 字重:强调 / 表头 / 四至六级标题及嵌套强调均不超过 600;时序图文字仍可见', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await clickFileRow(page, README)
+  const panel = page.locator(FILE_PANEL)
+  await expect(panel.locator('.file-render__diagram svg text').filter({ hasText: '团队' }).first(), '其它图表类型:时序图标签不丢失').toBeVisible()
+  await showPane(panel, '源码')
+  const editor = panel.locator('.cm-content')
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.insertText('# 标题\n\n#### 四级\n\n##### 五级\n\n###### 六级\n\n**强调与 __嵌套强调__**\n\n| 列名 |\n| --- |\n| 内容 |')
+  await showPane(panel, '预览')
+  const root = panel.locator('.file-render--markdown')
+  await expect(root.locator('h4, h5, h6')).toHaveCount(3)
+  await expect(root.locator('strong').first()).toBeVisible()
+  await expect(root.locator('th')).toHaveCount(1)
+  const measured = await root.locator('*').evaluateAll((elements) => elements.map((element) => ({ tag: element.tagName, weight: Number(getComputedStyle(element).fontWeight) })))
+  expect(Math.max(...measured.map((entry) => entry.weight)), '渲染出的 markdown 子树内不存在计算字重 > 600 的元素').toBeLessThanOrEqual(600)
+  console.log(`[markdown weights] ${JSON.stringify(measured)}`)
+  await root.screenshot({ path: testInfo.outputPath('markdown-weight-cap.png') })
+})
+
+test('重新打开种子项目:条目树完整恢复,真正的新目录仍用三条样例树', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const original = page.locator('.project-item').filter({ hasText: 'weekly-report' })
+  const titleBefore = await original.locator('.project-row__button').getAttribute('title')
+  await original.locator('.project-menu__trigger').click()
+  await page.locator('.project-menu__item').click()
+  await expect(page.locator('.project-item')).toHaveCount(1)
+  await page.locator('.open-project').click()
+  const dialog = page.locator('dialog.picker')
+  for (const name of ['weekly-report', 'api-server']) {
+    await dialog.locator('.picker__item').filter({ hasText: name }).locator('.picker__check').check()
+  }
+  await dialog.getByRole('button', { name: '打开', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  const restored = page.locator('.project-item').filter({ hasText: 'weekly-report' })
+  await expect(restored.locator('.project-row__button'), '种子条目数恢复为关闭前的 23 条').toHaveAttribute('title', titleBefore ?? '')
+  await expect(restored.locator('.entry-row').filter({ hasText: 'progress.csv' }), '恢复种子独有的根文件').toBeVisible()
+  await restored.locator('.entry-row[data-kind="directory"]').filter({ hasText: 'examples' }).locator('.entry-row__button').click()
+  await expect(restored.locator('.entry-row').filter({ hasText: 'render-check.md' }), '恢复种子独有的嵌套样本').toBeVisible()
+  const fresh = page.locator('.project-item').filter({ hasText: 'api-server' })
+  await expect(fresh.locator('.project-row__button'), '真正的新目录维持三条样例').toHaveAttribute('title', /3 个文件/)
+  await expect(fresh.locator('.entry-row')).toHaveCount(2)
+  await page.locator('.workspace-projects').screenshot({ path: testInfo.outputPath('seed-project-reopened.png') })
 })
 
 // 新建对话归属③:区域为空 / 引导页 + **只有一个**已打开项目 → 直接归它(不弹浮层)。

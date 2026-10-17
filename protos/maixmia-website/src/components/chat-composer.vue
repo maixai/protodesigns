@@ -300,6 +300,9 @@ const statusKind = computed<TelemetryStatus>(() => {
   return props.runtime.telemetry?.status ?? 'idle'
 })
 const statusWord = computed(() => t.value.workspace.statusWords[statusKind.value])
+// 运行态遥测(状态词 / 具体动作 / Context / 计时)只在**这段对话已经有消息**时才有意义:
+// 空对话没有运行、没有已用 context、也没有计时。模型选择不同 —— 它在发送前就要能选,故恒显示。
+const hasRunTelemetry = computed(() => props.runtime.telemetry !== null && !props.canReassign)
 // 状态圆点:强调色只承担「活动指示」—— 思考中 / 输出中走强调色,等待确认走警告色,其余中性。
 const statusLevel = computed<'accent' | 'warning' | 'neutral'>(() => {
   if (statusKind.value === 'thinking' || statusKind.value === 'streaming') return 'accent'
@@ -480,7 +483,7 @@ function formatElapsed(seconds: number): string {
           <input ref="fileInputRef" class="composer-file-input" type="file" multiple :accept="ACCEPT" tabindex="-1" aria-hidden="true" @change="onFilesChosen" />
           <!-- 遥测条:只有状态项是 live region(状态 / 具体动作变化时播报);其余部分不做 live,避免整条太吵。 -->
           <div class="telemetry" role="group" :aria-label="t.workspace.telemetry.label">
-            <div class="telemetry__status" :role="isLive ? 'status' : undefined" :aria-live="isLive ? 'polite' : undefined">
+            <div v-if="hasRunTelemetry" class="telemetry__status" :role="isLive ? 'status' : undefined" :aria-live="isLive ? 'polite' : undefined">
               <span class="telemetry__status-head">
                 <span class="telemetry__dot" :data-level="statusLevel" aria-hidden="true" />
                 <span class="telemetry__word">{{ statusWord }}</span>
@@ -488,15 +491,15 @@ function formatElapsed(seconds: number): string {
               <span v-if="statusDetail" class="telemetry__detail" :title="statusDetail">· {{ statusDetail }}</span>
             </div>
             <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--model">
-              <span class="telemetry__sep" aria-hidden="true">│</span>
+              <span v-if="hasRunTelemetry" class="telemetry__sep" aria-hidden="true">│</span>
               <ModelMenu :model-id="runtime.modelId" @select="onModelSelect" />
             </span>
-            <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--context">
+            <span v-if="hasRunTelemetry" class="telemetry__item telemetry__item--context">
               <span class="telemetry__sep" aria-hidden="true">│</span>
               <span class="telemetry__context-text" :title="contextText"><span class="telemetry__context-percent">{{ contextPercent }}%</span><span class="telemetry__context-counts"> ({{ contextUsed }}/{{ contextWindow }})</span></span>
               <span class="telemetry__meter" role="progressbar" :aria-label="t.workspace.telemetry.context" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span class="telemetry__meter-fill" :data-level="contextLevel" :style="{ width: `${contextPercent}%` }" /></span>
             </span>
-            <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--elapsed"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__elapsed">{{ formatElapsed(elapsed) }}</span></span>
+            <span v-if="hasRunTelemetry" class="telemetry__item telemetry__item--elapsed"><span class="telemetry__sep" aria-hidden="true">│</span><span class="telemetry__elapsed">{{ formatElapsed(elapsed) }}</span></span>
           </div>
         </div>
       </form>

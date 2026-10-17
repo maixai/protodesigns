@@ -483,6 +483,11 @@ export function mockAgentRuntime(agentId: AgentId, projectId: string, demoState:
     projectName: project?.name ?? '',
     projectPath: project?.path ?? '',
   }
+  // 还没有任何消息的对话**没有运行态**:它不该报「思考中」、不该有已用 context 与计时 ——
+  // 否则一段刚建的空对话会显示某个别的会话口吻的「正在汇总本周项目进展」和一个在走的秒表。
+  if (mockTranscript(sessionId).length === 0) {
+    return { ...base, status: 'idle', statusDetail: '', contextUsedTokens: 0, elapsedSeconds: 0 }
+  }
   // 当前会话不在等待交互时一律不报 waiting;在等待时才覆盖状态并给出对应的具体动作。
   if (!isAwaitingSession(sessionId, demoState)) return base
   return { ...base, status: 'waiting', statusDetail: 'awaitingConfirm' }

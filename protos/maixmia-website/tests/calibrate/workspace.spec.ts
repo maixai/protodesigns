@@ -1921,6 +1921,30 @@ test('遥测条:五项齐备、状态项为唯一 live region、Context 文本�
   expect(fillColor).not.toBe(await resolveToken(page, '--dl-accent'))
 })
 
+// 空对话**没有运行态**:它不该显示「思考中 · 正在汇总本周项目进展」、41% 的已用 context 和
+// 一个在走的秒表 —— 那是同 Agent 下别的会话口吻的罐头数据。模型选择要保留:发送前就要能选。
+test('遥测条:空对话不显示运行态遥测(状态 / Context / 计时),只留模型选择', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await startNewConversation(page)
+
+  await expect(page.locator('.telemetry__status'), '空对话不报运行状态').toHaveCount(0)
+  await expect(page.locator('.telemetry__context-text'), '空对话没有已用 context').toHaveCount(0)
+  await expect(page.locator('.telemetry__elapsed'), '空对话没有计时').toHaveCount(0)
+  await expect(page.locator('.telemetry__model'), '模型选择仍在').toHaveText('Claude Sonnet 4.5')
+  // 底行此刻只剩两件:⊕ 与模型选择 —— 模型前也不该留一条悬空的分隔线。
+  await expect(page.locator('.composer-bar .telemetry__sep'), '没有前导分隔线').toHaveCount(0)
+
+  // 发出第一条消息后,运行态遥测随之出现(它表达的是「这段对话的运行」,不是会话身份)。
+  const input = page.getByRole('textbox', { name: /与「.+」对话/ })
+  await input.fill('先把这周的进展整理成三条')
+  await input.press('Enter')
+  await expect(page.locator('.telemetry__status'), '有消息后恢复运行状态').toHaveCount(1)
+  await expect(page.locator('.telemetry__context-text'), '有消息后恢复 context 用量').toHaveCount(1)
+  await expect(page.locator('.telemetry__elapsed'), '有消息后恢复计时').toHaveCount(1)
+})
+
 test('遥测条:用量条按 41% / 78% / 93% 三档落在 info / warning / error', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
   await login(page)

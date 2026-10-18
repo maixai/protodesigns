@@ -2,6 +2,7 @@
 // 最小化条按 Agent 分域，通知中心跨 Agent 聚合；浮层放在滚动条目区之外，避免裁切焦点环。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
+import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
 import type { MinimizedGroup } from '../contracts/generated/minimized-group'
 import type { WorkspaceWindow } from '../contracts/generated/workspace-window'
@@ -17,7 +18,7 @@ const props = defineProps<{
   sessions: ChatSession[]
   statusOf: (session: ChatSession) => SessionStatus | null
   projects: Project[]
-  agents: readonly AgentId[]
+  agents: readonly AgentSummary[]
   agentId: AgentId
   notifications: AgentNotification[]
   notificationsStatus: 'loading' | 'ready' | 'error'
@@ -58,10 +59,13 @@ const settingsLabel = computed(() => {
     : ''
   return `${base} · ${primary}${sorted}`
 })
-const notificationGroups = computed(() => props.agents.flatMap((agentId) => {
-  const items = props.notifications.filter((item) => item.agentId === agentId)
-  return items.length === 0 ? [] : [{ agentId, items }]
+const notificationGroups = computed(() => props.agents.flatMap((agent) => {
+  const items = props.notifications.filter((item) => item.agentId === agent.id)
+  return items.length === 0 ? [] : [{ agentId: agent.id, items }]
 }))
+function agentNameOf(agentId: AgentId): string {
+  return props.agents.find((agent) => agent.id === agentId)?.name ?? ''
+}
 function labelOf(id: string): string {
   const win = props.windows.find((item) => item.id === id)
   if (win?.content.kind === 'file') return fileBaseName(win.content.path)
@@ -190,7 +194,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         <template v-else-if="notificationsStatus === 'error'"><p>{{ t.workspace.notifications.error }}</p><button type="button" class="workspace-dock__retry" @click="retryNotifications">{{ t.workspace.retry }}</button></template>
         <p v-else-if="notificationGroups.length === 0">{{ t.workspace.notifications.empty }}</p>
         <section v-for="group in notificationsStatus === 'ready' ? notificationGroups : []" :key="group.agentId" class="workspace-dock__notification-group" :data-agent="group.agentId">
-          <h4>{{ t.workspace.agents[group.agentId] }} · {{ group.items.length }}</h4>
+          <h4>{{ agentNameOf(group.agentId) }} · {{ group.items.length }}</h4>
           <button v-for="item in group.items" :key="item.id" type="button" class="workspace-dock__notice" :data-session-id="item.sessionId" :data-status="item.status" :aria-label="t.workspace.notifications.open.replace('{title}', item.title)" @click="openNotification(item)">
             <span>{{ item.title }}</span><span class="workspace-dock__notice-meta"><span>{{ projects.find(project => project.id === item.projectId)?.name ?? item.projectId }}</span><span class="workspace-dock__notice-status" :data-status="item.status">{{ item.status === 'awaiting' ? t.workspace.sessionStatus.awaiting : t.workspace.sessionStatus.completed }}</span><time :datetime="item.updatedAt">{{ formatTime(item.updatedAt) }}</time></span>
           </button>

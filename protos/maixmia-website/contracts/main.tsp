@@ -173,11 +173,10 @@ model AppRoute {
 // ---- 工作台的会话与消息 ----
 
 // 工作台里的 Agent:一个 Agent 承接多段会话,会话头显示当前会话归属的 Agent。
-enum AgentId {
-  planning,
-  research,
-  writing,
-}
+// Agent 由用户创建 / 删除,故 id 是**字符串**而不是封闭枚举 —— 模板只是创建时的默认值,
+// 不参与身份。内置的三个 Agent 以 planning / research / writing 作为稳定 id;
+// 新建的 Agent 由载体生成 `agent-<n>` 一类的 id。
+scalar AgentId extends string;
 
 // 会话在**当前时刻**的状态:一个字段表达五态(取代原先只表达「是否等待用户交互」的
 // awaitingInteraction)。取值与 tab 上的状态图标一一对应:
@@ -344,12 +343,135 @@ model ProjectCandidate {
   isGitRepo: boolean;
 }
 
-// Agent:身份 + 它打开的项目列表。
-@summary("Agent")
+// Agent 的身份摘要:侧栏切换器 / 设置对话框只需要这些字段,不必背着项目树。
+// role 是一句话职责(如「拆解任务与推进节奏」),modelId 是默认模型 id(载体按模型目录解析展示名)。
+// builtIn 表示内置 Agent:它们的名称 / 职责优先跟随界面语言;用户改名后置 false,改用这里的字面值。
+@summary("AgentSummary")
 @jsonSchema
-model Agent {
-  id: AgentId;            // 复用已有的 AgentId(planning / research / writing)
-  projects: Project[];
+model AgentSummary {
+  id: AgentId;
+  name: string;
+  role: string;
+  modelId: string;
+  builtIn: boolean;
+}
+
+// 新建 / 编辑 Agent 的输入:模板只是界面的默认值,不进入身份,故这里只有最终配置。
+@summary("AgentConfig")
+@jsonSchema
+model AgentConfig {
+  name: string;
+  role: string;
+  modelId: string;
+}
+
+// ---- 插件与插件市场 ----
+//
+// 归属关系是数据模型的一部分:插件属于某个市场,配置键就是 `plugin@marketplace`
+// (与 Claude Code 的 enabledPlugins 一致)。自动更新是**市场级**策略
+// (extraKnownMarketplaces.<name>.autoUpdate),插件行只显示继承来的状态 —— 不在插件上
+// 再造一个不存在的开关。
+//
+// 作用域与 Claude Code 的设置层级一致:
+//   user    ~/.claude/settings.json         仅自己、所有项目
+//   project .claude/settings.json           仓库内所有人(需各自安装)
+//   local   .claude/settings.local.json     仅自己、本项目(gitignore)
+//   managed 组织策略                         优先级最高,用户不可覆盖
+// 优先级:managed > local > project > user。
+//
+// 插件按 **Agent 隔离**:每个 Agent 有自己的安装态、启用态与市场自动更新设置;
+// 切换 Agent 时整页插件上下文随之更换。
+enum PluginTrustId {
+  trusted,
+  community,
+}
+
+enum PluginComponentId {
+  skill,
+  command,
+  agent,
+  mcp,
+  hook,
+}
+
+enum PluginScopeId {
+  user,
+  project,
+  local,
+  managed,
+}
+
+// 插件可声明的配置项(Claude 插件 manifest 的 userConfig):密钥、端点、开关等。
+// secret 的 value 永远以掩码返回,isSet 告诉界面「已经保存过」;保存时留空表示保持原值。
+enum PluginConfigTypeId {
+  text,
+  secret,
+  boolean,
+}
+
+model PluginConfigField {
+  key: string;
+  label: string;
+  description: string;
+  type: PluginConfigTypeId;
+  required: boolean;
+  // 展示值:secret 返回掩码;未设置时为空串。
+  value: string;
+  isSet: boolean;
+}
+
+// 保存配置的输入:只带用户本次改动的键值;空 secret 由后端解释为「保持原值」。
+@summary("PluginConfigValue")
+@jsonSchema
+model PluginConfigValue {
+  key: string;
+  value: string;
+}
+
+@summary("Plugin")
+@jsonSchema
+model Plugin {
+  id: string;
+  // 冗余保存归属市场 id:插件行要能独立回答「我属于谁」,不必反查父节点。
+  marketplaceId: string;
+  name: string;
+  description: string;
+  publisher: string;
+  version: string;
+  icon: string;
+  components: PluginComponentId[];
+  installed: boolean;
+  enabled: boolean;
+  // 插件被安装到哪个作用域(installed_plugins.json 的 scope)。
+  scope: PluginScopeId;
+  // 插件声明的配置项;空数组表示无需配置。
+  config: PluginConfigField[];
+}
+
+// 市场是插件的容器,也是自动更新策略的归属。
+// source 是 marketplace.json 的来源(github / git / url / 本地路径),按原文展示给用户核对信任。
+// 添加市场的输入:source 是 marketplace.json 的来源,scope 决定写入哪个 settings 文件。
+@summary("MarketplaceConfig")
+@jsonSchema
+model MarketplaceConfig {
+  name: string;
+  source: string;
+  scope: PluginScopeId;
+  autoUpdate: boolean;
+}
+
+@summary("Marketplace")
+@jsonSchema
+model Marketplace {
+  id: string;
+  name: string;
+  source: string;
+  trust: PluginTrustId;
+  // 市场注册在哪个作用域(extraKnownMarketplaces 写在哪个 settings 文件)。
+  scope: PluginScopeId;
+  autoUpdate: boolean;
+  lastUpdated: utcDateTime;
+  plugins: Plugin[];
 }
 
 // ---- 运行遥测与「等待交互」确认 ----

@@ -9,25 +9,31 @@
 // 不是命令菜单,故用 disclosure 语义(aria-expanded + aria-current),不用 role=menu。
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
 import type { AgentId } from '../contracts/generated/chat-session'
+import type { AgentSummary } from '../contracts/generated/agent-summary'
 import { useI18n } from '../i18n'
+import DliIcon from './dl-icon.vue'
 
 const props = withDefaults(defineProps<{
   value: AgentId
-  agents: readonly AgentId[]
+  agents: readonly AgentSummary[]
   // 两个宿主:底栏(紧凑档,向上展开)/ 侧栏顶部(整行控件,向下展开)。
   variant?: 'dock' | 'sidebar'
 }>(), { variant: 'dock' })
-const emit = defineEmits<{ select: [agent: AgentId] }>()
+const emit = defineEmits<{ select: [agent: AgentId]; create: []; settings: [] }>()
 const { t } = useI18n()
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
+// 当前 Agent 从摘要里取(名称 / 角色是数据,不再按 id 查词条 —— Agent 可以新建和改名)。
+const current = computed<AgentSummary | undefined>(() => props.agents.find((agent) => agent.id === props.value) ?? props.agents[0])
 // 触发钮的可访问名 = 控件用途 + 当前 Agent + 它的角色(视觉上角色是第二行,读屏也要读到)。
-const triggerLabel = computed(() => `${t.value.workspace.agentSwitcher.label} · ${t.value.workspace.agents[props.value]} · ${t.value.workspace.agentRoles[props.value]}`)
+const triggerLabel = computed(() => current.value === undefined
+  ? t.value.workspace.agentSwitcher.label
+  : `${t.value.workspace.agentSwitcher.label} · ${current.value.name} · ${current.value.role}`)
 // 首字标记:窄屏只留它 + chevron 时,用户仍能认出当前 Agent(名称在 aria-label 里保留)。
-function initialOf(agent: AgentId): string {
-  return t.value.workspace.agents[agent].slice(0, 1)
+function initialOf(name: string): string {
+  return name.slice(0, 1)
 }
 function close(restoreFocus = false): void {
   isOpen.value = false
@@ -43,6 +49,17 @@ function select(agent: AgentId): void {
   close(true)
   emit('select', agent)
 }
+// 先把焦点还给触发钮再请求创建:随后打开的对话框会把它记作「关闭后回到这里」。
+function createAgent(): void {
+  close(true)
+  emit('create')
+}
+// 设置入口与「新建」同住在身份菜单底部:Notion / Slack 的 workspace 菜单也是这个位置。
+// 头部因此只剩身份本身,不必再并排一枚 44px 的齿轮把名称挤掉。
+function openSettings(): void {
+  close(true)
+  emit('settings')
+}
 function onKeydown(event: KeyboardEvent): void {
   if (!isOpen.value) return
   if (event.key === 'Escape') {
@@ -51,7 +68,8 @@ function onKeydown(event: KeyboardEvent): void {
     close(true)
     return
   }
-  const buttons = Array.from(panel.value?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+  // 方向键只在 Agent 选项之间移动;底部「新建 / 设置」用 Tab 到达,不混进列表循环。
+  const buttons = Array.from(panel.value?.querySelectorAll<HTMLButtonElement>('.agent-context-switcher__option') ?? [])
   const index = buttons.findIndex((button) => button === document.activeElement)
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
     : event.key === 'ArrowDown' || event.key === 'ArrowRight' ? (index + 1) % buttons.length
@@ -73,24 +91,34 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 <template>
   <div ref="root" class="agent-context-switcher" :data-variant="variant" @keydown="onKeydown" @focusout="onFocusOut">
     <button ref="trigger" type="button" class="agent-context-switcher__trigger" :data-agent="value" :aria-label="triggerLabel" :aria-expanded="isOpen" aria-controls="agent-context-panel" @click="toggle">
-      <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(value) }}</span>
+      <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}</span>
       <span class="agent-context-switcher__body">
-        <span class="agent-context-switcher__name">{{ t.workspace.agents[value] }}</span>
-        <span class="agent-context-switcher__role">{{ t.workspace.agentRoles[value] }}</span>
+        <span class="agent-context-switcher__name">{{ current?.name ?? '' }}</span>
+        <span class="agent-context-switcher__role">{{ current?.role ?? '' }}</span>
       </span>
       <svg class="agent-context-switcher__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
     <Transition name="agent-context-panel">
       <div v-if="isOpen" id="agent-context-panel" ref="panel" class="agent-context-switcher__panel" role="group" :aria-label="t.workspace.agentSwitcher.menu">
         <p class="agent-context-switcher__title">{{ t.workspace.agentSwitcher.menu }}</p>
-        <button v-for="agent in agents" :key="agent" type="button" class="agent-context-switcher__option" :data-agent="agent" :aria-current="agent === value ? 'true' : undefined" @click="select(agent)">
-          <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent) }}</span>
+        <button v-for="agent in agents" :key="agent.id" type="button" class="agent-context-switcher__option" :data-agent="agent.id" :aria-current="agent.id === value ? 'true' : undefined" @click="select(agent.id)">
+          <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}</span>
           <span class="agent-context-switcher__option-body">
-            <span class="agent-context-switcher__option-name">{{ t.workspace.agents[agent] }}</span>
-            <span class="agent-context-switcher__option-role">{{ t.workspace.agentRoles[agent] }}</span>
+            <span class="agent-context-switcher__option-name">{{ agent.name }}</span>
+            <span class="agent-context-switcher__option-role">{{ agent.role }}</span>
           </span>
-          <svg v-if="agent === value" class="agent-context-switcher__check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 9-9" /></svg>
+          <svg v-if="agent.id === value" class="agent-context-switcher__check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 9-9" /></svg>
         </button>
+        <div class="agent-context-switcher__footer">
+          <button type="button" class="agent-context-switcher__add" @click="createAgent">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            <span>{{ t.workspace.agentSwitcher.create }}</span>
+          </button>
+          <button type="button" class="agent-context-switcher__add" @click="openSettings">
+            <DliIcon name="settings" size="sm" />
+            <span>{{ t.workspace.agentAdmin.settingsLabel }}</span>
+          </button>
+        </div>
       </div>
     </Transition>
   </div>
@@ -121,6 +149,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .agent-context-switcher__check path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .agent-context-switcher__option[aria-current='true'] { background: var(--dl-accent-soft); }
 .agent-context-switcher__option[aria-current='true'] .agent-context-switcher__option-mark { background: var(--dl-bg-elevated); color: var(--dl-text-primary); }
+/* 菜单底部的「新建 Agent」:与上面的身份选项用一条发丝线分开 —— 它是动作,不是另一个身份。 */
+.agent-context-switcher__footer { margin-block-start: var(--dl-space-1); padding-block-start: var(--dl-space-1); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.agent-context-switcher__add { display: flex; align-items: center; gap: var(--dl-space-2); inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); text-align: left; }
+.agent-context-switcher__add svg { inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); }
+.agent-context-switcher__add path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
+.agent-context-switcher__add:hover { color: var(--dl-text-primary); }
 /* 开合只动 opacity / transform(动效白名单);位移 4px 从触发钮方向浮出。 */
 .agent-context-panel-enter-active, .agent-context-panel-leave-active { transition: opacity var(--dl-duration-base) var(--dl-ease-standard), transform var(--dl-duration-base) var(--dl-ease-standard); }
 .agent-context-panel-enter-from, .agent-context-panel-leave-to { opacity: 0; transform: translateY(var(--dl-space-1)); }

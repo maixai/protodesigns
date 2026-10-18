@@ -2,7 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { NSkeleton } from 'naive-ui'
-import type { ChatSession, SessionStatus } from '../contracts/generated/chat-session'
+import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
+import type { AgentSummary } from '../contracts/generated/agent-summary'
+import type { AgentConfig } from '../contracts/generated/agent-config'
+import type { Marketplace } from '../contracts/generated/marketplace'
+import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
+import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
@@ -24,13 +29,20 @@ import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
 import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
-import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
+import { addMarketplace, closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, installPlugin, listAgentNotifications, listAgents, listMarketplaces, listProjects, listSessions, openProject, removeMarketplace, savePluginConfig, saveResponse, searchConversations, sendMessage, setMarketplaceAutoUpdate, setPluginEnabled, uninstallPlugin, updateAgent, updateMarketplace } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
 import { useFlightGhost } from '../composables/use-flight-ghost'
 import type { FlightRect } from '../composables/use-flight-ghost'
 import AgentContextSwitcher from '../components/agent-context-switcher.vue'
+import AgentEditorDialog from '../components/agent-editor-dialog.vue'
+import AgentPluginsPane from '../components/agent-plugins-pane.vue'
+import MarketplaceAddDialog from '../components/marketplace-add-dialog.vue'
+import MarketplaceRemoveDialog from '../components/marketplace-remove-dialog.vue'
+import PluginConfigDialog from '../components/plugin-config-dialog.vue'
+import PluginInstallDialog from '../components/plugin-install-dialog.vue'
+import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
 import ChatPanel from '../components/chat-panel.vue'
 import ChatSessionView from '../components/chat-session-view.vue'
@@ -82,9 +94,12 @@ const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
 const STREAM_INTERVAL = 80
 const STREAM_CHUNK = 6
 // 页面只持有「当前 Agent」:新会话的归属项目由「能推断就推断、推断不出让用户选」的规则决定(见 projectForNewChat)。
-const DEFAULT_AGENT_ID = 'planning' satisfies ChatSession['agent']
-const AGENT_ORDER = ['planning', 'research', 'writing'] satisfies ChatSession['agent'][]
-const selectedAgent = ref<ChatSession['agent']>(DEFAULT_AGENT_ID)
+// Agent 身份来自数据层(可新建 / 改名 / 删除),不再是一份写死的 id 清单。
+const DEFAULT_AGENT_ID: AgentId = 'planning'
+const agents = ref<AgentSummary[]>([])
+const agentsStatus = ref<'loading' | 'ready' | 'error'>('loading')
+const selectedAgent = ref<AgentId>(DEFAULT_AGENT_ID)
+const currentAgent = computed<AgentSummary | undefined>(() => agents.value.find((agent) => agent.id === selectedAgent.value))
 const searchQuery = ref('')
 const searchHits = ref<ConversationSearchHit[]>([])
 const isSearching = ref(false)
@@ -93,6 +108,54 @@ let searchVersion = 0
 // 平权之后**没有「当前项目」**:多个项目可以同时展开,tab 区与悬浮层也混装不同项目的窗口。
 const projects = ref<Project[]>([])
 const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
+// 侧栏视图:项目 / 插件是同一块侧栏内容的两种取值,不是两个并列面板。
+const sidebarView = ref<'projects' | 'plugins'>('projects')
+const sidebarViewOptions = computed(() => [
+  {
+    id: 'projects',
+    label: t.value.workspace.sidebarViews.projects,
+    // 只在列表已就绪时给读数;加载中不先报一个假的 0。
+    count: projectsStatus.value === 'ready' ? projects.value.length : undefined,
+  },
+  {
+    id: 'plugins',
+    label: t.value.workspace.sidebarViews.plugins,
+    count: marketplacesAgentId.value === selectedAgent.value && marketplacesStatus.value === 'ready'
+      ? marketplaces.value.reduce((sum, marketplace) => sum + marketplace.plugins.filter((plugin) => plugin.installed).length, 0)
+      : undefined,
+  },
+])
+// 插件按 Agent 隔离:市场与插件列表属于「哪个 Agent」要记牢,切换后旧列表不得冒充新 Agent 的。
+const marketplaces = ref<Marketplace[]>([])
+const marketplacesStatus = ref<'loading' | 'ready' | 'error'>('loading')
+const marketplacesAgentId = ref<AgentId | ''>('')
+const busyPluginId = ref('')
+const busyMarketplaceId = ref('')
+let marketplacesVersion = 0
+// 插件的四个弹层:安装 / 配置 / 添加市场 / 移除市场。页面持有状态,组件只负责表单。
+const isInstallDialogOpen = ref(false)
+const configTarget = ref<{ marketplaceId: string; pluginId: string } | null>(null)
+const pluginConfigBusy = ref(false)
+const pluginConfigError = ref('')
+const isMarketplaceAddOpen = ref(false)
+const marketplaceAddBusy = ref(false)
+const marketplaceAddError = ref('')
+const marketplaceRemoveId = ref('')
+const marketplaceRemoveBusy = ref(false)
+const marketplaceRemoveError = ref('')
+const marketplaceToRemove = computed(() => marketplaces.value.find((marketplace) => marketplace.id === marketplaceRemoveId.value))
+const marketplaceRemoveInstalled = computed(() => marketplaceToRemove.value?.plugins.filter((plugin) => plugin.installed).length ?? 0)
+const configPlugin = computed(() => {
+  const target = configTarget.value
+  if (target === null) return undefined
+  return marketplaces.value.find((marketplace) => marketplace.id === target.marketplaceId)
+    ?.plugins.find((plugin) => plugin.id === target.pluginId)
+})
+// Agent 设置 / 新建共用同一个对话框;模式决定多显示模板选择还是删除区。
+const isAgentEditorOpen = ref(false)
+const agentEditorMode = ref<'create' | 'edit'>('edit')
+const agentEditorBusy = ref(false)
+const agentEditorError = ref('')
 // 展开集是**真正的集合**:点一行只 toggle 它自己,不动别人(不再是「单值覆盖」)。
 const expandedProjects = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
@@ -285,7 +348,8 @@ function sessionTitleOf(sessionId: string): string {
 // 助手消息的作者名 = **该会话所属 Agent** 的名字(每段对话各取自己的;悬浮窗与停靠视图各取各的)。
 function assistantNameOf(sessionId: string): string {
   const found = sessions.value.find((item) => item.id === sessionId)
-  return t.value.workspace.agents[found?.agent ?? selectedAgent.value]
+  const agentId = found?.agent ?? selectedAgent.value
+  return agents.value.find((agent) => agent.id === agentId)?.name ?? currentAgent.value?.name ?? ''
 }
 // 会话 tab 的状态徽标:该会话运行态的实时生成态优先(排队 / 流式 → streaming、完成 → completed)。
 function sessionStatusOf(session: ChatSession): SessionStatus | null {
@@ -1427,6 +1491,14 @@ function showConversation(): void {
 // 重装工作台视图:取项目列表 → 取该 Agent 全部已打开项目的会话 → 对齐落点 → 刷新落点的转录 / 遥测。
 // 平权之后**没有「当前项目」**:不再「落到选中项目」,而是装载整个 Agent 的会话(跨它已打开的项目)。
 async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false, force = false): Promise<void> {
+  // 一个 Agent 都没有时没有可装载的工作台(正常路径不会发生:mock 至少保留一个)。
+  if (selectedAgent.value === '') {
+    projects.value = []
+    projectsStatus.value = 'empty'
+    sessions.value = []
+    sessionStatus.value = 'empty'
+    return
+  }
   if (isBusy.value && !force) { isLocalePending.value = true; return }
   workspaceVersion += 1
   const version = workspaceVersion
@@ -1526,6 +1598,251 @@ async function confirmOpenProject(paths: string[]): Promise<void> {
 function retryProjects(): void {
   void reloadWorkspace(false)
 }
+
+// ---- Agent 身份与插件 ----
+// Agent 列表是工作台身份的单一来源:切换器、设置对话框与通知分组都从它取名称 / 角色。
+async function loadAgents(): Promise<void> {
+  agentsStatus.value = 'loading'
+  const result = await listAgents()
+  if (!isAlive.value) return
+  if (!result.ok) { agentsStatus.value = 'error'; return }
+  agents.value = result.value
+  agentsStatus.value = 'ready'
+  // 当前 Agent 可能已被删除(或首次装载时不存在):回退到列表里的第一个。
+  if (!agents.value.some((agent) => agent.id === selectedAgent.value)) {
+    selectedAgent.value = agents.value[0]?.id ?? ''
+  }
+}
+function retryAgents(): void {
+  void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false, true) })
+}
+
+// 市场列表按 Agent 分开取;版本号防止旧 Agent 的慢响应覆盖新 Agent 的列表。
+async function loadMarketplaces(agentId: AgentId): Promise<void> {
+  marketplacesVersion += 1
+  const version = marketplacesVersion
+  marketplacesStatus.value = 'loading'
+  const result = await listMarketplaces(agentId)
+  if (!isAlive.value || version !== marketplacesVersion || agentId !== selectedAgent.value) return
+  if (!result.ok) { marketplacesStatus.value = 'error'; return }
+  marketplaces.value = result.value
+  marketplacesAgentId.value = agentId
+  marketplacesStatus.value = 'ready'
+}
+function ensureMarketplaces(): void {
+  if (sidebarView.value !== 'plugins') return
+  if (marketplacesAgentId.value === selectedAgent.value && marketplacesStatus.value !== 'error') return
+  if (selectedAgent.value !== '') void loadMarketplaces(selectedAgent.value)
+}
+function retryMarketplaces(): void {
+  if (selectedAgent.value !== '') void loadMarketplaces(selectedAgent.value)
+}
+// 每个动作都返回整个市场:插件在「已安装 / 可安装」之间移动、计数与自动更新状态一并更新。
+function replaceMarketplace(updated: Marketplace): void {
+  marketplaces.value = marketplaces.value.map((marketplace) => (marketplace.id === updated.id ? updated : marketplace))
+}
+function isPluginBusy(): boolean {
+  return busyPluginId.value !== '' || busyMarketplaceId.value !== ''
+}
+function pluginNameOf(marketplace: Marketplace | undefined, pluginId: string): string {
+  return marketplace?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId
+}
+async function onInstallPlugin(marketplaceId: string, pluginId: string): Promise<void> {
+  if (isPluginBusy()) return
+  const agentId = selectedAgent.value
+  busyPluginId.value = pluginId
+  const result = await installPlugin(agentId, marketplaceId, pluginId)
+  busyPluginId.value = ''
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { announcePlacement(t.value.workspace.plugins.installError); return }
+  replaceMarketplace(result.value)
+  announcePlacement(t.value.workspace.plugins.installedAnnounce.replace('{name}', pluginNameOf(result.value, pluginId)))
+}
+async function onUninstallPlugin(marketplaceId: string, pluginId: string): Promise<void> {
+  if (isPluginBusy()) return
+  const agentId = selectedAgent.value
+  busyPluginId.value = pluginId
+  const result = await uninstallPlugin(agentId, marketplaceId, pluginId)
+  busyPluginId.value = ''
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { announcePlacement(t.value.workspace.plugins.uninstallError); return }
+  replaceMarketplace(result.value)
+  announcePlacement(t.value.workspace.plugins.uninstalledAnnounce.replace('{name}', pluginNameOf(result.value, pluginId)))
+}
+async function onTogglePlugin(marketplaceId: string, pluginId: string, enabled: boolean): Promise<void> {
+  if (isPluginBusy()) return
+  const agentId = selectedAgent.value
+  busyPluginId.value = pluginId
+  const result = await setPluginEnabled(agentId, marketplaceId, pluginId, enabled)
+  busyPluginId.value = ''
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { announcePlacement(t.value.workspace.plugins.toggleError); return }
+  replaceMarketplace(result.value)
+  const template = enabled ? t.value.workspace.plugins.enabledAnnounce : t.value.workspace.plugins.disabledAnnounce
+  announcePlacement(template.replace('{name}', pluginNameOf(result.value, pluginId)))
+}
+// 自动更新是市场级动作:改一次,该市场下所有插件的「自动 / 手动」状态一起变。
+async function onSetMarketplaceAutoUpdate(marketplaceId: string, autoUpdate: boolean): Promise<void> {
+  if (isPluginBusy()) return
+  const agentId = selectedAgent.value
+  const name = marketplaces.value.find((marketplace) => marketplace.id === marketplaceId)?.name ?? ''
+  busyMarketplaceId.value = marketplaceId
+  const result = await setMarketplaceAutoUpdate(agentId, marketplaceId, autoUpdate)
+  busyMarketplaceId.value = ''
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { announcePlacement(t.value.workspace.plugins.autoUpdateError); return }
+  replaceMarketplace(result.value)
+  const template = autoUpdate ? t.value.workspace.plugins.autoUpdateOn : t.value.workspace.plugins.autoUpdateOff
+  announcePlacement(template.replace('{name}', name))
+}
+
+// 手动更新市场:只在自动更新关闭时由市场头提供入口;更新后已装插件的补丁版本前进一位。
+async function onUpdateMarketplace(marketplaceId: string): Promise<void> {
+  if (isPluginBusy()) return
+  const agentId = selectedAgent.value
+  const name = marketplaces.value.find((marketplace) => marketplace.id === marketplaceId)?.name ?? ''
+  busyMarketplaceId.value = marketplaceId
+  const result = await updateMarketplace(agentId, marketplaceId)
+  busyMarketplaceId.value = ''
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { announcePlacement(t.value.workspace.plugins.updateError); return }
+  replaceMarketplace(result.value)
+  announcePlacement(t.value.workspace.plugins.updatedMarketplace.replace('{name}', name))
+}
+
+// ---- 插件弹层:安装 / 配置 / 市场增删 ----
+function openInstallDialog(): void {
+  isInstallDialogOpen.value = true
+}
+function openPluginConfig(marketplaceId: string, pluginId: string): void {
+  pluginConfigError.value = ''
+  configTarget.value = { marketplaceId, pluginId }
+}
+function closePluginConfig(): void {
+  if (pluginConfigBusy.value) return
+  configTarget.value = null
+  pluginConfigError.value = ''
+}
+async function onSavePluginConfig(values: readonly PluginConfigValue[]): Promise<void> {
+  const target = configTarget.value
+  if (target === null || pluginConfigBusy.value) return
+  const agentId = selectedAgent.value
+  pluginConfigBusy.value = true
+  pluginConfigError.value = ''
+  const result = await savePluginConfig(agentId, target.marketplaceId, target.pluginId, values)
+  pluginConfigBusy.value = false
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { pluginConfigError.value = result.error.message; return }
+  replaceMarketplace(result.value)
+  configTarget.value = null
+  announcePlacement(t.value.workspace.plugins.configureSaved.replace('{name}', pluginNameOf(result.value, target.pluginId)))
+}
+function openMarketplaceAdd(): void {
+  marketplaceAddError.value = ''
+  isMarketplaceAddOpen.value = true
+}
+function closeMarketplaceAdd(): void {
+  if (marketplaceAddBusy.value) return
+  isMarketplaceAddOpen.value = false
+  marketplaceAddError.value = ''
+}
+async function onAddMarketplace(config: MarketplaceConfig): Promise<void> {
+  if (marketplaceAddBusy.value) return
+  const agentId = selectedAgent.value
+  marketplaceAddBusy.value = true
+  marketplaceAddError.value = ''
+  const result = await addMarketplace(agentId, config)
+  marketplaceAddBusy.value = false
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { marketplaceAddError.value = result.error.message; return }
+  marketplaces.value = [...marketplaces.value, result.value]
+  isMarketplaceAddOpen.value = false
+  announcePlacement(t.value.workspace.plugins.addedMarketplace.replace('{name}', result.value.name))
+}
+function openMarketplaceRemove(marketplaceId: string): void {
+  marketplaceRemoveError.value = ''
+  marketplaceRemoveId.value = marketplaceId
+}
+function closeMarketplaceRemove(): void {
+  if (marketplaceRemoveBusy.value) return
+  marketplaceRemoveId.value = ''
+  marketplaceRemoveError.value = ''
+}
+async function onRemoveMarketplace(): Promise<void> {
+  const target = marketplaceToRemove.value
+  if (target === undefined || marketplaceRemoveBusy.value) return
+  const agentId = selectedAgent.value
+  marketplaceRemoveBusy.value = true
+  marketplaceRemoveError.value = ''
+  const result = await removeMarketplace(agentId, target.id)
+  marketplaceRemoveBusy.value = false
+  if (!isAlive.value || agentId !== selectedAgent.value) return
+  if (!result.ok) { marketplaceRemoveError.value = result.error.message; return }
+  marketplaces.value = marketplaces.value.filter((marketplace) => marketplace.id !== target.id)
+  if (configTarget.value?.marketplaceId === target.id) configTarget.value = null
+  marketplaceRemoveId.value = ''
+  announcePlacement(t.value.workspace.plugins.removedMarketplace.replace('{name}', target.name))
+}
+
+function openAgentSettings(): void {
+  agentEditorMode.value = 'edit'
+  agentEditorError.value = ''
+  isAgentEditorOpen.value = true
+}
+function openAgentCreate(): void {
+  agentEditorMode.value = 'create'
+  agentEditorError.value = ''
+  isAgentEditorOpen.value = true
+}
+async function onSubmitAgent(config: AgentConfig): Promise<void> {
+  if (agentEditorBusy.value) return
+  agentEditorBusy.value = true
+  agentEditorError.value = ''
+  const creating = agentEditorMode.value === 'create'
+  const result = creating ? await createAgent(config) : await updateAgent(selectedAgent.value, config)
+  agentEditorBusy.value = false
+  if (!isAlive.value) return
+  if (!result.ok) { agentEditorError.value = result.error.message; return }
+  const summary = result.value
+  if (creating) {
+    agents.value = [...agents.value, summary]
+    isAgentEditorOpen.value = false
+    announcePlacement(t.value.workspace.agentAdmin.created.replace('{name}', summary.name))
+    await onSelectAgent(summary.id)
+    return
+  }
+  agents.value = agents.value.map((agent) => (agent.id === summary.id ? summary : agent))
+  isAgentEditorOpen.value = false
+  announcePlacement(t.value.workspace.agentAdmin.saved.replace('{name}', summary.name))
+  // 模型可能改了:刷新可见会话的遥测,让状态条里的模型名与设置一致。
+  for (const id of visibleChatIds.value) {
+    telemetryLoaded.delete(id)
+    void ensureTelemetry(id)
+  }
+}
+async function onDeleteAgent(): Promise<void> {
+  if (agentEditorBusy.value) return
+  const target = currentAgent.value
+  if (target === undefined) return
+  agentEditorBusy.value = true
+  agentEditorError.value = ''
+  const result = await deleteAgent(target.id)
+  agentEditorBusy.value = false
+  if (!isAlive.value) return
+  if (!result.ok) { agentEditorError.value = result.error.message; return }
+  agents.value = agents.value.filter((agent) => agent.id !== target.id)
+  isAgentEditorOpen.value = false
+  announcePlacement(t.value.workspace.agentAdmin.deleted.replace('{name}', target.name))
+  if (marketplacesAgentId.value === target.id) {
+    marketplaces.value = []
+    marketplacesStatus.value = 'loading'
+    marketplacesAgentId.value = ''
+  }
+  if (selectedAgent.value === target.id) {
+    const next = agents.value[0]
+    if (next !== undefined) await onSelectAgent(next.id)
+  }
+}
 async function closeDrawer(): Promise<void> {
   isDrawerOpen.value = false
   await nextTick()
@@ -1545,6 +1862,9 @@ async function openDrawer(): Promise<void> {
 }
 function drawerKeyboard(event: KeyboardEvent): void {
   if (!isDrawerOpen.value) return
+  // 有原生 dialog 打开时,Esc 与焦点陷阱归最上层 dialog:抽屉不能抢走这次 Escape,
+  // 否则一次按键会同时关掉弹层与抽屉(实测)。
+  if (document.querySelector('dialog[open]') !== null) return
   if (event.key === 'Escape') { event.preventDefault(); void closeDrawer(); return }
   if (event.key !== 'Tab') return
   const buttons = Array.from(drawer.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])
@@ -1952,8 +2272,23 @@ async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''):
   // 清掉旧域列表，避免 domain watcher 把旧 Agent 的成员补进新域。
   sessions.value = []
   selectedAgent.value = agent
+  // 插件列表属于上一个 Agent,不能带进新 Agent 的侧栏。
+  marketplaces.value = []
+  marketplacesStatus.value = 'loading'
+  marketplacesAgentId.value = ''
+  busyPluginId.value = ''
+  busyMarketplaceId.value = ''
+  isInstallDialogOpen.value = false
+  configTarget.value = null
+  isMarketplaceAddOpen.value = false
+  marketplaceRemoveId.value = ''
+  pluginConfigError.value = ''
+  marketplaceAddError.value = ''
+  marketplaceRemoveError.value = ''
   if (targetSessionId !== '') landingSessionId.value = targetSessionId
   await reloadWorkspace(targetSessionId === '', true, true)
+  // 插件列表与本 Agent 绑定:预取一次,侧栏 tab 的计数与插件视图都立即就绪。
+  void loadMarketplaces(agent)
 }
 // 会话搜索:在当前 Agent 已装载的全部会话里筛选(跨它已打开的项目)。请求带版本号,避免旧结果覆盖新结果。
 function onSearchInput(value: string): void {
@@ -2113,14 +2448,21 @@ function syncSwipeGuard(event: Event): void {
 // 演示态把「落点 / 侧栏 Agent」钉到与该状态一致的一组;切换演示态时清空「已看过」集合。
 function applyDemoState(demo: AppRoute['demoState']): void {
   seenSessions.value = new Set()
-  if (demo === 'empty') { landingSessionId.value = ''; selectedAgent.value = 'planning' }
-  if (demo === 'waiting') { landingSessionId.value = 'knowledge'; selectedAgent.value = 'writing' }
-  if (demo === 'error') { landingSessionId.value = 'weekly'; selectedAgent.value = 'planning' }
+  // Agent 可能已被删除:演示态只在目标 Agent 仍存在时切换(首次装载时列表为空,直接采用默认)。
+  const pickAgent = (agentId: AgentId): void => {
+    if (agents.value.length === 0 || agents.value.some((agent) => agent.id === agentId)) selectedAgent.value = agentId
+  }
+  if (demo === 'empty') { landingSessionId.value = ''; pickAgent('planning') }
+  if (demo === 'waiting') { landingSessionId.value = 'knowledge'; pickAgent('writing') }
+  if (demo === 'error') { landingSessionId.value = 'weekly'; pickAgent('planning') }
 }
 
+watch(sidebarView, (view) => { if (view === 'plugins') ensureMarketplaces() })
+
 watch(locale, () => {
-  // 项目 / 条目的名称与路径都是技术标识,不随语言变化,故只重取会话(标题本地化)、转录与遥测。
-  void reloadWorkspace(false)
+  // 项目 / 条目的名称与路径都是技术标识,不随语言变化;但内置 Agent 的名称与角色会变,
+  // 故先重取 Agent 列表,再重取会话(标题本地化)、转录与遥测。
+  void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false) })
 })
 // 需要(预)取内容的文件窗体:所有文件类窗体里,可见的、或是区域成员的。键是**复合窗体 id**。
 const contentPaths = computed<string[]>(() => layout.value.windows.flatMap((win) => {
@@ -2212,7 +2554,13 @@ async function loadAgentNotifications(): Promise<void> {
 
 onMounted(() => {
   applyDemoState(currentRoute.value.demoState)
-  void reloadWorkspace(false, true)
+  // 先取 Agent 身份(它决定工作台属于谁),再装载工作台。
+  void loadAgents().then(() => {
+    if (selectedAgent.value === '') return
+    void reloadWorkspace(false, true)
+    // 插件在侧栏里有一枚计数;先取回列表,计数与切换都无需等待。
+    void loadMarketplaces(selectedAgent.value)
+  })
   narrowMedia.addEventListener('change', onViewportChange)
   motionMedia.addEventListener('change', onMotionChange)
   document.addEventListener('keydown', drawerKeyboard)
@@ -2254,14 +2602,30 @@ onBeforeUnmount(() => {
         :inert="isNarrow && !isDrawerOpen" :role="isNarrow && isDrawerOpen ? 'dialog' : undefined"
         :aria-modal="isNarrow && isDrawerOpen ? true : undefined" :aria-label="t.workspace.workspacePanel"
       >
-        <!-- 侧栏顶部 = Agent 选择器(全局导航放在最上方,与项目区用间距分开);
-             窄屏抽屉里再并排一枚关闭钮。 -->
+        <!-- 侧栏顶部 = Agent 身份区(标记 + 名称 + 角色)、它的设置齿轮与抽屉关闭钮。
+             新建 Agent 的入口在身份菜单底部 —— 与「切换身份」同处一个动作组,不额外占一行。 -->
         <div class="sidebar-head">
-          <AgentContextSwitcher :value="selectedAgent" :agents="AGENT_ORDER" variant="sidebar" @select="onSelectAgent" />
+          <AgentContextSwitcher
+            v-if="agents.length > 0"
+            :value="selectedAgent" :agents="agents" variant="sidebar"
+            @select="onSelectAgent" @create="openAgentCreate" @settings="openAgentSettings"
+          />
+          <div v-else class="sidebar-agent-state">
+            <p v-if="agentsStatus === 'error'">{{ t.workspace.agentAdmin.loadError }}</p>
+            <NSkeleton v-else text :repeat="1" :animated="false" />
+            <button v-if="agentsStatus === 'error'" class="workspace-button" @click="retryAgents">{{ t.workspace.retry }}</button>
+          </div>
           <button v-if="isNarrow" class="workspace-button icon-button sidebar-close" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
         </div>
         <section class="workspace-projects">
-          <h2 class="sidebar-label" aria-hidden="true">{{ t.workspace.projects }}</h2>
+          <SidebarViewTabs
+            id-prefix="sidebar-view" v-model="sidebarView"
+            :options="sidebarViewOptions" :label="t.workspace.sidebarViews.label"
+          />
+          <div
+            v-if="sidebarView === 'projects'" id="sidebar-view-panel-projects"
+            role="tabpanel" aria-labelledby="sidebar-view-tab-projects" class="sidebar-view-panel"
+          >
           <div class="project-scroll">
             <div v-if="projectsStatus === 'loading'" class="sidebar-loading" :aria-label="t.workspace.loading"><NSkeleton text :repeat="3" :animated="false" /></div>
             <div v-else-if="projectsStatus === 'error'" class="sidebar-loading"><p>{{ t.workspace.projectsError }}</p><button class="workspace-button" @click="retryProjects">{{ t.workspace.retry }}</button></div>
@@ -2334,6 +2698,18 @@ onBeforeUnmount(() => {
           <button class="workspace-button open-project" @click="isPickerOpen = true">
             <span aria-hidden="true">＋</span><span>{{ t.workspace.openProject }}</span>
           </button>
+          </div>
+          <AgentPluginsPane
+            v-else
+            id="sidebar-view-panel-plugins" role="tabpanel" aria-labelledby="sidebar-view-tab-plugins"
+            :agent-id="selectedAgent" :marketplaces="marketplaces" :status="marketplacesStatus"
+            :busy-plugin-id="busyPluginId" :busy-marketplace-id="busyMarketplaceId"
+            @install-request="openInstallDialog" @add-marketplace="openMarketplaceAdd"
+            @remove-marketplace="openMarketplaceRemove" @configure="openPluginConfig"
+            @uninstall="onUninstallPlugin" @toggle-plugin="onTogglePlugin"
+            @auto-update="onSetMarketplaceAutoUpdate" @update-marketplace="onUpdateMarketplace"
+            @retry="retryMarketplaces"
+          />
         </section>
       </aside>
       <!-- 区域层:区域树在这里递归落成 DOM —— 每块区域一个 pane,区域之间是可拖 / 可键盘操作的
@@ -2608,9 +2984,34 @@ onBeforeUnmount(() => {
       <Transition name="split-preview">
         <div v-if="splitPreview" class="split-preview" aria-hidden="true" :style="splitPreviewStyle" />
       </Transition>
-      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="AGENT_ORDER" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" />
+      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" />
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
+    <AgentEditorDialog
+      :open="isAgentEditorOpen" :mode="agentEditorMode"
+      :agent="agentEditorMode === 'edit' ? currentAgent : undefined"
+      :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError"
+      @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
+    />
+    <PluginInstallDialog
+      :open="isInstallDialogOpen" :marketplaces="marketplaces" :busy-plugin-id="busyPluginId"
+      @install="onInstallPlugin" @cancel="isInstallDialogOpen = false"
+    />
+    <PluginConfigDialog
+      :open="configTarget !== null" :plugin="configPlugin"
+      :marketplace-id="configTarget?.marketplaceId ?? ''"
+      :busy="pluginConfigBusy" :error="pluginConfigError"
+      @submit="onSavePluginConfig" @cancel="closePluginConfig"
+    />
+    <MarketplaceAddDialog
+      :open="isMarketplaceAddOpen" :busy="marketplaceAddBusy" :error="marketplaceAddError"
+      @submit="onAddMarketplace" @cancel="closeMarketplaceAdd"
+    />
+    <MarketplaceRemoveDialog
+      :open="marketplaceRemoveId !== ''" :marketplace-name="marketplaceToRemove?.name ?? ''"
+      :installed-count="marketplaceRemoveInstalled" :busy="marketplaceRemoveBusy" :error="marketplaceRemoveError"
+      @confirm="onRemoveMarketplace" @cancel="closeMarketplaceRemove"
+    />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
          以及空对话时改归属。它挂在页面级、position: fixed,锚点是触发元素交上来的视口矩形
          —— 触发点有三处(tab 条的 ＋、引导页主按钮、对话标题栏的归属钮),它自己不认触发点。 -->
@@ -2649,7 +3050,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .workspace-page {
   /* 组件级布局常量，不是全局设计 token；侧栏与窄屏抽屉共享同一宽度。 */
-  --workspace-sidebar-width: 260px;
+  --workspace-sidebar-width: 300px;
   /* 侧栏文件树的**行高**(密集档)。依据 design-language ⑥ 的触达尺寸规则:密集列表 / 树行是
      唯一的收窄例外,且取决于**输入方式** —— ≥1024px 的常驻侧栏面板是桌面指针环境,取 28px
      (判据圆 24px + 安全余量 4px,即相邻圆心距 28 > 24、两圆不相交);≤1023px 侧栏收成抽屉、
@@ -2700,9 +3101,10 @@ onBeforeUnmount(() => {
 /* 侧栏头部:Agent 选择器占满,窄屏抽屉里右侧并排一枚关闭钮。 */
 .sidebar-head { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
 .sidebar-close { flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); padding: 0; font-size: var(--dl-font-size-lg); }
-/* 区块标题:文案居中,左右各一条 1px 虚线。 */
-.sidebar-label { display: flex; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-weight: 500; letter-spacing: var(--dl-tracking-label); white-space: nowrap; }
-.sidebar-label::before, .sidebar-label::after { content: ''; flex: 1 1 0; min-width: 0; border-block-start: var(--dl-border-width) dashed var(--dl-border-base); }
+/* 侧栏视图面板:项目 / 插件共用一块可伸缩的区域。 */
+.sidebar-view-panel { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
+/* Agent 列表加载中 / 失败时占据身份区的位置。 */
+.sidebar-agent-state { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .sidebar-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
 .sidebar-loading { display: grid; gap: var(--dl-space-4); }
 .workspace-projects { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }

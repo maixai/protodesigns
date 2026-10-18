@@ -111,19 +111,19 @@ function formatMessageTime(timestamp: string): string {
 </template>
 
 <style scoped>
-/* 阅读列:宽度上限 = 768 + 两侧 gutter,横向内边距 = 侧向 gutter(正文列封顶 768、两侧各留
-   一档 gutter 作结构性留白,头像凸入其中)。max-width 与 .composer-form 同轴。 */
+/* 阅读列:宽度上限 = --workspace-column-max(会话转录列 48em)+ 两侧 gutter,横向内边距 = 侧向 gutter
+   (正文两侧各留一档 gutter 作结构性留白,头像凸入其中)。max-width 与 .composer-form 同轴。 */
 .transcript-inner { width: 100%; max-width: calc(var(--workspace-column-max) + 2 * var(--workspace-gutter)); margin-inline: auto; padding: var(--dl-space-8) var(--workspace-gutter) 0; display: flex; flex-direction: column; gap: var(--dl-space-8); }
 .transcript-loading { display: grid; gap: var(--dl-space-6); color: var(--dl-text-secondary); }
 /* 消息行 = 头像 + 内容块两栏。头像是固定尺寸的 flex 项、内容块吃满剩余宽;正文因此恒为
-   阅读列宽(768),头像不挤压它 —— 头像被负外边距拉进侧向 gutter(见下)。 */
+   会话转录列宽(48em),头像不挤压它 —— 头像被负外边距拉进侧向 gutter(见下)。 */
 .chat-message { display: flex; align-items: flex-start; min-width: 0; width: 100%; line-height: var(--dl-line-body); }
 .message-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* 用户侧是助手侧的**镜像**(气泡在右、头像在右)—— iMessage / WhatsApp / Slack 的既有 UX。 */
 .chat-message.user { flex-direction: row-reverse; }
 /* 圆形头像:发丝描边 + 中性面,靠**首字**区分(强调色只承担「可操作」语义,不给 Agent 上色)。 */
 .message-avatar { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; inline-size: var(--workspace-avatar-size); block-size: var(--workspace-avatar-size); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); font-size: var(--dl-font-size-xs); font-weight: 500; color: var(--dl-text-primary); }
-/* 负外边距把头像拉进阅读列两侧的 gutter(宽 = 头像 + 间隙),于是正文列宽保持 768 不变。 */
+/* 负外边距把头像拉进阅读列两侧的 gutter(宽 = 头像 + 间隙),于是正文列宽保持 48em 不变。 */
 .chat-message.assistant .message-avatar { margin-inline: calc(-1 * var(--workspace-gutter)) var(--workspace-avatar-gap); background: var(--dl-bg-sunken); }
 .chat-message.user .message-avatar { margin-inline: var(--workspace-avatar-gap) calc(-1 * var(--workspace-gutter)); background: var(--dl-bg-hover); }
 /* 用户气泡:背景 / 圆角 / 内边距落在**内容块**上(而非整行),故头像与气泡彼此独立、互不包裹。 */

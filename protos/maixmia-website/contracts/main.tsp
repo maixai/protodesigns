@@ -196,6 +196,19 @@ enum SessionStatus {
   idle,
 }
 
+// 通知跨 Agent 聚合；已读属于视图状态，不写入实体。
+@summary("AgentNotification")
+@jsonSchema
+model AgentNotification {
+  id: string;
+  agentId: AgentId;
+  projectId: string;
+  sessionId: string;
+  title: string;
+  status: SessionStatus;
+  updatedAt: utcDateTime;
+}
+
 @summary("ChatSession")
 @jsonSchema
 model ChatSession {
@@ -469,6 +482,7 @@ model FileContent {
 @jsonSchema
 model AgentSignal {
   agentId: AgentId;
+  running: int32;       // 未看过的正在输出的会话数
   awaiting: int32;      // 未看过的「等待交互」会话数
   completed: int32;     // 未看过的「响应完成」会话数
 }
@@ -520,6 +534,10 @@ model Surface {
   members: string[];
   // 当前激活的窗体 id。空串 = 无;非空时必须 ∈ members(不变量)。
   activeId: string;
+  // 整块显示区是否被最小化到底栏。为 true 时它**仍留在区域树里**(parentId / axis / weight
+  // 原样保留),只是渲染与空间分配跳过它 —— 恢复时原位置、原权重重新出现,而不是把成员并进兄弟区域。
+  // 根区域不置 true(根始终存在);根的全部页签被收起时由页面显示「全部最小化」空态。
+  minimized: boolean;
 }
 
 // 窗体内容的判别联合:窗体是**通用容器**,内容由 kind 区分。本单元只用到 file
@@ -580,11 +598,32 @@ model WorkspaceWindow {
 // 自己声明,而不是由这张表的键决定。
 // windows 是**数组,顺序即前后层序**(靠后者在上)—— 不用自增 z:自增在多区域下语义会崩,
 // 且本仓层级只有 4 档 token,就地写数值违反「禁止 magic number」。
+// 收起期间保留来源区域、成员顺序与活动项；恢复后删除该记录。
+@summary("MinimizedGroup")
+@jsonSchema
+model MinimizedGroup {
+  id: string;
+  surfaceId: string;
+  projectId: string;
+  name: string;
+  memberIds: string[];
+  lastActiveId: string;
+  // true = 这个组代表**一整块显示区**(而不是某项目的部分 tab)。恢复时把 surface.minimized
+  // 置回 false,让显示区回到原位置;false = 只收起该项目的部分页签,区域本身仍在。
+  isSurface: boolean;
+  // 组是否由「最小化这个显示区」这个动作产生。与 isSurface 分开是因为**根区域**不能标
+  // minimized(它要留在树里承载引导页),它的整区收起会拆成项目组(isSurface: false)。
+  // 恢复时靠它区分:整区来源的组若发现来源区域已有新的可见内容(例如收起后又新建了对话),
+  // 应切出一块新区域与它并排,而不是把新内容一起吞进同一个 tab 区。
+  isArea: boolean;
+}
+
 @summary("WorkspaceLayout")
 @jsonSchema
 model WorkspaceLayout {
   surfaces: Surface[];
   windows: WorkspaceWindow[];
+  groups: MinimizedGroup[];
   // 当前聚焦的窗体 id;空串 = 无(F6 / Esc 的落点)。
   focus: string;
   // 「最近打开」的窗体 id(新的在前,按 id 去重、限量)。关闭 ≠ 删除:关掉的仍留在这里供找回。

@@ -25,8 +25,8 @@ import { chatWindowId, fileBaseName, fileDirName, fileTabKey, parseWindowId } fr
 import type { FileTab } from '../data/windows'
 import { badgeMapOf } from '../data/project-identity'
 import type { ProjectBadge } from '../data/project-identity'
-import { viewportRectOf } from '../data/viewport-rect'
 import { TEAR_OUT_KEYSHORTCUTS, isTearOutShortcut } from '../data/shortcuts'
+import { viewportRectOf } from '../data/viewport-rect'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 
@@ -40,6 +40,7 @@ const props = defineProps<{
   // 当前 Agent 已打开的全部项目 —— 用于解析每段对话 / 每个文件的**归属标识**
   // (项目缩写 + 标识色绑定类 + 悬停里的项目名与路径)。多项目并行时,tab 上必须能看出归属。
   projects: Project[]
+  minimizableProjectCounts: Readonly<Record<string, number>>
   // 下拉的**会话列表**里要隐去的会话 id(视图状态,不进契约):本区域正在显示的那段 + 任何可见的
   // 悬浮对话。判据由页面持有(见 workspace-page 的 switcherExcludedSessionIds)—— 组件只负责滤掉,
   // 因为它只管列表;**tab 条不受影响**(tabSessions 由 order + sessions 全量映射,被隐去的会话
@@ -86,12 +87,12 @@ const props = defineProps<{
   panelId: string
   // 菜单浮层的 id(每块区域各一份,同样按区域区分)。
   menuPanelId: string
-  // ＋ 触发的「项目选择浮层」是否正开着(该 Agent 打开了多个项目时才可能开)。这一块由页面持有,
-  // 组件只把它表达成 aria-expanded —— 触发钮要有 aria-haspopup / aria-expanded 是既定要求。
-  newChatPickerOpen: boolean
 }>()
 
 const emit = defineEmits<{
+  'minimize-project': [projectId: string]
+  // 条上的最小化钮:收起**整块显示区**(不是某个项目的部分 tab)。
+  'minimize-surface': []
   select: [session: ChatSession]
   'select-hit': [hit: ConversationSearchHit]
   'search-input': [value: string]
@@ -100,6 +101,8 @@ const emit = defineEmits<{
   // 新建对话:带上 ＋ 按钮在视口里的矩形 —— 该 Agent 打开了多个项目时,页面据此把项目选择
   // 浮层锚到这个触发点上(归属要让用户拍板,浮层贴着发起它的那枚钮弹出)。
   'new-chat': [origin: WindowRect]
+  // ＋ 菜单里选「打开文件」:带上 ＋ 的视口矩形,页面据此把文件选择浮层锚到它下方。
+  'open-file-picker': [origin: WindowRect]
   close: [id: string]
   // 条上对话**重排**(拖拽 / Ctrl+Shift+PageUp/Down):交出完整的新顺序,页面写回区域成员。
   reorder: [order: string[]]
@@ -129,6 +132,70 @@ interface TabTearDetail {
 }
 
 const { t } = useI18n()
+
+// ---- ＋ 的选择菜单:先问「新建对话还是打开文件」,再走各自的动作 ----
+// 之前 ＋ 只有一个含义(新建对话);加入文件选择后,两种动作都合理,直接把 ＋ 绑死成其中一种
+// 会让另一种变成隐藏功能。故 ＋ 是 disclosure:点开两项,选完即收起。
+// 菜单本身很轻(两行文字),不引入图标:两个动作的词义已经足够区分。
+const addOpen = ref(false)
+const addLabel = computed(() => t.value.workspace.addMenu.label)
+
+function addItems(): HTMLButtonElement[] {
+  return Array.from(addMenuRef.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+}
+
+function closeAdd(restoreFocus: boolean): void {
+  if (!addOpen.value) return
+  addOpen.value = false
+  if (restoreFocus) newChatRef.value?.focus()
+}
+
+function toggleAdd(): void {
+  if (addOpen.value) {
+    closeAdd(true)
+    return
+  }
+  // 与 ▾ 的会话菜单互斥:同一时刻只开一个浮层,免得两层叠在标题行上。
+  close(false)
+  addOpen.value = true
+  void nextTick(() => addItems()[0]?.focus())
+}
+
+// 选「新建对话」:先把焦点交还 ＋(项目选择浮层以 ＋ 为锚点,取消时要能回到它),
+// 再走页面既有的 new-chat 通路(多项目时由页面弹项目选择浮层)。
+function chooseAddConversation(): void {
+  closeAdd(false)
+  newChatRef.value?.focus()
+  emit('new-chat', viewportRectOf(newChatRef.value))
+}
+
+// 选「打开文件」:同样把焦点交还 ＋ —— 文件选择浮层挂载时把当前焦点记为「取消后回到哪里」。
+function chooseAddFile(): void {
+  closeAdd(false)
+  newChatRef.value?.focus()
+  emit('open-file-picker', viewportRectOf(newChatRef.value))
+}
+
+// 菜单键盘:Esc 收起并还焦点;↑ / ↓ / Home / End 在两项之间移动。
+function onAddKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeAdd(true)
+    return
+  }
+  const items = addItems()
+  if (items.length === 0) return
+  const index = items.findIndex((item) => item === document.activeElement)
+  let next = -1
+  if (event.key === 'ArrowDown') next = (index + 1) % items.length
+  else if (event.key === 'ArrowUp') next = (index - 1 + items.length) % items.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = items.length - 1
+  if (next < 0) return
+  event.preventDefault()
+  items[next]?.focus()
+}
 
 // 文件个数变化要重算行的分配(单向定额按「文件数 × 单品上限」给宽)。
 watch(() => props.files.length, () => { measureStrip() })
@@ -199,6 +266,9 @@ function fileChipLabel(tab: FileTab): string | null {
 
 const rootRef = ref<HTMLElement | null>(null)
 const tabsRef = ref<HTMLElement | null>(null)
+// ＋ 的定位上下文(菜单锚点)与菜单浮层;newChatRef 同时是项目 / 文件浮层的锚点来源。
+const addRootRef = ref<HTMLElement | null>(null)
+const addMenuRef = ref<HTMLElement | null>(null)
 const newChatRef = ref<HTMLButtonElement | null>(null)
 const menuTriggerRef = ref<HTMLButtonElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
@@ -276,6 +346,13 @@ interface ProjectGroup {
   badge: ProjectBadge | undefined
   sessions: ChatSession[]
 }
+// 可最小化的项目 = 当前区域里至少有一个 tab 的项目;计数用于按钮文案,
+// 避免组头「本组候选会话数」与「实际会收起的页签数」看起来对不上。
+const minimizableProjectIds = computed(() => Object.keys(props.minimizableProjectCounts))
+// tab 条上的整块显示区最小化:作用对象 = 本区域当前全部可见页签(不按项目拆)。
+const surfaceTabCount = computed(() => Object.values(props.minimizableProjectCounts).reduce((sum, count) => sum + count, 0))
+const minimizeLabel = computed(() => t.value.workspace.dock.minimizeSurfaceLabel.replace('{count}', String(surfaceTabCount.value)))
+watch(surfaceTabCount, () => { measureStrip() })
 const projectGroups = computed<ProjectGroup[]>(() => {
   const groups = new Map<string, ChatSession[]>()
   for (const session of projectSessions.value) {
@@ -283,6 +360,8 @@ const projectGroups = computed<ProjectGroup[]>(() => {
     if (list === undefined) groups.set(session.projectId, [session])
     else list.push(session)
   }
+  // 有文件但没有候选对话的项目也必须有组头入口。
+  for (const projectId of minimizableProjectIds.value) if (!groups.has(projectId)) groups.set(projectId, [])
   return [...groups.entries()].map(([projectId, sessions]) => ({ projectId, badge: badgeOf(projectId), sessions }))
 })
 // 组头文案:{项目名} · {条数}。
@@ -296,6 +375,9 @@ function groupLabel(badge: ProjectBadge | undefined, projectId: string, count: n
 // tab 等宽 + clamp 是把「不出现半截 tab」做成长度确定性保证的手段(CSS 表达不出「先按内容宽、
 // 不够再收缩截断」,这是已知的 CSS 局限)。strip 由 ResizeObserver 观察会话头可用宽度重算。
 const stripWidth = ref(0)
+// 极窄区域(375 下的分屏)放不下第四个常驻控件:此时隐藏条上的最小化钮,
+// 项目组入口仍在 ▾ 菜单里 —— 不能为了一个按钮把整行撑出横向溢出。
+const canShowMinimize = ref(false)
 const tabMin = ref(160)
 const tabMax = ref(240)
 // tab 之间的一档间隙(与 .conversation-tabs 的 gap 同源),算可见数与等宽时要扣掉。
@@ -317,11 +399,15 @@ function measureStrip(): void {
   const stripStyle = tabsRef.value === null ? null : getComputedStyle(tabsRef.value)
   tabGap.value = stripStyle === null ? 4 : Number.parseFloat(stripStyle.columnGap) || 0
   const isNarrow = window.matchMedia('(max-width: 1023px)').matches
-  // 预留:＋ 与菜单钮(各一个紧凑档尺寸)+ 两段间隙;窄屏还有汉堡钮与它的那段间隙。
-  // 条尾控件(＋ / ▾)+ 行内的 gap 段数。文件那一组插在 tablist 与 ＋ 之间,故行里比原先多一段 gap
-  // (tablist↔file 这一段):宽屏共 3 段、窄屏再加汉堡钮那一段。
-  const reserved = target * 2 + gap * 3 + (isNarrow ? target + gap : 0)
   const contentWidth = heading.clientWidth - padStart - padEnd
+  // 先判断常驻控件放不放得下,再按它算预留宽 —— 否则隐藏钮仍占宽,条仍会溢出。
+  canShowMinimize.value = contentWidth >= target * 2 + gap * 3 + (isNarrow ? target + gap : 0) + target + gap
+  // 预留:＋ 与菜单钮(各一个紧凑档尺寸)+ 行内间隙;条上的整组最小化钮可见时再加一个紧凑档尺寸
+  // 与一段间隙;窄屏还有汉堡钮与它的那段间隙。文件那一组插在 tablist 与 ＋ 之间,故行里比原先多一段 gap。
+  const minimizeAllowance = surfaceTabCount.value > 0 && canShowMinimize.value
+    ? target + gap
+    : 0
+  const reserved = target * 2 + gap * 3 + minimizeAllowance + (isNarrow ? target + gap : 0)
   // ---- 与文件那一组**共享同一行** ----
   // 谁也不能去读对方**渲染后**的宽:两组互为对方宽度会互相追着变(实测 375px 下先互相挤成 0、
   // 再一起回弹,浏览器还报 ResizeObserver loop)。故改为**单向定额**:由本组件(手里有顶部行的
@@ -332,13 +418,19 @@ function measureStrip(): void {
   const fileCount = props.files.length
   const fileAllowance = fileCount === 0 ? 0 : Math.min(fileCount * fileTabMax, contentWidth * 0.4)
   heading.style.setProperty('--file-strip-width', `${Math.round(fileAllowance)}px`)
-  stripWidth.value = Math.max(0, contentWidth - reserved - (fileAllowance > 0 ? fileAllowance + gap : 0))
+  // 留 1px 给亚像素取整:极窄分屏(375 切成两块)下 tab 槽的 width 与父盒取整方向不一致,
+  // 会多出 1px 的 documentElement.scrollWidth;不靠 overflow:hidden 兜底(那会吞焦点环)。
+  stripWidth.value = Math.max(0, contentWidth - reserved - (fileAllowance > 0 ? fileAllowance + gap : 0) - 1)
 }
 
 const visibleCount = computed(() => {
   const total = tabSessions.value.length
   if (total === 0) return 0
-  if (stripWidth.value <= 0) return Math.min(total, 1)
+  // 连一个「能收住内容」的 tab 都放不下时不要硬塞:tab 自身的内容 min-content(标题下限 +
+  // 状态槽 + 恒定预留槽)约 72px,硬塞会让它画到 0 宽的槽外、盖住左侧汉堡钮 / 右侧「＋」。
+  // 低于这个下限时把全部对话交给 ▾ 菜单;96px 是 72px 内容下限 + 一点余量。
+  const MIN_RENDERABLE_TAB = 96
+  if (stripWidth.value < MIN_RENDERABLE_TAB) return 0
   // n 个 tab 加 n-1 段间隙要装进 stripWidth:宽度 ≥ tabMin 时最多能放几个。
   const fits = Math.max(1, Math.floor((stripWidth.value + tabGap.value) / (tabMin.value + tabGap.value)))
   return Math.min(total, fits)
@@ -349,8 +441,9 @@ const tabWidth = computed(() => {
   // 等宽 = clamp((可用宽 − 间隙总宽) / 可见数, min, max);但当可用宽连 min 都放不下时(even < min),
   // 取 even —— 否则 tab 会宽过 strip、溢出条盒。min 是「目标」而非硬下限。
   const even = (stripWidth.value - tabGap.value * (visibleCount.value - 1)) / visibleCount.value
-  if (even < tabMin.value) return even
-  return Math.min(tabMax.value, even)
+  // 槽宽取整:分数宽度会让极窄行的右缘落在半像素上,scrollWidth 向上取整后多出 1px。
+  if (even < tabMin.value) return Math.max(0, Math.floor(even))
+  return Math.min(tabMax.value, Math.floor(even))
 })
 
 // 可见 tab:从**打开集**里取最近的前 visibleCount 条;**活动会话永远可见** —— 不在窗口内时用
@@ -359,6 +452,10 @@ const tabWidth = computed(() => {
 const visibleTabs = computed(() => {
   const list = tabSessions.value
   const count = visibleCount.value
+  // 放不下任何一个 tab 时**一个都不渲染**。只靠宽度算 0 不够:下面的「活动 tab 永远可见」
+  // 回退会把它重新塞回来,而 tab 的内容 min-content 会画到 0 宽的槽外,盖住左侧的「＋」。
+  // 此时全部对话交给 ▾ 菜单,内容区仍显示活动对话。
+  if (count === 0) return []
   if (count >= list.length) return list
   const window = list.slice(0, count)
   const active = list.find((session) => session.id === props.activeId)
@@ -831,7 +928,11 @@ function close(restoreFocus: boolean): void {
 
 function togglePanel(): void {
   if (props.open) close(false)
-  else requestOpen(true)
+  else {
+    // ▾ 菜单与 ＋ 的选择菜单互斥。
+    closeAdd(false)
+    requestOpen(true)
+  }
 }
 
 function onSelect(session: ChatSession): void {
@@ -881,12 +982,16 @@ function onMenuKeydown(event: KeyboardEvent): void {
 
 function onFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget
+  // ＋ 选择菜单:焦点离开展开区就收起;回到 ＋ 自身不算离开。
+  if (!(next instanceof Node && addRootRef.value?.contains(next) === true)) closeAdd(false)
   if (next instanceof Node && rootRef.value?.contains(next) === true) return
   close(false)
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
   const target = event.target
+  // ＋ 选择菜单:点它外面(含标题行其它位置)就收起。
+  if (!(target instanceof Node && addRootRef.value?.contains(target) === true)) closeAdd(false)
   if (target instanceof Node && rootRef.value?.contains(target) === true) return
   close(false)
 }
@@ -1025,33 +1130,67 @@ onBeforeUnmount(() => {
     <!-- 文件那一组(toolbar + aria-pressed 切换按钮)由页面经默认插槽交进来,位置固定在
          对话 tablist 之后、＋ 之前 —— 「先对话、后文件」的分组次序因此是结构决定的,不靠 CSS 调序。 -->
     <slot />
-    <!-- ＋ / 菜单钮**每块区域各一份** —— 每块区域功能完全一样(不再有「主区域」这一档)。
-         全页唯一的地标与播报区(h1 / tab 重排 aria-live / role=status)住在页面里,不在这里:
-         空区域消失后根区域可能根本没有会话头,住在会话头里的地标会跟着一起消失。
-         ＋ 是「新建对话」的触发点,也是项目选择浮层的锚点(多项目时浮层贴它下方弹出),
-         故带 aria-haspopup / aria-expanded 这对 disclosure 属性。 -->
-    <button
-      ref="newChatRef"
-      class="conversation-icon-button"
-      :disabled="disabled"
-      :aria-label="projects.length === 0 ? t.workspace.openProject : t.workspace.newChat"
-      :aria-haspopup="projects.length === 0 ? 'dialog' : 'listbox'"
-      :aria-expanded="projects.length > 0 ? newChatPickerOpen : undefined"
-      data-project-picker-trigger
-      @click="emit('new-chat', viewportRectOf(newChatRef))"
-    ><span aria-hidden="true">＋</span></button>
-    <button
-      ref="menuTriggerRef"
-      type="button"
-      class="conversation-icon-button conversation-menu__trigger"
-      :aria-expanded="open"
-      :aria-controls="menuPanelId"
-      :aria-label="menuTriggerLabel"
-      @click="togglePanel"
-    >
-      <svg class="conversation-menu__caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
-      <span v-if="menuBadge" class="conversation-menu__count" :data-level="menuBadge.level" aria-hidden="true">{{ menuBadge.text }}</span>
-    </button>
+    <!-- ＋:不再是单一动作,而是「新建对话 / 打开文件」二选一。点击打开一个两行的轻菜单,
+         选完即收起;菜单锚在 ＋ 自己身上,右缘对齐(＋ 靠近标题行右侧,左对齐会越出窄屏)。 -->
+    <div ref="addRootRef" class="workspace-tab-add">
+      <button
+        ref="newChatRef"
+        type="button"
+        class="conversation-icon-button workspace-tab-add__trigger"
+        :disabled="disabled"
+        :aria-label="addLabel"
+        :title="addLabel"
+        aria-haspopup="menu"
+        :aria-expanded="addOpen"
+        :aria-controls="`${menuPanelId}-add`"
+        @click="toggleAdd"
+      ><span aria-hidden="true">＋</span></button>
+      <Transition name="add-menu-pop">
+        <div
+          v-if="addOpen"
+          :id="`${menuPanelId}-add`"
+          ref="addMenuRef"
+          class="workspace-tab-add__menu"
+          role="menu"
+          :aria-label="addLabel"
+          @keydown="onAddKeydown"
+        >
+          <button type="button" class="workspace-tab-add__item" role="menuitem" :disabled="disabled" @click="chooseAddConversation">
+            {{ t.workspace.addMenu.conversation }}
+          </button>
+          <button type="button" class="workspace-tab-add__item" role="menuitem" :disabled="disabled" @click="chooseAddFile">
+            {{ t.workspace.addMenu.file }}
+          </button>
+        </div>
+      </Transition>
+    </div>
+    <!-- 右侧工具簇:整组最小化 + ▾。整簇用 auto 外边距钉到会话头右缘 —— 菜单钮仍是
+         最右一项(既有「▾ 钉右缘」的布局约定不变),最小化钮紧贴在它左侧。
+         最小化只用一个横线图标 + 可访问名,不占标签文字宽度。 -->
+    <div class="conversation-heading__actions">
+      <button
+        v-if="surfaceTabCount > 0 && canShowMinimize"
+        type="button"
+        class="conversation-icon-button conversation-minimize"
+        :aria-label="minimizeLabel"
+        :title="minimizeLabel"
+        @click="emit('minimize-surface')"
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 12h12" /></svg>
+      </button>
+      <button
+        ref="menuTriggerRef"
+        type="button"
+        class="conversation-icon-button conversation-menu__trigger"
+        :aria-expanded="open"
+        :aria-controls="menuPanelId"
+        :aria-label="menuTriggerLabel"
+        @click="togglePanel"
+      >
+        <svg class="conversation-menu__caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        <span v-if="menuBadge" class="conversation-menu__count" :data-level="menuBadge.level" aria-hidden="true">{{ menuBadge.text }}</span>
+      </button>
+    </div>
     <Transition name="conversation-menu-pop">
       <div
         v-if="open"
@@ -1136,7 +1275,7 @@ onBeforeUnmount(() => {
             <p v-else-if="sessionsStatus === 'empty'" class="conversation-hint">{{ t.workspace.sessionsEmpty }}</p>
             <!-- 会话都在显示中时,列表会被过滤空(见 excludedSessionIds)—— 那是正常态,给一句说明,
                  而不是留一片空白。它与 sessionsEmpty 不是一回事:那个是「这个项目还没有对话」。 -->
-            <p v-else-if="menuSessions.length === 0" class="conversation-hint">{{ t.workspace.sessionsAllDisplayed }}</p>
+            <p v-else-if="menuSessions.length === 0 && minimizableProjectIds.length === 0" class="conversation-hint">{{ t.workspace.sessionsAllDisplayed }}</p>
             <template v-else>
               <section v-if="awaitingSessions.length > 0" class="conversation-group">
                 <h2 class="conversation-group__title">{{ groupTitle(t.workspace.awaitingGroup, awaitingSessions.length) }}</h2>
@@ -1160,10 +1299,10 @@ onBeforeUnmount(() => {
                 v-for="group in projectGroups" :key="group.projectId"
                 class="conversation-group" :class="group.badge?.identityClass"
               >
-                <h2 class="conversation-group__title">
-                  <span class="conversation-group__dot" aria-hidden="true" />
-                  {{ groupLabel(group.badge, group.projectId, group.sessions.length) }}
-                </h2>
+                <div class="conversation-group__heading">
+                  <h2 class="conversation-group__title"><span class="conversation-group__dot" aria-hidden="true" />{{ groupLabel(group.badge, group.projectId, group.sessions.length) }}</h2>
+                  <button v-if="minimizableProjectIds.includes(group.projectId)" type="button" class="conversation-group__minimize" :data-project-id="group.projectId" @click="emit('minimize-project', group.projectId); close(false)">{{ t.workspace.conversationGroupMinimize.replace('{count}', String(minimizableProjectCounts[group.projectId] ?? 0)) }}</button>
+                </div>
                 <button
                   v-for="session in group.sessions"
                   :key="session.id"
@@ -1205,6 +1344,58 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--workspace-tab-gap);
   overflow: visible;
+}
+
+/* ＋ 的选择菜单:＋ 本身仍是紧凑导航行的图标钮(32×32),外面这层只提供定位上下文。
+   菜单右缘对齐 ＋ 的右缘 —— ＋ 靠近标题行右侧,左对齐会在 375 档越出视口。 */
+.workspace-tab-add {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.workspace-tab-add__menu {
+  position: absolute;
+  inset-block-start: calc(100% + var(--dl-space-1));
+  inset-inline-end: 0;
+  z-index: var(--dl-z-overlay);
+  min-inline-size: 180px;
+  display: grid;
+  gap: 1px;
+  padding: var(--dl-space-1);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-xl);
+  background: var(--dl-bg-elevated);
+  box-shadow: var(--dl-shadow-lg);
+}
+
+/* 菜单行:与其它下拉行同族(紧凑列表,36px 控件高),文字左对齐。 */
+.workspace-tab-add__item {
+  min-block-size: var(--dl-control-height);
+  padding-inline: var(--dl-space-3);
+  border-radius: var(--dl-radius-sm);
+  color: var(--dl-text-primary);
+  font-size: var(--dl-font-size-sm);
+  line-height: var(--dl-line-snug);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.workspace-tab-add__item:hover:not(:disabled) { background: var(--dl-bg-hover); }
+.workspace-tab-add__item:active:not(:disabled) { background: var(--dl-accent-soft); }
+.workspace-tab-add__item:focus-visible { box-shadow: var(--dl-focus-ring); }
+.workspace-tab-add__item:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
+
+.add-menu-pop-enter-active,
+.add-menu-pop-leave-active {
+  transition: opacity var(--dl-duration-fast) var(--dl-ease-standard), transform var(--dl-duration-fast) var(--dl-ease-standard);
+}
+
+.add-menu-pop-enter-from,
+.add-menu-pop-leave-to {
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--dl-space-1)));
 }
 
 /* 槽位:tab 的 flex 项外壳(宽度由脚本按可用宽写在槽位上,tab 填满它),同时是关闭钮的定位上下文。
@@ -1525,15 +1716,44 @@ onBeforeUnmount(() => {
   background: var(--dl-bg-sunken);
 }
 
+/* 极窄显示区降级:先藏掉 ＋ 与最小化钮(▾ 是唯一的会话恢复入口,保留);
+   再窄到连 ▾ 都放不下时整行控件全部让位 —— 不能让固定宽度的按钮把区域撑出文档级横向滚动。 */
+@container (max-width: 180px) {
+  .conversation-icon-button:not(.conversation-menu__trigger) { display: none; }
+}
+@container (max-width: 100px) {
+  .conversation-menu__trigger { display: none; }
+}
+
+/* 条上的整组最小化钮:复用 ＋ / 菜单钮的紧凑图标钮配方,只画一条横线 ——
+   语义由 aria-label / title 承担,不给 tab 条增加文字宽度。 */
+.conversation-minimize svg {
+  inline-size: var(--dl-icon-md);
+  block-size: var(--dl-icon-md);
+}
+
+.conversation-minimize svg path {
+  stroke: currentColor;
+  stroke-width: var(--dl-icon-stroke);
+  vector-effect: non-scaling-stroke;
+}
+
+/* 右侧工具簇:整组最小化 + ▾。整簇用 auto 外边距钉到会话头右缘;簇内间隙与头部行一致,
+   故 measureStrip 的预留仍按「两个 32px 控件 + 两段间隙」计。 */
+.conversation-heading__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--dl-space-3);
+  margin-inline-start: auto;
+}
+
 /* 菜单钮:caret + 绝对定位的计数徽标(徽标不进盒模型,故菜单钮恒为 32×32 —— 溢出计算据此
-   预留固定宽度,不受徽标文字长短影响)。
-   `margin-inline-start: auto` 把菜单钮**钉到会话头右缘**(Salt 的 space-between 工具区;
-   SAP Fiori:头部按钮一律右对齐)。auto 外边距只吸收剩余空间 —— 它不改变 tab 条可用宽
-   (measureStrip 的算法不受影响),也不挪动紧贴 strip 的 ＋:strip 满时 auto margin 为 0。
-   空出的那段宁可留白:它是「右侧留给后续放东西」的位置,不塞 spacer。 */
+   预留固定宽度,不受徽标文字长短影响)。它由外层 .conversation-heading__actions 钉到右缘;
+   auto 外边距只吸收剩余空间 —— 它不改变 tab 条可用宽(measureStrip 的算法不受影响),
+   也不挪动紧贴 strip 的 ＋:strip 满时 auto margin 为 0。 */
 .conversation-menu__trigger {
   position: relative;
-  margin-inline-start: auto;
 }
 
 .conversation-menu__caret {
@@ -1548,13 +1768,13 @@ onBeforeUnmount(() => {
   vector-effect: non-scaling-stroke;
 }
 
-/* 计数徽标:挂在菜单钮的**右上角内侧**,只向右侧溢出一点、不向上越出头部的上边缘
-   (头部上内边距只有一档 4px,旧值 inset-block-start:-4px 会把徽标顶到头部上边缘)。
+/* 计数徽标:挂在菜单钮的**右上角内侧**。它不向右侧溢出 —— 菜单钮已经钉在会话头内容右缘,
+   再外溢会在 375 视口多出 0.5–1px 的 document scrollWidth(实测 375 分屏)。
    徽标不进盒模型,故菜单钮恒为 32×32 —— 溢出计算据此预留固定宽度,不受徽标文字长短影响。 */
 .conversation-menu__count {
   position: absolute;
   inset-block-start: 0;
-  inset-inline-end: calc(-1 * var(--dl-space-1));
+  inset-inline-end: 0;
   min-width: var(--dl-icon-sm);
   padding: 0 var(--dl-border-width);
   border-radius: var(--dl-radius-pill);
@@ -1726,6 +1946,11 @@ onBeforeUnmount(() => {
   overscroll-behavior: contain;
 }
 
+.conversation-group__heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
+.conversation-group__minimize { min-height: var(--dl-target-size); padding: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.conversation-group__minimize:hover { background: var(--dl-bg-hover); }
+.conversation-group__minimize:focus-visible { box-shadow: var(--dl-focus-ring); }
+.conversation-group__minimize:active { background: var(--dl-accent-soft); }
 .conversation-group {
   display: flex;
   flex-direction: column;
@@ -1881,6 +2106,11 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   /* 重排仍然发生,只去掉让位 / 跟手的位移过渡(降级不取消功能)。 */
   .tab-slot {
+    transition: none;
+  }
+
+  .add-menu-pop-enter-active,
+  .add-menu-pop-leave-active {
     transition: none;
   }
 

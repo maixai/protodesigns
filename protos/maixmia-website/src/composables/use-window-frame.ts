@@ -64,6 +64,9 @@ export interface WindowFrameOptions {
   onTogglePlacement: () => void
   // 「回到底部」钮的预留高度是否参与默认几何(文件窗 true;对话窗 false,保持既有默认几何)。
   composerJumpReserve?: boolean
+  // 默认宽度所用的内容列上限(px)。文件窗用它保住「够做并排 diff」的默认宽度;
+  // 不传则跟随 --workspace-column-max(正文阅读列 35em)。
+  defaultColumnMax?: () => number
   // 根元素宽度变化(容器查询的驱动方,如文件窗的并排降级)。
   onRootWidth?: (width: number) => void
   // 向外抛的事件(由具体窗体接到自己的 defineEmits 上)。
@@ -95,6 +98,8 @@ export interface WindowFrameApi {
   isDocked: ComputedRef<boolean>
   // 是否已有显式几何(复位 / 停靠态为 false)—— 供 data 属性表达「当前用的是默认几何」。
   hasExplicitRect: ComputedRef<boolean>
+  // 本次挂载是否真的跑过 FLIP(测试与 CSS 钩子用;reduced-motion 下恒为 false)。
+  hasFlipped: Ref<boolean>
   isMoving: ComputedRef<boolean>
   isDragging: Ref<boolean>
   isResizing: Ref<boolean>
@@ -144,8 +149,11 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
   const panelRect = ref<PanelRect | null>(null)
   const isDragging = ref(false)
   const isResizing = ref(false)
-  // FLIP 的 transform 位移('' = 无位移)。
+  // FLIP 的 transform 位移 + 缩放('' = 无)。
   const flipStyle = ref('')
+  // FLIP 期间的整体透明度('' = 无):让窗体从来源处「浮出 / 沉入」而不是硬切。
+  const flipOpacity = ref('')
+  const hasFlipped = ref(false)
   // 视口尺寸变化时自增,驱动默认几何重算(computed 里读它)。
   const viewportNonce = ref(0)
   const viewportMargin = ref(24)
@@ -218,7 +226,7 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
     return defaultRect({
       box,
       margin,
-      columnMax: resolveLength('--workspace-column-max') || 768,
+      columnMax: options.defaultColumnMax?.() ?? (resolveLength('--workspace-column-max') || 720),
       gutter: resolveLength('--workspace-gutter') || 0,
       composer: composerRect === null ? null : { left: composerRect.left, top: composerRect.top, width: composerRect.width },
       headingBottom: headingRect === null ? null : headingRect.bottom,
@@ -244,10 +252,15 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
   // FLIP 的位移与几何共用这一个通道。
   const rectStyle = computed<string>(() => {
     const flip = flipStyle.value === '' ? '' : `transform:${flipStyle.value}`
-    if (isDocked.value) return flip
-    const rect = effectiveRect.value
-    const geometry = [`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`].join(';')
-    return flip === '' ? geometry : `${geometry};${flip}`
+    const opacity = flipOpacity.value === '' ? '' : `opacity:${flipOpacity.value}`
+    const parts: string[] = []
+    if (!isDocked.value) {
+      const rect = effectiveRect.value
+      parts.push(`left:${rect.x}px`, `top:${rect.y}px`, `width:${rect.w}px`, `height:${rect.h}px`)
+    }
+    if (flip !== '') parts.push(flip)
+    if (opacity !== '') parts.push(opacity)
+    return parts.join(';')
   })
 
   // 当前几何(契约形状),供页面把「吸附前的悬浮矩形」当作停靠面板 FLIP 的来源。
@@ -269,7 +282,9 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
   }
 
   // FLIP:先把窗体**退**到来源矩形(此刻不加过渡 —— 与目标状态同帧写入,浏览器不会从中途补间),
-  // 下一帧起再过渡回自身落点。只动 transform,不碰任何布局属性。
+  // 下一帧起再过渡回自身落点。只动 transform / opacity,不碰任何布局属性。
+  // 缩放夹在 [0.9, 1.06]:完全按来源/目标尺寸比缩放会让 160px 的 tab 变成 1/3 大小的窗体,
+  // 观感上是「抽帧放大」而不是「从条上长出来」;夹紧后位移负责空间连线,缩放只做轻微深度提示。
   // reduced-motion 下**整段跳过**:位移是纯装饰,不做才是尊重用户偏好(状态切换照旧发生)。
   function playFlip(): void {
     const from = options.flipFrom()
@@ -277,13 +292,19 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
     if (from === null || element === null) return
     if (window.matchMedia(REDUCED_MOTION_QUERY).matches) return
     const rect = element.getBoundingClientRect()
+    if (rect.width <= 1 || rect.height <= 1) return
     const dx = Math.round(from.x - rect.x)
     const dy = Math.round(from.y - rect.y)
-    if (dx === 0 && dy === 0) return
-    flipStyle.value = `translate(${dx}px, ${dy}px)`
+    const scaleX = Math.min(1.04, Math.max(0.86, from.width / rect.width))
+    const scaleY = Math.min(1.04, Math.max(0.86, from.height / rect.height))
+    if (dx === 0 && dy === 0 && scaleX === 1 && scaleY === 1) return
+    hasFlipped.value = true
+    flipStyle.value = `translate(${dx}px, ${dy}px) scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`
+    flipOpacity.value = '0.55'
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         flipStyle.value = ''
+        flipOpacity.value = ''
       })
     })
   }
@@ -544,6 +565,7 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
     rectStyle,
     isDocked,
     hasExplicitRect,
+    hasFlipped,
     isMoving,
     isDragging,
     isResizing,

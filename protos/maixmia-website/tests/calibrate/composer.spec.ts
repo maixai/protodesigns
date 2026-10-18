@@ -289,7 +289,7 @@ test('侧栏文件:拖入有落点反馈且出现路径芯片;点「加入当前
   // 拖拽:在页面上下文里造一个 DataTransfer,走 dragstart → dragover → dragleave → dragover → drop。
   // 每步之间等一帧,让 Vue 把落点反馈落到 DOM。
   const drag = await page.evaluate(async () => {
-    const frame = (): Promise<void> => new Promise((resolve) => { requestAnimationFrame(() => resolve()) })
+    const frame = (): Promise<void> => new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())) })
     const row = Array.from(document.querySelectorAll('.entry-row')).find((element) => element.querySelector('.entry-name')?.textContent === 'main.ts')
     const source = row?.querySelector('.entry-row__button--file')
     const target = document.querySelector('.composer-form')

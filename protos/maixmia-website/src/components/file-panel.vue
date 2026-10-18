@@ -74,6 +74,8 @@ import DliIcon from './dl-icon.vue'
 
 const props = defineProps<{
   state: FilePanelState
+  // 草稿由页面按窗体保存，最小化卸载视图不会丢掉编辑内容。
+  draft: string | null
   // 该窗体的**复合 id**(file://<项目>/<相对路径>)——用作 DOM 选中钩子(遮挡判定按它选,
   // 保证同名文件跨项目时「选到的一定是那一个窗口」)。
   windowId: string
@@ -108,6 +110,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  'update:draft': [value: string]
   close: []
   retry: []
   resolve: [allowed: boolean]
@@ -179,7 +182,7 @@ const renderedHtml = ref('')
 // 内容变了(换文件 / 重试)就复位折叠、草稿与视图 —— 这些都属于「这一次看这个文件」。
 watch(() => [props.path, props.state] as const, () => {
   expandedFolds.value = new Set()
-  sourceDraft.value = content.value?.source ?? ''
+  sourceDraft.value = props.draft ?? content.value?.source ?? ''
   // 换文件 / 内容落定后回到该类型的默认档(此时才知道 kind;加载中 kind 为 null,先不动)。
   if (kind.value !== null) pane.value = defaultPane.value
   refreshRender()
@@ -212,7 +215,7 @@ useCodeEditor({
   getLanguage: () => content.value?.language ?? 'text',
   getPath: () => props.path,
   getWrap: () => isWrap.value,
-  onChange: (value) => { sourceDraft.value = value },
+  onChange: (value) => { sourceDraft.value = value; emit('update:draft', value) },
 })
 
 // 停靠模式:填满区域内容区,不能拖动 / 缩放(几何由容器给出),标题栏双击 / 头部按钮做「还原悬浮」。
@@ -252,6 +255,9 @@ const frame = useWindowFrame({
   onTogglePlacement: togglePlacement,
   // 文件窗的默认几何要避开输入区上方那条「回到底部」钮(它只在用户上滚时才渲染,不能靠量它)。
   composerJumpReserve: true,
+  // 文件不是正文:默认宽度保持 768 + 两侧 gutter,确保首屏就能用并排 diff;
+  // 正文 / 输入坞仍跟随 --dl-measure(35em)。
+  defaultColumnMax: () => 768,
   // 容器查询的驱动方:窗体自己的宽度决定并排 diff 是否可用。
   onRootWidth: (width) => {
     canSideBySide.value = width >= SIDE_BY_SIDE_MIN_WIDTH
@@ -370,6 +376,7 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
     :data-pane="pane"
     :data-view="effectiveView"
     :data-mode="mode"
+    :data-flipped="frame.hasFlipped.value ? 'true' : undefined"
     :data-default-geometry="frame.hasExplicitRect.value ? 'false' : 'true'"
     :data-focused="isFocused ? 'true' : 'false'"
     :data-window-id="windowId"

@@ -136,6 +136,7 @@ const projectPath = computed(() => badge.value?.path ?? '')
     role="dialog"
     :aria-label="t.workspace.chatWindow.label"
     data-mode="floating"
+    :data-flipped="frame.hasFlipped.value ? 'true' : undefined"
     :data-window-id="windowId"
     :data-session-id="sessionId"
     :data-focused="isFocused ? 'true' : 'false'"

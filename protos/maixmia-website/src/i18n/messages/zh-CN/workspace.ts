@@ -9,18 +9,53 @@ export const workspace = {
     filterConversations: '对话',
     filterFiles: '文件',
   },
-  // 侧栏 Agent 选择器:触发钮的完整名走 agents 表,这里只给弹层的可访问名与当前项标记词。
-  // 选择器表达的是「当前在哪个 Agent 下工作」——它决定侧栏能看到哪些项目。
-  // (选择器本身已移到底部的 Agent 栏,agentSelector 现用作那条标签条的 tablist 可访问名。)
-  agentSelector: '切换 Agent',
-  agentSelected: '已选',
-  // Agent 栏(工作台底栏):三个 Agent 的标签条 + 放不下时的溢出菜单。
-  // tablist 的可访问名复用 agentSelector;这里只给溢出菜单钮的名字与它的收起计数补充。
-  agentBar: {
-    menu: '全部 Agent',
-    collapsed: '{count} 个已收起',
+  // ＋ 的选择菜单:先选「新建对话」还是「打开文件」,再走各自的动作。
+  // label 是触发钮与菜单的可访问名;两个选项是菜单行的可见文字。
+  addMenu: {
+    label: '新建对话或打开文件',
+    conversation: '新建对话',
+    file: '打开文件',
   },
-  // 侧栏:Agent 工作区面板,其下是项目区(项目列表 + 打开项目),不再是工作区文件。
+  // 文件选择浮层:搜索框 + 按项目展开的文件树。
+  filePicker: {
+    title: '打开文件',
+    search: '搜索文件',
+    searchPlaceholder: '按文件名或路径搜索',
+    tree: '项目文件',
+    results: '搜索结果',
+    loading: '正在加载文件…',
+    error: '文件列表加载失败',
+    retry: '重试',
+    noProjects: '还没有打开的项目',
+    openProject: '打开项目',
+    empty: '这些项目里还没有文件',
+    noMatches: '没有匹配的文件',
+    projectCount: '{count} 个文件',
+    openFile: '打开「{name}」',
+    hint: '↑↓ 选择 · Enter 打开 · Esc 关闭',
+    opened: '已打开「{name}」',
+  },
+  agentSwitcher: {
+    label: '切换 Agent', current: '当前', running: '运行中 {count}', awaiting: '待你 {count}', idle: '空闲', menu: '全部 Agent', badge: '{count} 条未查看',
+  },
+  dock: {
+    label: '工作区底栏', empty: '没有最小化的页面', minimizedRegion: '当前 Agent 的页面', restore: '恢复「{name}」', restoreMember: '恢复并打开「{name}」',
+    closeGroup: '关闭这一组', members: '组内页面', groupCount: '{count} 个页签',
+    minimizeSurfaceLabel: '最小化这个显示区（{count} 个页签）',
+    minimizedAnnounce: '已最小化「{name}」（{count} 个页签）', restoredAnnounce: '已恢复「{name}」（{count} 个页签）', closedGroupAnnounce: '已关闭「{name}」',
+  },
+  notifications: {
+    label: '通知', title: '通知中心', scope: '全部 Agent', globalRegion: '全局通知', empty: '没有新通知', awaiting: '等待你', completed: '已完成', badge: '{count} 条待处理', badgeDone: '{count} 条已完成', badgeTotal: '共 {count} 条', open: '打开「{title}」',
+    loading: '正在加载通知…', error: '通知加载失败',
+  },
+  // 底栏右端的全局设置:齿轮图标打开的面板。语言是真正影响全局的设置;
+  // 通知中心同置此处(通知是全局的,和设置一样不属于某个 Agent)。
+  settings: {
+    label: '全局设置',
+    title: '全局设置',
+    language: '语言',
+  },
+  conversationGroupMinimize: '最小化 {count} 个页签',
   workspacePanel: 'Agent 工作区',
   openSidebar: '打开侧栏',
   closeSidebar: '关闭侧栏',
@@ -422,6 +457,13 @@ export const workspace = {
   agents: {    planning: '规划助手',
     research: '研究助手',
     writing: '写作助手',
+  },
+  // Agent 的一句话职责:侧栏选择器第二行与菜单选项的次要行。它回答「这个 Agent 擅长什么」,
+  // 与名称一起构成「身份 + 用途」的两行结构(workspace switcher 的通行做法)。
+  agentRoles: {
+    planning: '拆解任务与推进节奏',
+    research: '查资料与整理发现',
+    writing: '起草、改写与统一文风',
   },
   messages: {
     weeklyUser1: 'Mia，帮我整理本周的项目进展。我们完成了登录流程和通知原型，知识库整理还没启动。周五要做一次团队演示。',

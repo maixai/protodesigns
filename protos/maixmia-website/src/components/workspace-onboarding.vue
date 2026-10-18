@@ -35,7 +35,7 @@ const primaryRef = ref<HTMLButtonElement | null>(null)
 <template>
   <section class="onboarding">
     <div class="onboarding__block">
-      <h2 class="onboarding__title">{{ t.workspace.onboarding.title }}</h2>
+      <p class="onboarding__title">{{ t.workspace.onboarding.title }}</p>
       <p class="onboarding__body">{{ hasProjects ? t.workspace.onboarding.body : t.workspace.newChatNeedProject }}</p>
       <!-- 唯一的主行动:与每块区域 tab 条上的 ＋ 同一个动作。大号档(44px 触达)因为它落在
            触屏可及的区域里,且是这个状态的唯一主按钮。与 ＋ 一样带 disclosure 属性 ——

@@ -250,6 +250,52 @@ async function dragTabToRightEdge(page: Page, tab: Locator): Promise<void> {
 
 const SURFACES = '.conversation[data-surface-id]'
 
+test('最小化左侧根显示区:右侧子区域扩展占满,不出现创建会话引导', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForReady(page)
+  await dragTabToRightEdge(page, page.locator('.tab-slot').first())
+  await expect(page.locator(SURFACES), '切分后两块区域').toHaveCount(2)
+  const panes = page.locator(SURFACES)
+  const leftWidth = (await panes.nth(0).boundingBox())?.width ?? 0
+  // 收起左侧(根区域)自身的页签:根区域不置 minimized,但自身内容区没有可见成员时
+  // 不应再渲染(否则会显示创建会话引导页,把空间又占回去);右侧子区域应吃满整行。
+  await panes.nth(0).locator('.conversation-minimize').click()
+  await expect(page.locator(SURFACES), '只剩右侧显示区').toHaveCount(1)
+  await expect(page.locator('.guide-shell'), '不显示创建会话引导').toHaveCount(0)
+  const rightWidth = (await page.locator(SURFACES).first().boundingBox())?.width ?? 0
+  expect(rightWidth, '右侧区域扩展到原左侧的空间').toBeGreaterThan(leftWidth)
+  await expect(page.locator('.workspace-dock__chip')).toHaveCount(1)
+  // 恢复:左侧根区域自身内容区回来,重新成为两块。
+  await page.locator('.workspace-dock__restore').click()
+  await expect(page.locator(SURFACES), '恢复为两块显示区').toHaveCount(2)
+})
+
+test('最小化切分区域里的整块显示区:释放空间,恢复时回到原位置而不是并进兄弟区域', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForReady(page)
+  await dragTabToRightEdge(page, page.locator('.tab-slot').nth(1))
+  await expect(page.locator(SURFACES), '切分后两块区域').toHaveCount(2)
+  const panes = page.locator(SURFACES)
+  const rightTab = panes.nth(1).locator('.conversation-tab')
+  await expect(rightTab).toHaveCount(1)
+  const rightTabId = await rightTab.getAttribute('data-tab-id')
+  expect(rightTabId).not.toBeNull()
+  // 收起右侧整块显示区 → 它从渲染里消失、空间让给左边;底栏出现一个整区条目。
+  await panes.nth(1).locator('.conversation-minimize').click()
+  await expect(page.locator(SURFACES), '整块显示区释放空间').toHaveCount(1)
+  await expect(page.locator('.workspace-dock__chip'), '整区条目仍在底栏').toHaveCount(1)
+  await expect(page.locator('.workspace-dock__chip')).toContainText('weekly-report')
+  // 恢复:右侧显示区回到**原位置**(surface 仍留在区域树里,parentId / weight 未动),
+  // 不是把 roadmap 并进左边那块区域。
+  await page.locator('.workspace-dock__restore').click()
+  await expect(page.locator('.workspace-dock__chip')).toHaveCount(0)
+  await expect(page.locator(SURFACES), '恢复为两块显示区').toHaveCount(2)
+  await expect(page.locator(SURFACES).nth(1).locator(`.conversation-tab[data-tab-id="${rightTabId ?? ''}"]`), '原 tab 回到右侧显示区').toHaveCount(1)
+  await expect(page.locator(SURFACES).nth(0).locator(`.conversation-tab[data-tab-id="${rightTabId ?? ''}"]`), '没有被并进左侧').toHaveCount(0)
+})
+
 test('拖 tab 到区域右缘 → 沿该边切出一块新区域;两块各显示各自的 active 成员', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -274,8 +320,10 @@ test('拖 tab 到区域右缘 → 沿该边切出一块新区域;两块各显示
   await expect(separator).toHaveCount(1)
   await expect(separator).toHaveAttribute('role', 'separator')
   await expect(separator).toHaveAttribute('aria-orientation', 'vertical')
-  await expect(separator).toHaveAttribute('aria-valuemin', '10')
-  await expect(separator).toHaveAttribute('aria-valuemax', '90')
+  const separatorMin = Number(await separator.getAttribute('aria-valuemin'))
+  const separatorMax = Number(await separator.getAttribute('aria-valuemax'))
+  expect(separatorMin).toBeGreaterThanOrEqual(10)
+  expect(separatorMax).toBe(100 - separatorMin)
   await expect(separator).toHaveAttribute('aria-valuenow', '50')
   await expect(separator).toHaveAttribute('tabindex', '0')
 })
@@ -312,13 +360,42 @@ test('分隔线方向键 / Home / End:改权重并真的改变两块区域的宽
   await page.keyboard.press('ArrowLeft')
   await expect(separator).toHaveAttribute('aria-valuenow', '45')
   await expect.poll(ratio, { message: '左侧区域变窄' }).toBeCloseTo(0.45, 1)
-  // Home / End 到极值(下限 10% / 上限 90%)。
+  // Home / End 到极值:下限被 320px 的最小可读宽度夹住(不再是固定的 10%)。
+  const min = Number(await separator.getAttribute('aria-valuemin'))
+  const max = Number(await separator.getAttribute('aria-valuemax'))
+  expect(min).toBeGreaterThanOrEqual(10)
+  expect(max).toBe(100 - min)
   await page.keyboard.press('Home')
-  await expect(separator).toHaveAttribute('aria-valuenow', '10')
-  await expect.poll(ratio, { message: '左侧区域缩到 10%' }).toBeCloseTo(0.1, 1)
+  await expect(separator).toHaveAttribute('aria-valuenow', String(min))
+  await expect.poll(ratio, { message: '左侧区域缩到最小可读宽度' }).toBeCloseTo(min / 100, 1)
   await page.keyboard.press('End')
-  await expect(separator).toHaveAttribute('aria-valuenow', '90')
-  await expect.poll(ratio, { message: '左侧区域撑到 90%' }).toBeCloseTo(0.9, 1)
+  await expect(separator).toHaveAttribute('aria-valuenow', String(max))
+  await expect.poll(ratio, { message: '左侧区域撑到最大' }).toBeCloseTo(max / 100, 1)
+})
+
+test('缩窄窗口后分栏不会低于 320px:存储的百分比失配时自动转为纵向堆叠', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForReady(page)
+  await dragTabToRightEdge(page, page.locator('.tab-slot').first())
+  const separator = page.locator('.split-separator')
+  await separator.focus()
+  await page.keyboard.press('Home')
+  const leftAtWide = await page.locator(SURFACES).first().boundingBox()
+  expect(leftAtWide?.width ?? 0, '1600 下最小栏仍 ≥320').toBeGreaterThanOrEqual(319)
+
+  // 1600 推到的 25% 存进布局;缩到 1280 后该比例只剩 243px,必须自动堆叠而不是继续横排。
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await expect(page.locator('.split').first(), '1280 下转为纵向堆叠').toHaveAttribute('data-axis', 'column')
+  const widthsAt1280 = await page.locator(SURFACES).evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().width))
+  for (const width of widthsAt1280) expect(width, '1280 下每栏都是整行宽').toBeGreaterThanOrEqual(320)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), '不横向溢出').toBeLessThanOrEqual(0)
+
+  // 继续缩到 768 也不得落回窄栏。
+  await page.setViewportSize({ width: 768, height: VIEWPORT_HEIGHT })
+  await expect(page.locator('.split').first(), '768 下仍为纵向堆叠').toHaveAttribute('data-axis', 'column')
+  const widthsAt768 = await page.locator(SURFACES).evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().width))
+  for (const width of widthsAt768) expect(width, '768 下每栏都是整行宽').toBeGreaterThanOrEqual(320)
 })
 
 test('输入坞只在承载对话的区域:文件那一块不渲染它', async ({ page }) => {
@@ -371,7 +448,8 @@ test('两块区域各承载一段对话:各有自己的输入坞,输入框内容
   // 新建对话的落点在**承载该 ＋ 的那块区域**,新会话的输入框随即拿到焦点。
   // 每块区域各有一枚 ＋(功能完全对等),故按区域收窄,否则命中多枚。
   // 该 Agent 打开了多个项目 → ＋ 会先弹出项目选择浮层,选首个项目后才真正建会话。
-  await page.locator(SURFACES).nth(0).getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.locator(SURFACES).nth(0).getByRole('button', { name: /新建对话或打开文件|New conversation or open file/, exact: true }).click()
+  await page.getByRole('menuitem', { name: /^新建对话$|^New conversation$/ }).click()
   const picker = page.locator('.project-picker')
   await expect(picker, '多项目下先选归属').toHaveCount(1)
   await picker.locator('[role="option"]').first().click()
@@ -436,13 +514,66 @@ for (const width of [375, 768, 1280, 1600]) {
     await expect(page.getByRole('log'), '全页恰一个 live region').toHaveCount(1)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     expect(overflow, '不横向溢出').toBeLessThanOrEqual(0)
-    // 分隔线也能在窄宽度下被键盘调到极值(触屏语境下它仍是可聚焦的独立控件)。
+    // 极窄分屏里 tab 不能绘制到「＋」上;若常驻控件因空间不足降级,至少保留下来的 ▾ 必须可命中。
+    const plus = page.getByRole('button', { name: /新建对话或打开文件|New conversation or open file/, exact: true })
+    if (await plus.count() > 0) {
+      const plusBox = await plus.first().boundingBox()
+      expect(plusBox).not.toBeNull()
+      if (plusBox !== null) {
+        const hitPlus = await page.evaluate(({ x, y }) => {
+          const element = document.elementFromPoint(x, y)
+          const label = element !== null && element.closest('button')?.getAttribute('aria-label')
+          return label === '新建对话或打开文件' || label === 'New conversation or open file'
+        }, { x: plusBox.x + plusBox.width / 2, y: plusBox.y + plusBox.height / 2 })
+        expect(hitPlus, '「＋」未被 tab 覆盖').toBe(true)
+      }
+    }
+    const menu = page.locator('.conversation-menu__trigger').first()
+    await expect(menu).toBeVisible()
+    const menuBox = await menu.boundingBox()
+    expect(menuBox).not.toBeNull()
+    if (menuBox !== null) {
+      const hitMenu = await page.evaluate(({ x, y }) => {
+        const element = document.elementFromPoint(x, y)
+        return element !== null && element.closest('button')?.classList.contains('conversation-menu__trigger')
+      }, { x: menuBox.x + menuBox.width / 2, y: menuBox.y + menuBox.height / 2 })
+      expect(hitMenu, '「▾」未被覆盖').toBe(true)
+    }
+    // 分隔线在宽容器里被键盘调到两端极值都不产生文档级横向溢出;窄容器没有分隔线,
+    // 因为分栏已退化为纵向堆叠(两块都拿整行宽度,正文不再被压成竖排)。
     const separator = page.locator('.split-separator')
-    await separator.focus()
-    await page.keyboard.press('Home')
-    await expect(separator).toHaveAttribute('aria-valuenow', '10')
-    const overflowAfter = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(overflowAfter, '调到极值后仍不溢出').toBeLessThanOrEqual(0)
+    if (await separator.count() > 0) {
+      await separator.focus()
+      const min = Number(await separator.getAttribute('aria-valuemin'))
+      const max = Number(await separator.getAttribute('aria-valuemax'))
+      expect(min).toBeGreaterThanOrEqual(10)
+      expect(max).toBeLessThanOrEqual(90)
+      await page.keyboard.press('Home')
+      await expect(separator).toHaveAttribute('aria-valuenow', String(min))
+      const overflowAtMin = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      expect(overflowAtMin, '调到极小值后仍不溢出').toBeLessThanOrEqual(0)
+      await page.keyboard.press('End')
+      await expect(separator).toHaveAttribute('aria-valuenow', String(max))
+      const overflowAfter = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      expect(overflowAfter, '调到极大值后仍不溢出').toBeLessThanOrEqual(0)
+    } else {
+      await expect(page.locator('.split').first(), '窄容器退化为纵向堆叠').toHaveAttribute('data-axis', 'column')
+      const paneBoxes = await page.locator(SURFACES).evaluateAll((elements) => elements.map((element) => {
+        const rect = element.getBoundingClientRect()
+        return { y: rect.y, width: rect.width, height: rect.height }
+      }))
+      for (const paneBox of paneBoxes) {
+        expect(paneBox.width, '每块区域都拿到可读的整行宽度').toBeGreaterThanOrEqual(300)
+        expect(paneBox.height, '堆叠后每块区域仍有可用高度').toBeGreaterThanOrEqual(400)
+      }
+      // 转录区至少留出 4 行正文;输入坞完整落在栏内,不被下一栏盖住。
+      const firstPane = page.locator(SURFACES).first()
+      const transcriptBox = await firstPane.locator('.transcript').boundingBox()
+      expect(transcriptBox?.height ?? 0, '转录区至少 4 行').toBeGreaterThanOrEqual(100)
+      const composerBox = await firstPane.locator('.composer-dock').boundingBox()
+      const firstBox = paneBoxes[0]
+      expect((composerBox?.y ?? 0) + (composerBox?.height ?? 0), '输入坞不越出栏底').toBeLessThanOrEqual((firstBox?.y ?? 0) + (firstBox?.height ?? 0) + 1)
+    }
   })
 }
 
@@ -507,7 +638,7 @@ test('新切出的区域与根区域功能对等:有 ＋ 与菜单钮,菜单里�
   await expect(page.locator(SURFACES)).toHaveCount(2)
 
   const child = page.locator(SURFACES).nth(1)
-  await expect(child.getByRole('button', { name: '新建对话', exact: true }), '新区域有 ＋').toHaveCount(1)
+  await expect(child.getByRole('button', { name: /新建对话或打开文件|New conversation or open file/, exact: true }), '新区域有 ＋').toHaveCount(1)
   const trigger = child.locator('.conversation-menu__trigger')
   await expect(trigger, '新区域有菜单钮').toHaveCount(1)
   await trigger.click()

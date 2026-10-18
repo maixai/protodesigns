@@ -8,22 +8,54 @@ export const workspace = {
     filterConversations: 'Conversations',
     filterFiles: 'Files',
   },
-  // Sidebar agent selector: the trigger's full name comes from the agents table; these two
-  // strings only feed the popover's accessible name and the current-option marker. The selector
-  // expresses "which agent you are working under" — it decides which projects the sidebar shows.
-  // (The selector itself now lives in the bottom agent bar; agentSelector is reused as that
-  // strip's tablist accessible name.)
-  agentSelector: 'Switch agent',
-  agentSelected: 'Selected',
-  // Agent bar (the workspace's bottom strip): a tab strip of the three agents plus an overflow
-  // menu when they do not fit. The tablist's accessible name reuses agentSelector; these two
-  // only name the overflow trigger and supplement it with the collapsed count.
-  agentBar: {
-    menu: 'All agents',
-    collapsed: '{count} collapsed',
+  // The + choice menu: pick "New conversation" or "Open file", then run that action.
+  // label is the accessible name of both the trigger and the menu; the two options are visible rows.
+  addMenu: {
+    label: 'New conversation or open file',
+    conversation: 'New conversation',
+    file: 'Open file',
   },
-  // Sidebar: the agent-workspace panel, with the projects section beneath it (projects + open
-  // project), no longer a set of workspace files.
+  // The file picker: a search field over a project-grouped file tree.
+  filePicker: {
+    title: 'Open file',
+    search: 'Search files',
+    searchPlaceholder: 'Search by file name or path',
+    tree: 'Project files',
+    results: 'Search results',
+    loading: 'Loading files…',
+    error: 'Unable to load files',
+    retry: 'Retry',
+    noProjects: 'No projects open yet',
+    openProject: 'Open project',
+    empty: 'These projects have no files yet',
+    noMatches: 'No matching files',
+    projectCount: '{count} files',
+    openFile: 'Open "{name}"',
+    hint: '↑↓ to choose · Enter to open · Esc to close',
+    opened: 'Opened "{name}"',
+  },
+  agentSwitcher: {
+    label: 'Switch agent', current: 'Current', running: 'Running {count}', awaiting: 'Needs you {count}', idle: 'Idle', menu: 'All agents', badge: '{count} unseen',
+  },
+  dock: {
+    label: 'Workspace bar', empty: 'No minimized pages', minimizedRegion: 'Current agent pages', restore: 'Restore "{name}"', restoreMember: 'Restore and open "{name}"',
+    closeGroup: 'Close this group', members: 'Group members', groupCount: '{count} tabs',
+    minimizeSurfaceLabel: 'Minimize this display area ({count} tabs)',
+    minimizedAnnounce: 'Minimized "{name}" ({count} tabs)', restoredAnnounce: 'Restored "{name}" ({count} tabs)', closedGroupAnnounce: 'Closed "{name}"',
+  },
+  notifications: {
+    label: 'Notifications', title: 'Notification center', scope: 'All agents', globalRegion: 'Global notifications', empty: 'No new notifications', awaiting: 'Needs you', completed: 'Completed', badge: '{count} pending', badgeDone: '{count} completed', badgeTotal: '{count} total', open: 'Open "{title}"',
+    loading: 'Loading notifications…', error: 'Unable to load notifications',
+  },
+  // Global settings at the dock's right edge: the panel opened by the gear.
+  // Language is a real global setting; the notification center lives here too
+  // (notifications are global, not owned by an agent).
+  settings: {
+    label: 'Global settings',
+    title: 'Global settings',
+    language: 'Language',
+  },
+  conversationGroupMinimize: 'Minimize {count} tabs',
   workspacePanel: 'Agent workspace',
   openSidebar: 'Open sidebar',
   closeSidebar: 'Close sidebar',
@@ -449,6 +481,13 @@ export const workspace = {
     planning: 'Planning agent',
     research: 'Research agent',
     writing: 'Writing agent',
+  },
+  // One-line role of each agent: the second line in the sidebar trigger and the secondary line
+  // in menu options. Name + role is the common two-line "identity + purpose" workspace switcher.
+  agentRoles: {
+    planning: 'Plans work and keeps momentum',
+    research: 'Finds sources and synthesizes',
+    writing: 'Drafts, rewrites, and edits',
   },
   messages: {
     weeklyUser1: 'Mia, help me organize this week’s project updates. We finished the sign-in flow and notification prototype. The knowledge-base cleanup has not started. We have a team demo on Friday.',

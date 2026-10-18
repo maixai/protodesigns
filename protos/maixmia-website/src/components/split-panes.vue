@@ -12,10 +12,10 @@
 // aria-orientation,可聚焦、方向键调一步、Home/End 到极值。命中区取本仓密集档 24px ——
 // 它是一个**结构性内联控件**(不是独立的功能按钮):24px 已满足 WCAG 2.5.8 的最小目标尺寸
 // (另一维是整块区域的长度,远大于 24),故无需动用「间距替代方案」。
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Surface } from '../contracts/generated/surface'
 import type { WorkspaceLayout } from '../contracts/generated/workspace-layout'
-import { MAX_SEPARATOR_PERCENT, MIN_SEPARATOR_PERCENT, OWN_WEIGHT, childSurfaces, separatorPercent } from '../data/windows'
+import { MIN_SEPARATOR_PERCENT, OWN_WEIGHT, separatorPercent, visibleChildSurfaces, visibleMemberWindows } from '../data/windows'
 import { useI18n } from '../i18n'
 
 // 分隔线每次按键调整的幅度(百分点)。Home / End 直接到极值(见 setSeparatorPercent 的边界)。
@@ -36,24 +36,79 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-// 子区域(按数组顺序 = 排布顺序)。
-const children = computed<Surface[]>(() => childSurfaces(props.layout, props.surfaceId))
+// 子区域(按数组顺序 = 排布顺序)。**被整块最小化的显示区不参与渲染与空间分配** ——
+// 它仍在区域树里(parentId / axis / weight 原样保留),恢复时原位置重新出现。
+const children = computed<Surface[]>(() => visibleChildSurfaces(props.layout, props.surfaceId))
 // 本区域排布子区域的方向(row 横排 / column 竖排)。
 const axis = computed<Surface['axis']>(() => props.layout.surfaces.find((surface) => surface.id === props.surfaceId)?.axis ?? 'row')
 // 分隔线在横向排布下是竖线(aria-orientation=vertical),纵向排布下是横线。
 const separatorOrientation = computed<'vertical' | 'horizontal'>(() => (axis.value === 'row' ? 'vertical' : 'horizontal'))
 // ---- 区域自身分栏项是否渲染(全仓只写这一处)----
 // 区域是**混合节点**:既可能是内容区(有成员),也可能只是容器(无成员、仅容子区域)。
-// 规则:渲染自身分栏项 ⟺ members.length > 0 || children.length === 0。
-//   · 叶子区域被清空 → 页面已用 removeSurface 把它摘除,故叶子必有成员;
-//   · 根区域是唯一可能「无成员但有子区域」的节点 —— 它只作容器,自身的会话头与内容区不渲染。
+// 规则:渲染自身分栏项 ⟺ **有可见成员** || **没有可见子区域**。
+//   · 「可见成员」而不是「members.length」:页签被整组收进底栏后,成员仍在数组里但不可见;
+//     此时若还有可见子区域,自身内容区不该占位(否则根区域会显示一张创建会话引导页,
+//     把本应让给右侧子区域的空间又占回去 —— 实测的左侧最小化 bug);
+//   · 叶子区域被清空 → 页面已用 removeSurface 把它摘除,故叶子必有可见成员或整块被隐藏;
+//   · 根区域是唯一可能「无可见成员、但有可见子区域」的节点 —— 它只作容器,自身内容区不渲染。
 // 自身项不渲染时,它与首个子区域之间那条分隔线也不渲染(否则会出现一条没有左邻的线)。
 const showSelf = computed<boolean>(() => {
-  const members = props.layout.surfaces.find((surface) => surface.id === props.surfaceId)?.members.length ?? 0
-  return members > 0 || children.value.length === 0
+  return visibleMemberWindows(props.layout, props.surfaceId).length > 0 || children.value.length === 0
 })
 
+// ---- 窄容器降级与最小可读宽度 ----
+// 横向分栏在窄容器里会把正文列压到几个字一行(实测 375 双栏正文只剩 86px)。
+// 规则:任一栏分不到 320px,就把这块区域改为**纵向堆叠**,两栏都拿到完整宽度;
+// 宽容器里则把分隔线夹在像素下限上,避免拖到 10% 时出现不可读的窄条。
+const MIN_PANE_WIDTH = 320
+// 与 `.split-separator` 的 `flex-basis`(--dl-space-6)一致。
+const SEPARATOR_SIZE = 24
 const rootRef = ref<HTMLElement | null>(null)
+const rootWidth = ref(0)
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  const root = rootRef.value
+  if (root === null) return
+  rootWidth.value = root.getBoundingClientRect().width
+  resizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (entry !== undefined) rootWidth.value = entry.contentRect.width
+  })
+  resizeObserver.observe(root)
+})
+onBeforeUnmount(() => { resizeObserver?.disconnect() })
+
+// 分栏项 = [自身内容(若渲染), ...子区域],与模板的排布顺序一致。
+const itemWeights = computed<number[]>(() => {
+  const weights = children.value.map((child) => child.weight)
+  return showSelf.value ? [OWN_WEIGHT, ...weights] : weights
+})
+const separatorCount = computed(() => Math.max(0, itemWeights.value.length - 1))
+const totalWeight = computed(() => itemWeights.value.reduce((sum, weight) => sum + weight, 0) || 1)
+const availableWidth = computed(() => Math.max(0, rootWidth.value - separatorCount.value * SEPARATOR_SIZE))
+// 任一相邻对放不下两个 320px 的栏,或当前权重下**任一栏**分不到 320px → 纵向堆叠。
+// 第二条必须按当前权重逐栏判:窗口从宽缩窄时,存储的百分比可能仍是宽屏下的 25%,
+// 只按 50/50 估算会漏掉 243px / 182px 这种「缩窄后才出现」的窄栏。
+const shouldStack = computed<boolean>(() => {
+  if (axis.value !== 'row' || rootWidth.value <= 0) return false
+  const weights = itemWeights.value
+  if (weights.length * MIN_PANE_WIDTH + separatorCount.value * SEPARATOR_SIZE > rootWidth.value) return true
+  const available = availableWidth.value
+  return weights.some((weight) => (available * weight) / totalWeight.value < MIN_PANE_WIDTH)
+})
+const renderAxis = computed<Surface['axis']>(() => (shouldStack.value ? 'column' : axis.value))
+// 分隔线可调范围:左右两栏都不得窄于 MIN_PANE_WIDTH。按当前权重算出这一对的可用宽度,
+// 再把百分比下限夹到 10–50 之间(上限对称)。
+function separatorMinPercent(index: number): number {
+  if (rootWidth.value <= 0) return MIN_SEPARATOR_PERCENT
+  const weights = itemWeights.value
+  const pairWeight = (weights[index] ?? 0) + (weights[index + 1] ?? 0)
+  if (pairWeight <= 0) return MIN_SEPARATOR_PERCENT
+  const pairWidth = (availableWidth.value * pairWeight) / totalWeight.value
+  if (pairWidth <= 0) return MIN_SEPARATOR_PERCENT
+  return Math.min(50, Math.max(MIN_SEPARATOR_PERCENT, Math.ceil((MIN_PANE_WIDTH / pairWidth) * 100)))
+}
 
 // ---- 指针拖分隔线 ----
 let dragIndex = -1
@@ -66,7 +121,7 @@ function onSeparatorPointerDown(event: PointerEvent, index: number): void {
   dragIndex = index
   dragPointerId = event.pointerId
   dragStartPos = axis.value === 'row' ? event.clientX : event.clientY
-  dragStartPercent = separatorPercent(props.layout, props.surfaceId, index)
+  dragStartPercent = Math.min(100 - separatorMinPercent(index), Math.max(separatorMinPercent(index), separatorPercent(props.layout, props.surfaceId, index)))
   const element = event.currentTarget
   if (element instanceof HTMLElement) element.setPointerCapture(event.pointerId)
 }
@@ -79,7 +134,9 @@ function onSeparatorPointerMove(event: PointerEvent): void {
   const size = axis.value === 'row' ? rect.width : rect.height
   if (size <= 0) return
   const current = axis.value === 'row' ? event.clientX : event.clientY
-  props.resizeHandler(props.surfaceId, dragIndex, dragStartPercent + ((current - dragStartPos) / size) * 100)
+  const min = separatorMinPercent(dragIndex)
+  const next = dragStartPercent + ((current - dragStartPos) / size) * 100
+  props.resizeHandler(props.surfaceId, dragIndex, Math.min(100 - min, Math.max(min, next)))
 }
 
 function onSeparatorPointerUp(event: PointerEvent): void {
@@ -92,35 +149,37 @@ function onSeparatorPointerUp(event: PointerEvent): void {
 // 值 = 分隔线**左侧**那一项占两侧之和的百分比。右 / 下方向键把分隔线往右 / 下推(左侧变大),
 // 左 / 上方向键相反;Home 到最小、End 到最大。
 function onSeparatorKeydown(event: KeyboardEvent, index: number): void {
-  const current = separatorPercent(props.layout, props.surfaceId, index)
+  const min = separatorMinPercent(index)
+  const max = 100 - min
+  const current = Math.min(max, Math.max(min, separatorPercent(props.layout, props.surfaceId, index)))
   let next: number | null = null
-  if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = 100
+  if (event.key === 'Home') next = min
+  else if (event.key === 'End') next = max
   else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = current + STEP_PERCENT
   else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = current - STEP_PERCENT
   if (next === null) return
   event.preventDefault()
-  props.resizeHandler(props.surfaceId, index, next)
+  props.resizeHandler(props.surfaceId, index, Math.min(max, Math.max(min, next)))
 }
 </script>
 
 <template>
   <!-- 叶子区域:没有子区域时就是一个撑满的单格容器(不产生任何额外视觉)。
        有子区域时:自身分栏项按 showSelf 规则决定是否渲染(见脚本注释)。 -->
-  <div ref="rootRef" class="split" :data-axis="axis">
-    <div v-if="showSelf" class="split__item" :style="{ flexGrow: OWN_WEIGHT }">
+  <div ref="rootRef" class="split" :class="{ 'split--stacked': shouldStack }" :data-axis="renderAxis">
+    <div v-if="showSelf" class="split__item" :style="{ flexGrow: shouldStack ? 1 : OWN_WEIGHT }">
       <slot name="pane" :surface-id="surfaceId" />
     </div>
     <template v-for="(child, index) in children" :key="child.id">
       <div
-        v-if="showSelf || index > 0"
+        v-if="!shouldStack && (showSelf || index > 0)"
         class="split-separator"
         role="separator"
         tabindex="0"
         :aria-orientation="separatorOrientation"
         :aria-valuenow="separatorPercent(layout, surfaceId, index)"
-        :aria-valuemin="MIN_SEPARATOR_PERCENT"
-        :aria-valuemax="MAX_SEPARATOR_PERCENT"
+        :aria-valuemin="separatorMinPercent(index)"
+        :aria-valuemax="100 - separatorMinPercent(index)"
         :aria-label="t.workspace.regions.resizeSeparator"
         :title="`${t.workspace.regions.resizeSeparator} · ${t.workspace.regions.resizeHint}`"
         @keydown="onSeparatorKeydown($event, index)"
@@ -129,7 +188,7 @@ function onSeparatorKeydown(event: KeyboardEvent, index: number): void {
         @pointerup="onSeparatorPointerUp"
         @pointercancel="onSeparatorPointerUp"
       />
-      <div class="split__item" :style="{ flexGrow: child.weight }">
+      <div class="split__item" :style="{ flexGrow: shouldStack ? 1 : child.weight }">
         <SplitPanes :layout="layout" :surface-id="child.id" :resize-handler="resizeHandler">
           <template #pane="{ surfaceId }: PaneSlot"><slot name="pane" :surface-id="surfaceId" /></template>
         </SplitPanes>
@@ -162,6 +221,11 @@ function onSeparatorKeydown(event: KeyboardEvent, index: number): void {
   min-width: 0;
   min-height: 0;
 }
+
+/* 纵向堆叠是窄容器的降级形态:两栏都要有**可用的高度**(标题 + 输入坞 + 至少 4–6 行转录),
+   整块区域在高度不足时纵向滚动,而不是把每栏压到只剩输入坞。 */
+.split--stacked { overflow-y: auto; overscroll-behavior: contain; row-gap: var(--dl-space-2); }
+.split--stacked > .split__item { min-block-size: 420px; }
 
 /* 分隔线:整条命中区 24px(密集档),视觉上只在正中画一条发丝线;线平时克制、悬停 / 聚焦提色。 */
 .split-separator {

@@ -627,7 +627,7 @@ function formatElapsed(seconds: number): string {
    是用户点开前必须读全的信息,截成省略号等于「我得先点开才知道现在用的是什么模型」;唯一例外是
    底行本身已被挤到 ≤486 的窄档(见下方容器查询),那一档才允许它让位。 */
 .telemetry__item--model { flex-shrink: 0; }
-.telemetry__sep { flex: none; color: var(--dl-text-disabled); }
+.telemetry__sep { flex: none; color: var(--dl-text-tertiary); }
 .telemetry__context-text, .telemetry__elapsed { font-variant-numeric: tabular-nums; }
 .telemetry__context-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .telemetry__meter { display: inline-block; flex-shrink: 0; width: var(--dl-space-12); height: var(--dl-space-1); border-radius: var(--dl-radius-pill); background: var(--dl-bg-sunken); overflow: hidden; }
@@ -682,9 +682,16 @@ textarea:focus-visible { outline: none; box-shadow: none; }
    ⊕ 一行,遥测整体一行;仍不够时遥测内部再换行。宁可长高,也不隐藏模型控件:
    它是用户点得到的控件(不是只读文本),而窄屏没法切模型正是不该发生的降级。
    判据是**卡片**宽度(容器 composer),不是视口 —— 同一视口下别处可能还很宽。 */
-@container composer (max-width: 240px) {
+@container composer (max-width: 320px) {
   .composer-bar { flex-wrap: wrap; row-gap: var(--dl-space-1); }
   .telemetry { flex: 1 1 100%; block-size: auto; flex-wrap: wrap; row-gap: var(--dl-space-1); }
+}
+
+/* 极窄显示区(375/480/560 分屏拖到 90% 时,区域只有 30–50px):输入坞的 attach / 遥测
+   在 min-content 下仍会把文档撑出横向滚动。此时**整条输入坞让位** —— 转录仍可读,
+   区域也仍可从分隔线拖宽;不能为了保留一个不可用的输入框破坏整页布局。 */
+@container (max-width: 160px) {
+  .composer-dock { display: none; }
 }
 /* ⊕ 上传:独立图标按钮(守 44×44),原生隐藏 input 由它触发(WCAG:文件上传必须有点击通路)。 */
 .composer-attach { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: var(--dl-target-size); min-height: var(--dl-target-size); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); transition: background var(--dl-duration-fast) var(--dl-ease-standard); }

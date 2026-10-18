@@ -923,6 +923,22 @@ onBeforeUnmount(() => {
   box-shadow: var(--dl-focus-ring);
 }
 
+/* 极窄容器(375 档):文件名是这一枚 tab 的**身份**,任何装饰都不能把它挤成 0 宽。
+   故按以下顺序让位:状态芯片(次要,文件树 / 面板里仍有)→ 文件图标(与文件类型重复)→
+   「拆出」钮的恒常预留(它已移出 Tab 序,键盘通路是快捷键;窄屏不 hover 也看不见它)。
+   关闭钮保留 —— 它是 touch 语境下唯一可见的关闭入口。 */
+@container (max-width: 560px) {
+  .file-bar {
+    --file-tab-reserved: calc(var(--dl-icon-lg) + 2 * var(--dl-space-1));
+  }
+
+  .file-tab__icon,
+  .file-tab__chip,
+  .file-tab-pop {
+    display: none;
+  }
+}
+
 /* 空态提示:与一行 tab 等高(32),故栏高在空 / 非空两态完全一致。
    它只是提示,不可交互 —— 教学职责由可见文案承担,不额外加图标钮。 */
 .file-bar__empty {

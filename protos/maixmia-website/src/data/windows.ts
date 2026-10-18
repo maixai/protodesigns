@@ -16,6 +16,7 @@
 
 import type { AgentId } from '../contracts/generated/chat-session'
 import type { FileContent, FileLine } from '../contracts/generated/file-content'
+import type { MinimizedGroup } from '../contracts/generated/minimized-group'
 import type { Surface } from '../contracts/generated/surface'
 import type { WindowContent } from '../contracts/generated/window-content'
 import type { WorkspaceLayout } from '../contracts/generated/workspace-layout'
@@ -45,8 +46,9 @@ export const MAIN_SURFACE = 'main'
 // 一份空布局:含唯一的根区域(无成员、无激活)。
 export function emptyLayout(): WorkspaceLayout {
   return {
-    surfaces: [{ id: MAIN_SURFACE, parentId: null, axis: 'row', weight: 1, members: [], activeId: '' }],
+    surfaces: [{ id: MAIN_SURFACE, parentId: null, axis: 'row', weight: 1, members: [], activeId: '', minimized: false }],
     windows: [],
+    groups: [],
     focus: '',
     recent: [],
   }
@@ -88,14 +90,183 @@ export function memberWindows(layout: WorkspaceLayout, surfaceId: string): Works
   })
 }
 
+// 最小化只改变可见投影；成员留在原区域中，恢复不必重建顺序。
+export function minimizedGroupsOf(layout: WorkspaceLayout): MinimizedGroup[] {
+  return layout.groups.filter((group) => group.memberIds.length > 0)
+}
+export function groupOfWindow(layout: WorkspaceLayout, windowId: string): MinimizedGroup | undefined {
+  return layout.groups.find((group) => group.memberIds.includes(windowId))
+}
+export function isMinimizedWindow(layout: WorkspaceLayout, windowId: string): boolean {
+  return groupOfWindow(layout, windowId) !== undefined
+}
+// 某区域是否作为整块显示区被收起(根区域不置 true)。
+export function isSurfaceMinimized(layout: WorkspaceLayout, surfaceId: string): boolean {
+  return surfaceOf(layout, surfaceId)?.minimized === true
+}
+// 参与渲染 / 分栏空间的子区域:被最小化的整块显示区不参与(空间让给兄弟)。
+export function visibleChildSurfaces(layout: WorkspaceLayout, surfaceId: string): Surface[] {
+  return childSurfaces(layout, surfaceId).filter((surface) => !surface.minimized)
+}
+export function visibleMemberWindows(layout: WorkspaceLayout, surfaceId: string): WorkspaceWindow[] {
+  if (isSurfaceMinimized(layout, surfaceId)) return []
+  return memberWindows(layout, surfaceId).filter((win) => !isMinimizedWindow(layout, win.id))
+}
+export function visibleMemberIds(layout: WorkspaceLayout, surfaceId: string): string[] {
+  return visibleMemberWindows(layout, surfaceId).map((win) => win.id)
+}
+// 关闭或移动成员时摘掉组引用；最后活动项随成员一起消失时重置为首项。
+function withoutGroupedWindows(layout: WorkspaceLayout, ids: readonly string[]): MinimizedGroup[] {
+  const removed = new Set(ids)
+  return layout.groups.flatMap((group) => {
+    const memberIds = group.memberIds.filter((id) => !removed.has(id))
+    return memberIds.length === 0 ? [] : [{ ...group, memberIds, lastActiveId: memberIds.includes(group.lastActiveId) ? group.lastActiveId : '' }]
+  })
+}
+type MinimizeGroupInput = Omit<MinimizedGroup, 'id' | 'isArea'> & { isArea?: boolean }
+export function minimizeGroup(layout: WorkspaceLayout, input: MinimizeGroupInput): WorkspaceLayout {
+  const surface = surfaceOf(layout, input.surfaceId)
+  if (surface === undefined) return layout
+  const existing = layout.groups.find((group) => group.surfaceId === input.surfaceId && group.projectId === input.projectId)
+  const wanted = new Set([...input.memberIds, ...(existing?.memberIds ?? [])])
+  const memberIds = memberWindows(layout, input.surfaceId)
+    .filter((win) => wanted.has(win.id) && win.placement === 'docked' && win.content.projectId === input.projectId)
+    .map((win) => win.id)
+  if (memberIds.length === 0) return layout
+  const group: MinimizedGroup = {
+    ...input, isSurface: false, isArea: input.isArea === true, id: `group:${input.surfaceId}:${input.projectId}`, memberIds,
+    lastActiveId: memberIds.includes(input.lastActiveId) ? input.lastActiveId : (existing?.lastActiveId ?? ''),
+  }
+  const groups = [...withoutGroupedWindows(layout, memberIds).filter((item) => item.id !== group.id), group]
+  const hidden = new Set(groups.flatMap((item) => item.memberIds))
+  const index = surface.members.indexOf(surface.activeId)
+  const neighbor = surface.members.slice(index + 1).find((id) => !hidden.has(id))
+    ?? surface.members.slice(0, Math.max(0, index)).reverse().find((id) => !hidden.has(id)) ?? ''
+  return {
+    ...replaceSurface(layout, surface.id, (item) => ({ ...item, activeId: hidden.has(item.activeId) ? neighbor : item.activeId })),
+    groups,
+    focus: hidden.has(layout.focus) ? neighbor : layout.focus,
+  }
+}
+// 把**一整块显示区**收进底栏:成员原样留在区域里,parentId / axis / weight 都不动,
+// 只把 surface.minimized 置真 —— 渲染与分栏空间跳过它,恢复时原位置、原权重重新出现。
+// 根区域不置 true(根始终存在);它的全部页签被收起时由页面显示「全部最小化」空态。
+// 同一区域已有的分组会被合并成这一个整区条目(避免底栏出现「区域 + 它的分组」两套入口)。
+export function minimizeSurface(layout: WorkspaceLayout, input: { surfaceId: string; projectId: string; name: string; lastActiveId: string }): WorkspaceLayout {
+  const surface = surfaceOf(layout, input.surfaceId)
+  if (surface === undefined || surface.members.length === 0) return layout
+  const memberIds = [...surface.members]
+  const group: MinimizedGroup = {
+    id: `group:${surface.id}:surface`,
+    surfaceId: surface.id,
+    projectId: input.projectId,
+    name: input.name,
+    memberIds,
+    lastActiveId: memberIds.includes(input.lastActiveId) ? input.lastActiveId : (memberIds[0] ?? ''),
+    isSurface: true,
+    isArea: true,
+  }
+  return {
+    ...layout,
+    groups: [...layout.groups.filter((item) => item.surfaceId !== surface.id), group],
+    surfaces: layout.surfaces.map((item) => item.id === surface.id && item.parentId !== null ? { ...item, minimized: true } : item),
+    focus: memberIds.includes(layout.focus) ? '' : layout.focus,
+  }
+}
+export function restoreGroup(layout: WorkspaceLayout, groupId: string): WorkspaceLayout {
+  const group = layout.groups.find((item) => item.id === groupId)
+  if (group === undefined) return layout
+  const source = surfaceOf(layout, group.surfaceId)
+  // 整块显示区:把 minimized 置回 false,原区域树位置 / 权重不动 —— 不是把成员并进兄弟区域。
+  if (group.isSurface && source !== undefined) {
+    const memberIds = group.memberIds.filter((id) => layout.windows.some((win) => win.id === id && win.placement === 'docked'))
+    const activeId = memberIds.includes(group.lastActiveId) ? group.lastActiveId : (memberIds[0] ?? '')
+    return {
+      ...layout,
+      groups: layout.groups.filter((item) => item.id !== groupId),
+      surfaces: layout.surfaces.map((surface) => surface.id === source.id ? { ...surface, minimized: false, activeId } : surface),
+      windows: toTop(layout.windows.map((win) => memberIds.includes(win.id) ? { ...win, visible: true } : win), activeId),
+      focus: activeId,
+    }
+  }
+  const target = source ?? rootSurface(layout)
+  if (target === undefined) return layout
+  const memberIds = group.memberIds.filter((id) => layout.windows.some((win) => win.id === id && win.placement === 'docked'))
+  const members = source === undefined ? [...target.members, ...memberIds.filter((id) => !target.members.includes(id))] : target.members
+  const activeId = memberIds.includes(group.lastActiveId) && members.includes(group.lastActiveId)
+    ? group.lastActiveId : memberIds.find((id) => members.includes(id)) ?? ''
+  return {
+    ...layout,
+    groups: layout.groups.filter((item) => item.id !== groupId),
+    surfaces: layout.surfaces.map((surface) => surface.id === target.id ? { ...surface, members, activeId } : surface),
+    windows: toTop(layout.windows.map((win) => memberIds.includes(win.id) ? { ...win, visible: true } : win), activeId),
+    focus: activeId,
+  }
+}
+// 恢复一个「整块显示区来源」的组。与普通项目组的区别:如果收起之后来源区域里又长出了
+// **新的可见内容**(典型:全部最小化后从引导页新建了一段对话),直接并回会把新旧内容塞进
+// 同一个 tab 区。此时把组员恢复到一块**新切出的子区域**(右侧),与来源区域并排 ——
+// 与「拖 tab 到右缘切分」得到的是同一种布局。
+export function restoreAreaGroup(layout: WorkspaceLayout, groupId: string): WorkspaceLayout {
+  const group = layout.groups.find((item) => item.id === groupId)
+  if (group === undefined) return layout
+  // 非根区域的整区组仍按原逻辑回到原位(它的 surface 已被 minimized,不可能另有可见内容)。
+  if (group.isSurface) return restoreGroup(layout, groupId)
+  const source = surfaceOf(layout, group.surfaceId)
+  if (source === undefined) return layout
+  const hasNewContent = visibleMemberIds(layout, source.id).some((id) => !group.memberIds.includes(id))
+  if (!hasNewContent) return restoreGroup(layout, groupId)
+  const restored = restoreGroup(layout, groupId)
+  const restoredSource = surfaceOf(restored, source.id)
+  if (restoredSource === undefined) return restored
+  const memberIds = group.memberIds.filter((id) => restored.windows.some((win) => win.id === id && win.placement === 'docked'))
+  if (memberIds.length === 0) return restored
+  const activeId = memberIds.includes(group.lastActiveId) ? group.lastActiveId : (memberIds[0] ?? '')
+  const id = nextSurfaceId(restored)
+  const surfaces: Surface[] = restored.surfaces.map((surface) => {
+    if (surface.id !== source.id) return surface
+    // 来源区域保留新建的内容(以及任何未属于该组的成员),排布轴改为横向,让新区域落在右侧。
+    const members = surface.members.filter((member) => !memberIds.includes(member))
+    return {
+      ...surface,
+      axis: 'row',
+      members,
+      activeId: members.includes(surface.activeId) ? surface.activeId : (members.at(-1) ?? ''),
+    }
+  })
+  const area: Surface = { id, parentId: source.id, axis: 'row', weight: SPLIT_WEIGHT, members: memberIds, activeId, minimized: false }
+  return {
+    ...restored,
+    surfaces: [...surfaces, area],
+    focus: activeId,
+    recent: rememberRecent(restored.recent, activeId),
+  }
+}
+export function closeGroup(layout: WorkspaceLayout, groupId: string): WorkspaceLayout {
+  const group = layout.groups.find((item) => item.id === groupId)
+  if (group === undefined) return layout
+  const closed = group.memberIds.reduce((current, id) => closeTab(current, group.surfaceId, id), layout)
+  const withoutGroup = { ...closed, groups: closed.groups.filter((item) => item.id !== groupId) }
+  if (!group.isSurface) return withoutGroup
+  // 关闭整块显示区:根区域保留(回落引导页);非根区域从树里摘除,兄弟区域吃满空间。
+  const surface = surfaceOf(withoutGroup, group.surfaceId)
+  if (surface === undefined || surface.parentId === null) return withoutGroup
+  return removeSurface(withoutGroup, group.surfaceId)
+}
+
 // 可见窗体(**数组顺序 = 层序**,靠后者在上)。
+// 被最小化成员、以及被整块收起的显示区里的窗体,都不算可见 —— 它们仍在布局里,只是当前不渲染。
 export function visibleWindows(layout: WorkspaceLayout): WorkspaceWindow[] {
-  return layout.windows.filter((win) => win.visible)
+  return layout.windows.filter((win) => {
+    if (!win.visible || isMinimizedWindow(layout, win.id)) return false
+    const owner = surfaceOwning(layout, win.id)
+    return owner === undefined || !owner.minimized
+  })
 }
 
 // 当前聚焦的窗体:焦点窗可见则取它,否则取最上层(数组末位)的可见窗体;都没有则 undefined。
 export function focusedWindow(layout: WorkspaceLayout): WorkspaceWindow | undefined {
-  const focused = layout.windows.find((win) => win.id === layout.focus && win.visible)
+  const focused = layout.windows.find((win) => win.id === layout.focus && win.visible && !isMinimizedWindow(layout, win.id) && !(surfaceOwning(layout, win.id)?.minimized ?? false))
   if (focused !== undefined) return focused
   return visibleWindows(layout).at(-1)
 }
@@ -263,7 +434,7 @@ export function closeTab(layout: WorkspaceLayout, surfaceId: string, windowId: s
   if (surface === undefined) return layout
   const index = surface.members.indexOf(windowId)
   if (index < 0) return layout
-  const neighborId = surface.members[index + 1] ?? surface.members[index - 1] ?? ''
+  const neighborId = neighborMember(visibleMemberIds(layout, surfaceId), windowId)
   const nextActive = surface.activeId === windowId ? neighborId : surface.activeId
   const win = layout.windows.find((item) => item.id === windowId)
   return {
@@ -272,6 +443,7 @@ export function closeTab(layout: WorkspaceLayout, surfaceId: string, windowId: s
       members: item.members.filter((id) => id !== windowId),
       activeId: nextActive,
     })),
+    groups: withoutGroupedWindows(layout, [windowId]),
     windows: win === undefined ? layout.windows : replaceWindow(layout.windows, { ...win, visible: false }),
     focus: layout.focus === windowId ? '' : layout.focus,
   }
@@ -401,7 +573,9 @@ export function reorderChatMembers(layout: WorkspaceLayout, surfaceId: string, o
   if (surface === undefined) return layout
   const chatIds = new Set(chatMemberIds(layout, surfaceId))
   const files = surface.members.filter((id) => !chatIds.has(id))
-  const next = [...order.filter((id) => chatIds.has(id)), ...files]
+  const queue = order.filter((id) => chatIds.has(id))
+  const chats = surface.members.filter((id) => chatIds.has(id)).map((id) => isMinimizedWindow(layout, id) ? id : queue.shift()).filter((id): id is string => id !== undefined)
+  const next = [...chats, ...files]
   return replaceSurface(layout, surfaceId, (item) => ({ ...item, members: next }))
 }
 
@@ -412,7 +586,9 @@ export function reorderFileMembers(layout: WorkspaceLayout, surfaceId: string, o
   if (surface === undefined) return layout
   const fileIds = new Set(fileMemberIds(layout, surfaceId))
   const chats = surface.members.filter((id) => !fileIds.has(id))
-  const next = [...chats, ...order.filter((id) => fileIds.has(id))]
+  const queue = order.filter((id) => fileIds.has(id))
+  const files = surface.members.filter((id) => fileIds.has(id)).map((id) => isMinimizedWindow(layout, id) ? id : queue.shift()).filter((id): id is string => id !== undefined)
+  const next = [...chats, ...files]
   return replaceSurface(layout, surfaceId, (item) => ({ ...item, members: next }))
 }
 
@@ -483,10 +659,10 @@ export function dropWindows(layout: WorkspaceLayout, ids: readonly string[]): Wo
   const nextActive = (members: readonly string[], activeId: string): string => {
     if (!doomed.has(activeId)) return activeId
     const index = members.indexOf(activeId)
-    if (index < 0) return members.find((id) => !doomed.has(id)) ?? ''
-    const right = members.slice(index + 1).find((id) => !doomed.has(id))
+    if (index < 0) return members.find((id) => !doomed.has(id) && !isMinimizedWindow(layout, id)) ?? ''
+    const right = members.slice(index + 1).find((id) => !doomed.has(id) && !isMinimizedWindow(layout, id))
     if (right !== undefined) return right
-    return members.slice(0, index).reverse().find((id) => !doomed.has(id)) ?? ''
+    return members.slice(0, index).reverse().find((id) => !doomed.has(id) && !isMinimizedWindow(layout, id)) ?? ''
   }
   return {
     ...layout,
@@ -495,6 +671,7 @@ export function dropWindows(layout: WorkspaceLayout, ids: readonly string[]): Wo
       members: surface.members.filter((id) => !doomed.has(id)),
       activeId: nextActive(surface.members, surface.activeId),
     })),
+    groups: withoutGroupedWindows(layout, ids),
     windows: layout.windows.filter((win) => !doomed.has(win.id)),
     focus: doomed.has(layout.focus) ? '' : layout.focus,
     recent: layout.recent.filter((id) => !doomed.has(id)),
@@ -516,13 +693,15 @@ export function openFloating(layout: WorkspaceLayout, content: WindowContent, re
     : { ...existing, content, placement: 'floating', view: 'normal', visible: true }
   const base = existing === undefined ? [...layout.windows, win] : replaceWindow(layout.windows, win)
   return {
+    ...layout,
+    groups: withoutGroupedWindows(layout, [id]),
     // 从**所有**区域的成员里摘掉:悬浮窗体不属于任何区域(不变量④)。它腾出的活动位交给
     // **相邻成员**(与 floatWindow / closeTab / buildSplit 同一条规则)—— 它此前正停靠在某块
     // 区域里并占据内容区时,那块区域不该因此空下来。它本来就不是任何区域的成员时,这条是空操作。
     surfaces: layout.surfaces.map((surface) => ({
       ...surface,
       members: surface.members.filter((item) => item !== id),
-      activeId: surface.activeId === id ? neighborMember(surface.members, id) : surface.activeId,
+      activeId: surface.activeId === id ? neighborMember(visibleMemberIds(layout, surface.id), id) : surface.activeId,
     })),
     windows: toTop(base, id),
     focus: id,
@@ -542,8 +721,9 @@ export function floatWindow(layout: WorkspaceLayout, windowId: string, rect: Win
     surfaces: layout.surfaces.map((surface) => ({
       ...surface,
       members: surface.members.filter((id) => id !== windowId),
-      activeId: surface.activeId === windowId ? neighborMember(surface.members, windowId) : surface.activeId,
+      activeId: surface.activeId === windowId ? neighborMember(visibleMemberIds(layout, surface.id), windowId) : surface.activeId,
     })),
+    groups: withoutGroupedWindows(layout, [windowId]),
     windows: replaceWindow(layout.windows, { ...win, placement: 'floating', view: 'normal', rect }),
     focus: layout.focus === windowId ? '' : layout.focus,
   }
@@ -573,7 +753,7 @@ export function dockWindow(layout: WorkspaceLayout, windowId: string, surfaceId:
   const stripped = layout.surfaces.map((item) => ({
     ...item,
     members: item.members.filter((id) => id !== windowId),
-    activeId: item.activeId === windowId ? neighborMember(item.members, windowId) : item.activeId,
+    activeId: item.activeId === windowId ? neighborMember(visibleMemberIds(layout, item.id), windowId) : item.activeId,
   }))
   const rest = stripped.find((item) => item.id === surfaceId)?.members ?? []
   const at = Math.max(0, Math.min(index, rest.length))
@@ -581,6 +761,7 @@ export function dockWindow(layout: WorkspaceLayout, windowId: string, surfaceId:
   return {
     ...layout,
     surfaces: stripped.map((item) => (item.id === surfaceId ? { ...item, members, activeId: windowId } : item)),
+    groups: withoutGroupedWindows(layout, [windowId]),
     windows: replaceWindow(layout.windows, { ...win, placement: 'docked', visible: true }),
     focus: windowId,
   }
@@ -664,11 +845,13 @@ function buildSplit(layout: WorkspaceLayout, surfaceId: string, axis: Surface['a
   // 被切的区域**保留其余成员**,只把自身的排布轴改成新的切分方向。
   const surfaces: Surface[] = layout.surfaces.map((surface) => {
     const members = surface.members.filter((member) => member !== at)
-    const activeId = surface.activeId === at ? neighborMember(surface.members, at) : surface.activeId
+    const activeId = surface.activeId === at ? neighborMember(visibleMemberIds(layout, surface.id), at) : surface.activeId
     return surface.id === surfaceId ? { ...surface, axis, members, activeId } : { ...surface, members, activeId }
   })
-  const next: Surface = { id, parentId: surfaceId, axis, weight: SPLIT_WEIGHT, members: [at], activeId: at }
+  const next: Surface = { id, parentId: surfaceId, axis, weight: SPLIT_WEIGHT, members: [at], activeId: at, minimized: false }
   return {
+    ...layout,
+    groups: withoutGroupedWindows(layout, [at]),
     surfaces: [...surfaces, next],
     // 被切出的窗体在新区域里是**停靠且可见**的(它可能刚从悬浮态落回来)。
     windows: layout.windows.map((win) => (win.id === at ? { ...win, placement: 'docked', visible: true } : win)),
@@ -695,14 +878,14 @@ export function removeSurface(layout: WorkspaceLayout, surfaceId: string): Works
       if (surface.parentId === surfaceId) return { ...surface, parentId }
       return surface
     })
-  return { ...layout, surfaces }
+  return { ...layout, surfaces, groups: layout.groups.filter((group) => group.surfaceId !== surfaceId) }
 }
 
 // 把某区域切分容器里**第 index 条分隔线**调到给定的左侧占比(百分比)。分隔线编号与渲染一致:
 // items = [自身内容(权重固定 OWN_WEIGHT), ...子区域(各自 weight)],index=0 是自身内容与首个子区域之间。
 // 第 0 条只能调右侧子区域的权重(自身内容没有字段可写);其余各条同时调左右两个子区域的权重并保持其和。
 export function setSeparatorPercent(layout: WorkspaceLayout, surfaceId: string, index: number, percent: number): WorkspaceLayout {
-  const children = childSurfaces(layout, surfaceId)
+  const children = visibleChildSurfaces(layout, surfaceId)
   if (index < 0 || index >= children.length) return layout
   const pct = Math.min(MAX_SEPARATOR_PERCENT, Math.max(MIN_SEPARATOR_PERCENT, Math.round(percent)))
   if (index === 0) {
@@ -731,7 +914,7 @@ export function setSeparatorPercent(layout: WorkspaceLayout, surfaceId: string, 
 
 // 某条分隔线的当前百分比(左侧占两侧之和的比例)—— 喂给分隔条的 aria-valuenow。
 export function separatorPercent(layout: WorkspaceLayout, surfaceId: string, index: number): number {
-  const children = childSurfaces(layout, surfaceId)
+  const children = visibleChildSurfaces(layout, surfaceId)
   if (index < 0 || index >= children.length) return 50
   const first = index === 0 ? OWN_WEIGHT : (children[index - 1]?.weight ?? OWN_WEIGHT)
   const second = children[index]?.weight ?? SPLIT_WEIGHT
@@ -769,6 +952,12 @@ export function layoutViolations(layout: WorkspaceLayout, openProjects?: readonl
       if (surface.parentId === surface.id) violations.push(`surface ${surface.id}: parentId 指向自己`)
       else if (!surfaceIds.has(surface.parentId)) violations.push(`surface ${surface.id}: parentId ${surface.parentId} 不存在`)
     }
+    if (surface.minimized) {
+      if (surface.parentId === null) violations.push(`surface ${surface.id}: 根区域不应被标记 minimized`)
+      if (!layout.groups.some((group) => group.surfaceId === surface.id && group.isSurface)) {
+        violations.push(`surface ${surface.id}: 已最小化却没有对应的整区组`)
+      }
+    }
   }
   for (const win of layout.windows) {
     const owners = layout.surfaces.filter((surface) => surface.members.includes(win.id))
@@ -780,6 +969,28 @@ export function layoutViolations(layout: WorkspaceLayout, openProjects?: readonl
     // 纯函数层的单元用例不经过页面,故不传时跳过(不改变既有调用点的语义)。
     if (open !== null && !open.has(win.content.projectId)) {
       violations.push(`window ${win.id}: 所属项目 ${win.content.projectId} 已不在已打开项目集合里`)
+    }
+  }
+  const grouped = new Set<string>()
+  for (const group of layout.groups) {
+    const owner = surfaceOf(layout, group.surfaceId)
+    if (owner === undefined) violations.push(`group ${group.id}: surface 不存在`)
+    for (const id of group.memberIds) {
+      const win = layout.windows.find((item) => item.id === id)
+      if (win === undefined || win.placement !== 'docked' || !owner?.members.includes(id)) violations.push(`group ${group.id}: 成员 ${id} 不属于来源区域的停靠窗体`)
+      if (grouped.has(id)) violations.push(`window ${id}: 同时属于多个最小化组`)
+      grouped.add(id)
+    }
+    if (group.lastActiveId !== '' && !group.memberIds.includes(group.lastActiveId)) violations.push(`group ${group.id}: lastActiveId 不在成员中`)
+    if (group.isSurface) {
+      if (owner !== undefined) {
+        if (group.memberIds.length !== owner.members.length || group.memberIds.some((id) => !owner.members.includes(id))) {
+          violations.push(`group ${group.id}: 整区组必须覆盖来源区域的全部成员`)
+        }
+        if (owner.parentId !== null && !owner.minimized) violations.push(`group ${group.id}: 整区组存在但来源区域未标记 minimized`)
+      }
+    } else if (owner?.minimized === true) {
+      violations.push(`group ${group.id}: 来源区域已整块最小化,不能同时存在部分项目的组`)
     }
   }
   if (layout.focus !== '' && !ids.has(layout.focus)) violations.push(`focus ${layout.focus} 不存在`)

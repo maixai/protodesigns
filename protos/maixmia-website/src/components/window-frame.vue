@@ -118,9 +118,11 @@ function setHeader(el: Element | ComponentPublicInstance | null): void {
   /* 头部按**自身宽度**(容器查询)决定紧凑程度:窗体窄时收成图标分段 + 去掉次要信息,
      于是「头部内部元素不换行」在任何宽度都成立。 */
   container-type: inline-size;
-  /* FLIP:拆出 / 吸附时窗体从来源矩形滑到自身落点 —— 只有 transform 有过渡(动效白名单);
-     几何属性(left / top / width / height)全程没有过渡,跟手时由 .is-moving 一并关掉。 */
-  transition: transform var(--dl-duration-base) var(--dl-ease-standard);
+  /* FLIP:拆出 / 吸附时窗体从来源矩形滑到自身落点 —— 只有 transform / opacity 有过渡(动效白名单);
+     几何属性(left / top / width / height)全程没有过渡,跟手时由 .is-moving 一并关掉。
+     transform-origin 取左上角:位移与缩放都以来源矩形的左上角对齐,视线才连得起来。 */
+  transform-origin: top left;
+  transition: transform var(--dl-duration-slow) var(--dl-ease-standard), opacity var(--dl-duration-slow) var(--dl-ease-standard);
 }
 
 /* 停靠模式:不再是浮层,而是**填满区域内容区**的一块(由页面放进转录取位里)。

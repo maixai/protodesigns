@@ -17,6 +17,16 @@ import {
   chatMemberIds,
   chatWindowId,
   closeTab,
+  closeGroup,
+  dropWindows,
+  groupOfWindow,
+  isMinimizedWindow,
+  minimizeGroup,
+  minimizedGroupsOf,
+  restoreGroup,
+  removeSurface,
+  visibleMemberIds,
+  visibleMemberWindows,
   dockWindow,
   emptyLayout,
   fileMemberIds,
@@ -564,4 +574,108 @@ test('hideWindows:逐窗复用 hideWindow 的语义,只置 visible,原布局不�
   expect(layoutViolations(layout)).toEqual([])
   // 空 ids 原样返回(不再造新对象)。
   expect(hideWindows(layout, [])).toBe(layout)
+})
+
+
+// 最小化记录与区域成员是两份不同语义：前者控制投影，后者保留原位与顺序。
+function minimizedFixture(): WorkspaceLayout {
+  const first = openTab(emptyLayout(), MAIN_SURFACE, chatContent('weekly'))
+  const second = openTab(first, MAIN_SURFACE, fileContent('README.md'))
+  const third = openTab(second, MAIN_SURFACE, { kind: 'chat', projectId: 'knowledge-base', sessionId: 'other' })
+  const active = activateTab(third, MAIN_SURFACE, WEEKLY_ID)
+  return minimizeGroup(active, { surfaceId: MAIN_SURFACE, projectId: PROJECT, name: PROJECT, memberIds: [WEEKLY_ID, README_ID], lastActiveId: WEEKLY_ID })
+}
+
+test('最小化纯操作:保留成员与顺序、过滤可见集合、组外相邻项接管', () => {
+  const layout = minimizedFixture()
+  expect(layout.surfaces[0]?.members).toEqual([WEEKLY_ID, README_ID, 'chat://knowledge-base/other'])
+  expect(layout.surfaces[0]?.activeId).toBe('chat://knowledge-base/other')
+  expect(layout.focus).toBe('chat://knowledge-base/other')
+  expect(visibleMemberIds(layout, MAIN_SURFACE)).toEqual(['chat://knowledge-base/other'])
+  expect(visibleMemberWindows(layout, MAIN_SURFACE).map((win) => win.id)).toEqual(['chat://knowledge-base/other'])
+  expect(visibleWindows(layout).map((win) => win.id)).toEqual(['chat://knowledge-base/other'])
+  expect(isMinimizedWindow(layout, WEEKLY_ID)).toBe(true)
+  expect(minimizedGroupsOf(layout)).toHaveLength(1)
+  expect(groupOfWindow(layout, README_ID)?.id).toBe('group:main:weekly-report')
+  expect(layoutViolations(layout)).toEqual([])
+  const restored = restoreGroup(layout, 'group:main:weekly-report')
+  expect(restored.groups).toEqual([])
+  expect(restored.surfaces[0]?.members).toEqual(layout.surfaces[0]?.members)
+  expect(restored.surfaces[0]?.activeId).toBe(WEEKLY_ID)
+  expect(restored.focus).toBe(WEEKLY_ID)
+  expect(layoutViolations(restored)).toEqual([])
+})
+
+test('最小化纯操作:同区域同项目重复最小化更新已有组、全部收起时无活动项', () => {
+  const layout = minimizedFixture()
+  const next = openTab(layout, MAIN_SURFACE, chatContent('roadmap'))
+  const minimized = minimizeGroup(next, { surfaceId: MAIN_SURFACE, projectId: PROJECT, name: PROJECT, memberIds: [ROADMAP_ID], lastActiveId: ROADMAP_ID })
+  expect(minimized.groups).toHaveLength(1)
+  expect(minimized.groups[0]?.memberIds).toEqual([WEEKLY_ID, README_ID, ROADMAP_ID])
+  const closedOther = closeTab(minimized, MAIN_SURFACE, 'chat://knowledge-base/other')
+  expect(closedOther.surfaces[0]?.activeId).toBe('')
+  expect(layoutViolations(closedOther)).toEqual([])
+  expect(restoreGroup(closedOther, 'group:main:weekly-report').focus).toBe(ROADMAP_ID)
+})
+
+test('最小化纯操作:关闭组不是恢复；窗体隐藏且从成员移出', () => {
+  const closed = closeGroup(minimizedFixture(), 'group:main:weekly-report')
+  expect(closed.groups).toEqual([])
+  expect(closed.surfaces[0]?.members).toEqual(['chat://knowledge-base/other'])
+  expect(closed.windows.find((win) => win.id === README_ID)?.visible).toBe(false)
+  expect(closed.windows.find((win) => win.id === WEEKLY_ID)?.visible).toBe(false)
+  expect(layoutViolations(closed)).toEqual([])
+})
+
+test('最小化纯操作:关闭、停靠、浮动、删除单个窗体时摘除组引用，空组移除', () => {
+  const layout = minimizedFixture()
+  const closed = closeTab(layout, MAIN_SURFACE, WEEKLY_ID)
+  expect(closed.groups[0]?.memberIds).toEqual([README_ID])
+  expect(closed.groups[0]?.lastActiveId).toBe('')
+  const floating = floatWindow(layout, WEEKLY_ID, { x: 0, y: 0, width: 320, height: 200 })
+  const docked = dockWindow(layout, WEEKLY_ID, MAIN_SURFACE, 0)
+  const dropped = dropWindows(layout, [WEEKLY_ID])
+  const opened = openFloating(layout, chatContent('weekly'), { x: 0, y: 0, width: 320, height: 200 })
+  for (const next of [closed, floating, docked, dropped, opened]) {
+    expect(next.groups[0]?.memberIds).toEqual([README_ID])
+    expect(layoutViolations(next)).toEqual([])
+  }
+  expect(dropWindows(layout, [WEEKLY_ID, README_ID]).groups).toEqual([])
+})
+
+test('最小化纯操作:区域删除时组解散；来源丢失时恢复到根区域', () => {
+  const base = openTab(openTab(emptyLayout(), MAIN_SURFACE, chatContent('weekly')), MAIN_SURFACE, fileContent('README.md'))
+  const split = withSurfaceSplit(base, MAIN_SURFACE, 'row', README_ID)
+  const child = split.surfaces.at(-1)
+  if (child === undefined) throw new Error('Missing child surface')
+  const minimized = minimizeGroup(split, { surfaceId: child.id, projectId: PROJECT, name: PROJECT, memberIds: [README_ID], lastActiveId: README_ID })
+  const removed = removeSurface(minimized, child.id)
+  expect(removed.groups).toEqual([])
+  expect(visibleMemberIds(removed, MAIN_SURFACE)).toContain(README_ID)
+  expect(layoutViolations(removed)).toEqual([])
+  const orphan: WorkspaceLayout = { ...minimized, surfaces: minimized.surfaces.filter((surface) => surface.id !== child.id) }
+  const recovered = restoreGroup(orphan, `group:${child.id}:${PROJECT}`)
+  expect(recovered.groups).toEqual([])
+  expect(recovered.surfaces[0]?.members).toContain(README_ID)
+  expect(recovered.focus).toBe(README_ID)
+  expect(layoutViolations(recovered)).toEqual([])
+})
+
+test('最小化纯操作:组内最后活动项、重复归组与不存在的停靠成员均被不变量拒绝', () => {
+  const layout = minimizedFixture()
+  const group = layout.groups[0]
+  if (group === undefined) throw new Error('Missing minimized group')
+  expect(layoutViolations({ ...layout, groups: [{ ...group, surfaceId: 'missing' }] })).not.toEqual([])
+  expect(layoutViolations({ ...layout, groups: [{ ...group, lastActiveId: 'missing' }] })).not.toEqual([])
+  expect(layoutViolations({ ...layout, groups: [group, { ...group, id: 'duplicate' }] })).not.toEqual([])
+  expect(layoutViolations({ ...layout, groups: [{ ...group, memberIds: ['missing'], lastActiveId: '' }] })).not.toEqual([])
+})
+
+test('最小化纯操作:重排可见成员不丢弃最小化成员或改变其相对顺序', () => {
+  const layout = openTab(openTab(minimizedFixture(), MAIN_SURFACE, chatContent('roadmap')), MAIN_SURFACE, chatContent('incident'))
+  const reordered = reorderChatMembers(layout, MAIN_SURFACE, [INCIDENT_ID, ROADMAP_ID, 'chat://knowledge-base/other'])
+  expect(reordered.surfaces[0]?.members).toContain(WEEKLY_ID)
+  expect(reordered.surfaces[0]?.members).toContain(README_ID)
+  expect(reordered.groups).toEqual(layout.groups)
+  expect(layoutViolations(reordered)).toEqual([])
 })

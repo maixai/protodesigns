@@ -3,6 +3,7 @@ import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { Agent } from '../contracts/generated/agent'
+import type { AgentNotification } from '../contracts/generated/agent-notification'
 import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
@@ -91,6 +92,8 @@ const messageSeeds = {
 
 const responsePool: (keyof Messages['workspace']['responses'])[] = ['first', 'second', 'third']
 const extraSessions: ChatSession[] = []
+// 本轮生成改变会话状态，供后台 Agent 的运行摘要与完成通知使用。
+const liveSessionStatuses = new Map<string, SessionStatus>()
 const extraMessages = new Map<string, ChatMessage[]>()
 const translatedReplies = new Map<string, keyof Messages['workspace']['responses']>()
 const responseBodies = new Map<string, string>()
@@ -109,7 +112,7 @@ export function mockSessions(demoState: AppRoute['demoState']): ChatSession[] {
       preview: t.value.workspace.previews[session.preview],
       status: sessionStatusFor(session.id, session.status, demoState),
     })),
-  ]
+  ].map((session) => ({ ...session, status: liveSessionStatuses.get(session.id) ?? session.status }))
 }
 
 // Agent 级的「需要你处理」信号:每个 Agent 名下、**未看过**的「等待交互」与「响应完成」
@@ -122,10 +125,20 @@ export function mockAgentSignals(demoState: AppRoute['demoState'], seenSessionId
     const mine = sessions.filter((session) => session.agent === agentId && !seen.has(session.id))
     return {
       agentId,
+      running: mine.filter((session) => session.status === 'streaming').length,
       awaiting: mine.filter((session) => session.status === 'awaiting').length,
       completed: mine.filter((session) => session.status === 'completed').length,
     }
   })
+}
+
+// 通知只保留尚未看过的等待与完成，等待优先，同档按更新时间倒序。
+export function mockAgentNotifications(demoState: AppRoute['demoState'], seenSessionIds: readonly string[]): AgentNotification[] {
+  const seen = new Set(seenSessionIds)
+  return mockSessions(demoState)
+    .filter((session) => !seen.has(session.id) && (session.status === 'awaiting' || session.status === 'completed'))
+    .map((session) => ({ id: `notice:${session.id}`, agentId: session.agent, projectId: session.projectId, sessionId: session.id, title: session.title, status: session.status, updatedAt: session.updatedAt }))
+    .sort((a, b) => Number(b.status === 'awaiting') - Number(a.status === 'awaiting') || b.updatedAt.localeCompare(a.updatedAt))
 }
 
 export function mockTranscript(sessionId: string): ChatMessage[] {
@@ -154,6 +167,7 @@ export function mockCreateSession(projectId: string): ChatSession {
 // 规范化留痕;粘贴文本的**全文**就在 attachments[].content 里,不因芯片折叠而丢失)。
 export function mockSendMessage(sessionId: string, text: string, attachments: Attachment[]): ChatMessage {
   sequence.message += 1
+  liveSessionStatuses.set(sessionId, 'streaming')
   const turn = turns.get(sessionId) ?? 0
   turns.set(sessionId, turn + 1)
   const responseKey = responsePool[turn % responsePool.length] ?? 'first'
@@ -172,6 +186,7 @@ export function mockSendMessage(sessionId: string, text: string, attachments: At
 }
 
 export function mockSaveResponse(sessionId: string, response: ChatMessage): void {
+  liveSessionStatuses.set(sessionId, 'completed')
   const messages = extraMessages.get(sessionId) ?? []
   const existing = messages.find((message) => message.id === response.id)
   if (existing) existing.body = response.body

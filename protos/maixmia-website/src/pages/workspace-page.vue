@@ -8,7 +8,7 @@ import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectEntry, ProjectEntryStateId } from '../contracts/generated/project-entry'
-import type { AgentSignal } from '../contracts/generated/agent-signal'
+import type { AgentNotification } from '../contracts/generated/agent-notification'
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { ProjectTreeRow } from '../data/project-tree'
@@ -23,17 +23,21 @@ import { buildProjectTree, directoryKey, flattenProjectTree } from '../data/proj
 import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
-import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, chatMemberIds, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
-import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentSignals, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
+import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
+import { closeProject as closeProjectRequest, createSession, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
-import AgentBar from '../components/agent-bar.vue'
+import { useFlightGhost } from '../composables/use-flight-ghost'
+import type { FlightRect } from '../composables/use-flight-ghost'
+import AgentContextSwitcher from '../components/agent-context-switcher.vue'
+import WorkspaceDock from '../components/workspace-dock.vue'
 import ChatPanel from '../components/chat-panel.vue'
 import ChatSessionView from '../components/chat-session-view.vue'
 import ConversationSwitcher from '../components/conversation-switcher.vue'
 import FileBar from '../components/file-bar.vue'
 import FilePanel from '../components/file-panel.vue'
+import FilePickerPopover from '../components/file-picker-popover.vue'
 import ProjectMenu from '../components/project-menu.vue'
 import ProjectPickerDialog from '../components/project-picker-dialog.vue'
 import ProjectPickerPopover from '../components/project-picker-popover.vue'
@@ -65,9 +69,9 @@ const openMenuSurfaceId = ref('')
 // 它从会话头搬到了页面级:空区域消失后根区域可能根本没有会话头,挂在那里的 live region 会一起消失。
 const tabAnnounce = ref('')
 const seenSessions = ref<Set<string>>(new Set())
-// Agent 栏的「需要你处理」信号(与 tab 状态 Badge 共用同一份 seenSessions,两处不会各说各话)。
-const agentSignals = ref<AgentSignal[]>([])
-let agentSignalVersion = 0
+const agentNotifications = ref<AgentNotification[]>([])
+const notificationsStatus = ref<'loading' | 'ready' | 'error'>('loading')
+let notificationVersion = 0
 const pageRoot = ref<HTMLElement | null>(null)
 const drawer = ref<HTMLElement | null>(null)
 const sidebarTrigger = ref<HTMLButtonElement | null>(null)
@@ -103,6 +107,10 @@ type ProjectPickerRequest =
 const projectPicker = ref<ProjectPickerRequest | null>(null)
 // 浮层的锚点 = 触发元素在视口里的矩形(由触发它的那个组件在点击时量好交上来)。
 const projectPickerAnchor = ref<WindowRect>({ x: 0, y: 0, width: 0, height: 0 })
+// 文件选择浮层的**请求**:哪个区域的「文件 +」打开、锚在哪。null = 没开。
+// 它由页面持有(而不是 FileBar):浮层要跨出区域面板、定位于视口;且一次只能有一个。
+type FilePickerRequest = { surfaceId: string; anchor: WindowRect }
+const filePicker = ref<FilePickerRequest | null>(null)
 // ---- 区域与窗体(按 **Agent** 分域保存,刷新即重置)----
 const workspaceMap = ref<WorkspaceMap>(emptyWorkspace())
 const domainKey = computed(() => agentDomainKey(selectedAgent.value))
@@ -110,6 +118,7 @@ const layout = computed<WorkspaceLayout>(() => layoutOf(workspaceMap.value, doma
 const rootId = computed<string>(() => rootSurface(layout.value)?.id ?? MAIN_SURFACE)
 // 文件内容按**复合窗体 id**(项目 + 路径)各存一份:同名文件在不同项目是不同内容、也是不同窗体。
 const fileContents = ref<Record<string, FilePanelState>>({})
+const fileDrafts = ref<Record<string, string>>({})
 const fileVersions = new Map<string, number>()
 // 每会话的在途请求版本号:乱序返回的旧结果不得覆盖新结果。
 const transcriptVersions = new Map<string, number>()
@@ -121,25 +130,28 @@ const streamTimers = new Map<string, ReturnType<typeof setInterval>>()
 const telemetryLoaded = new Set<string>()
 // 工作台重装的版本号:项目 / 会话 / 转录共用一次装载,乱序返回时只认最新一次。
 let workspaceVersion = 0
+// 显式用户导航的版本号:reloadWorkspace 在途时用户若已经点了某个会话 / 底栏条目,
+// 落地后不得再用旧落点把活动项抢回去(实测切 Agent 后立刻从底栏恢复会被重置)。
+let userNavigationVersion = 0
 
 // ---- 区域 / 窗体的视图投影 ----
 // 区域成员窗体(按 tab 顺序)。
 function tabWindowsOf(surfaceId: string): WorkspaceWindow[] {
-  return memberWindows(layout.value, surfaceId)
+  return visibleMemberWindows(layout.value, surfaceId)
 }
 function fileTabsOf(surfaceId: string): FileTab[] {
   return tabWindowsOf(surfaceId).flatMap((win) => (win.content.kind === 'file' ? [win.content] : []))
 }
 // 某区域的对话顺序(区域成员里的对话 id,按成员顺序)—— 会话头 tab 条的唯一顺序来源。
 function chatOrderOf(surfaceId: string): string[] {
-  return chatMemberIds(layout.value, surfaceId)
+  return tabWindowsOf(surfaceId).filter((win) => win.content.kind === 'chat').map((win) => win.id)
 }
 // 可见窗体(**数组顺序 = 层序**)。停靠的对话成员不在其中(它是「条上的一项」。
 const openWindows = computed<WorkspaceWindow[]>(() => visibleWindows(layout.value).filter((win) => !(win.content.kind === 'chat' && win.placement === 'docked')))
 const floatingWindows = computed<WorkspaceWindow[]>(() => openWindows.value.filter((win) => win.placement === 'floating'))
 // 占据「区域内容区」的那一个停靠成员:区域 activeId 指向它、且它是停靠。
 function activeMemberOf(surface: Surface): WorkspaceWindow | null {
-  if (surface.activeId === '') return null
+  if (surface.activeId === '' || isMinimizedWindow(layout.value, surface.activeId)) return null
   const win = layout.value.windows.find((item) => item.id === surface.activeId)
   if (win === undefined || win.placement !== 'docked') return null
   return win
@@ -199,6 +211,7 @@ const liveSessionId = computed<string>(() => {
 // 一段对话此刻是否**有视图**在渲染:悬浮窗总有;停靠对话只有作为某区域的活动成员时才有
 // (其余只是条上的一项,内容区不显示它)。
 function isChatViewRendered(win: WorkspaceWindow): boolean {
+  if (isMinimizedWindow(layout.value, win.id)) return false
   if (win.placement === 'floating') return win.visible
   return layout.value.surfaces.some((surface) => surface.activeId === win.id)
 }
@@ -253,8 +266,9 @@ const pageTitle = computed<string>(() => {
   if (isGuideSurface(rootId.value)) return t.value.workspace.onboarding.title
   return regionTitleOf(focusedSurfaceId.value)
 })
-// 引导页判据:某区域既无成员、又无子区域 —— 它没有任何东西可显示。只有根区域会走到这里
-// (非根空区域已被 pruneEmptySurfaces 摘除);此时它既不是内容区也不是容器,给一张起点引导页。
+// 引导页判据:某区域**没有可见成员、也没有可见子区域** —— 它没有任何东西可显示。
+// 只有根区域会走到这里(非根空区域已被摘除 / 整块最小化隐藏);全部页签收进底栏后,
+// 根区域同样回到创建会话的引导 —— 底栏是恢复入口,引导是新建入口,两者不混。
 // 引导页不是转录,故**不**给它 role="log"(全页 role="log" 恰为 1 的不变量在此退化为 0)。
 // **装载期除外**:此时还不知道本项目有没有会话,直接显示「这里还没有打开的窗口」会先闪一下
 // 引导页再换成会话 —— 与既有的「装载期显示加载骨架而不是空态问候语」是同一条纪律。
@@ -262,7 +276,8 @@ function isGuideSurface(surfaceId: string): boolean {
   if (workspaceLoading.value) return false
   const surface = surfaceOf(layout.value, surfaceId)
   if (surface === undefined) return false
-  return surface.members.length === 0 && childSurfaces(layout.value, surfaceId).length === 0
+  return visibleMemberWindows(layout.value, surfaceId).length === 0
+    && visibleChildSurfaces(layout.value, surfaceId).length === 0
 }
 function sessionTitleOf(sessionId: string): string {
   return sessions.value.find((item) => item.id === sessionId)?.title ?? t.value.workspace.newChat
@@ -325,7 +340,7 @@ function canSendOf(sessionId: string): boolean {
   const current = runtimeFor(sessionId)
   return current.draft.trim().length > 0 && !isBusyOf(sessionId) && current.transcript.status !== 'loading' && current.transcript.status !== 'error'
 }
-// 页级「忙碌」= **任一**会话在生成 / 保存 —— 它守护切 Agent / 切项目 / 关 tab 这类全局动作。
+// 页级「忙碌」= **任一**会话在生成 / 保存 —— 只守护关项目 / 关 tab 等破坏性动作，不阻挡切 Agent。
 const isBusy = computed(() => Object.values(chatRuntimes.value).some((current) => current.generation === 'queued' || current.generation === 'streaming' || current.isSaving))
 // 工作台是否仍在装载(项目 / 会话列表未落定)。装载期区域还没有活动成员,内容区显示空位占位 ——
 // 此时它显示的是**加载骨架**而不是空态问候语,首屏因此不会先闪一下「欢迎」再换成会话
@@ -419,9 +434,22 @@ function pruneEmptySurfaces(current: WorkspaceLayout): WorkspaceLayout {
   while (removed) {
     removed = false
     for (const surface of next.surfaces) {
-      if (surface.parentId === null || surface.members.length > 0) continue
+      if (surface.parentId === null) continue
+      // 整块显示区被收起时它仍在树里,只是不渲染 —— 不要把它当空区域摘掉。
+      if (surface.minimized) continue
+      // 它有被最小化的子显示区时也不能摘:子区域要留在原父节点下,恢复才能回到原位。
+      if (childSurfaces(next, surface.id).some((child) => child.minimized)) continue
+      // 「空」按**可见成员**算:只剩被最小化成员的区域同样应该让出空间给兄弟区域。
+      // 有子区域时不能摘 —— 它是容器,摘掉会把子树的层级结构一起改掉。
+      const isEmpty = visibleMemberWindows(next, surface.id).length === 0
+        && childSurfaces(next, surface.id).length === 0
+      if (!isEmpty) continue
+      // 区域可能还有被最小化的成员:先把挂在它名下的组改挂到父区域。
+      // removeSurface 会丢弃挂在被删区域上的组,不改挂会把用户收起的页面一并弄丢。
+      const parentId = surface.parentId
+      const rehomed = next.groups.map((group) => group.surfaceId === surface.id ? { ...group, surfaceId: parentId } : group)
       const before = next.surfaces.length
-      next = removeSurface(next, surface.id)
+      next = removeSurface({ ...next, groups: rehomed }, surface.id)
       if (next.surfaces.length < before) {
         removed = true
         break
@@ -466,8 +494,9 @@ function fileContentOf(win: WorkspaceWindow | null): FileTab | null {
 }
 
 // 取某个项目的条目树(每项目只取一次;展开时按需触发)。树自带 loading / error 两态。
-async function ensureProjectTree(projectId: string): Promise<void> {
-  if (projectTrees.value[projectId] !== undefined) return
+// force = 重试:文件选择浮层里的「加载失败 · 重试」用它重新发起一次请求。
+async function ensureProjectTree(projectId: string, force = false): Promise<void> {
+  if (!force && projectTrees.value[projectId] !== undefined) return
   treeStatus.value = { ...treeStatus.value, [projectId]: 'loading' }
   const result = await getProjectTree(projectId)
   if (!isAlive.value) return
@@ -588,6 +617,7 @@ function afterDock(surfaceId: string, message: string): void {
 }
 
 function revealWindow(id: string, fallback: (current: WorkspaceLayout) => WorkspaceLayout): void {
+  restoreWindowGroup(id)
   const owner = surfaceOwning(layout.value, id)
   if (owner !== undefined) {
     // 先让遮挡的悬浮窗体让位,再把这枚 tab 切到活动位(两层结构下停靠窗体抬不过浮层)。
@@ -619,6 +649,69 @@ function pulseWindow(id: string): void {
   clearTimeout(pulseTimer)
   pulseWindowId.value = id
   pulseTimer = setTimeout(() => { pulseWindowId.value = '' }, PULSE_MS)
+}
+
+// ---- 收起 / 恢复的空间连线 ----
+// 面板与底栏条目在起止两端即时切换;飞行幽灵只回答「折到哪去了 / 从哪展开」。
+// 目标条目在落地后做一次静态强调(不依赖动效也能看见落点)。
+const flight = useFlightGhost()
+const pulseGroupId = ref('')
+let groupPulseTimer: ReturnType<typeof setTimeout> | undefined
+function pulseDockGroup(groupId: string): void {
+  clearTimeout(groupPulseTimer)
+  pulseGroupId.value = ''
+  void nextTick(() => {
+    pulseGroupId.value = groupId
+    groupPulseTimer = setTimeout(() => { pulseGroupId.value = '' }, PULSE_MS)
+  })
+}
+function flightRectOf(selector: string | null): FlightRect | null {
+  if (selector === null) return null
+  const element = document.querySelector<HTMLElement>(selector)
+  if (element === null) return null
+  const rect = element.getBoundingClientRect()
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+}
+function surfaceFlightSelector(surfaceId: string): string {
+  return `.conversation[data-surface-id="${CSS.escape(surfaceId)}"]`
+}
+function chipFlightSelector(groupId: string): string {
+  return `.workspace-dock__chip[data-group-id="${CSS.escape(groupId)}"]`
+}
+function tabFlightSelector(windowId: string): string | null {
+  const win = layout.value.windows.find((item) => item.id === windowId)
+  if (win?.content.kind === 'chat') return `.conversation-tab[data-tab-id="${CSS.escape(win.content.sessionId)}"]`
+  if (win?.content.kind === 'file') return `.file-tab[data-file-key="${CSS.escape(windowId)}"]`
+  return null
+}
+// 目标元素要等布局落定后再量;下一次绘制前完成,避免幽灵从旧几何出发。
+function afterNextPaint(callback: () => void): void {
+  void nextTick(() => { requestAnimationFrame(() => { callback() }) })
+}
+// 显示区恢复:让**真实面板**从底栏条目方向放大回原位(窗体的 enlarge 观感)。
+// 只动 transform / opacity;reduced-motion 下跳过,状态切换照旧。
+function playSurfaceEntrance(element: HTMLElement, from: FlightRect): void {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  const rect = element.getBoundingClientRect()
+  if (rect.width <= 1 || rect.height <= 1) return
+  const host = document.querySelector<HTMLElement>('.workspace-page')
+  const style = host === null ? null : getComputedStyle(host)
+  const duration = Number.parseFloat(style?.getPropertyValue('--dl-duration-slow') ?? '') || 280
+  const easing = style?.getPropertyValue('--dl-ease-standard').trim() || 'cubic-bezier(0.2, 0, 0, 1)'
+  const dx = from.x - rect.x
+  const dy = from.y - rect.y
+  element.style.transformOrigin = 'top left'
+  const animation = element.animate(
+    [
+      { transform: `translate(${dx}px, ${dy}px) scale(0.86)`, opacity: 0.55 },
+      { transform: 'translate(0px, 0px) scale(1)', opacity: 1 },
+    ],
+    { duration, easing },
+  )
+  animation.onfinish = () => {
+    element.style.transformOrigin = ''
+    animation.cancel()
+  }
 }
 
 // 文件树里点一个文件 = 「显示它」:已有 tab 就切过去,没有才开一个悬浮窗。
@@ -742,6 +835,8 @@ function dockFileWindow(id: string, from: WindowRect | null = null): void {
     return dockWindow(current, id, targetSurface, surface?.members.length ?? 0)
   })
   afterDock(targetSurface, t.value.workspace.filePanel.dockedAnnounce.replace('{name}', windowLabel(id)))
+  // 停靠落点:目标 tab 做一次静态强调,与窗体飞入的 FLIP 一起回答「沉到哪去了」。
+  pulseWindow(id)
   if (from !== null) {
     void nextTick(() => {
       requestAnimationFrame(() => {
@@ -1175,6 +1270,7 @@ async function send(sessionId: string, text: string): Promise<void> {
   if (current.transcript.status === 'loading' || current.transcript.status === 'error') return
   // 本轮带出去的附件(含粘贴文本的**全文**):发送即随消息出去,发送成功后从草稿里清空。
   const outgoing = current.attachments.map((attachment) => ({ ...attachment }))
+  seenSessions.value = new Set([...seenSessions.value].filter((id) => id !== sessionId))
   // 发送即接管转录:把在途的旧装载作废,免得它的结果在本次发送之后写回来。
   takeOverTranscript(sessionId)
   const existing = current.transcript.status === 'ready' ? current.transcript.messages : []
@@ -1218,6 +1314,7 @@ function stop(sessionId: string): void {
 function regenerate(sessionId: string): void {
   const current = runtimeFor(sessionId)
   if (isBusyOf(sessionId) || current.full === null) return
+  seenSessions.value = new Set([...seenSessions.value].filter((id) => id !== sessionId))
   updateResponse(sessionId, '')
   startStream(sessionId)
 }
@@ -1303,7 +1400,7 @@ function reconcileLanding(): void {
   // 甚至把「所有 tab 都关掉 → 引导页」那个状态静默顶掉。
   // 窗体**还不存在**(首屏:补成员是异步的 watcher)时照常放行,故首屏落点不受影响。
   const landingWin = layout.value.windows.find((item) => item.id === id)
-  if (landingWin !== undefined && !landingWin.visible) return
+  if (isMinimizedWindow(layout.value, id) || (landingWin !== undefined && !landingWin.visible)) return
   // 落点那段对话**已属于别的区域**时也不动它:本函数只负责「根区域该显示哪段对话」,不该把
   // 用户刚搬进别处(切换器选择 / 拖拽)的那段拽回根区域。归属就是根区域时照常走既有逻辑。
   const landingOwner = surfaceOwning(layout.value, id)
@@ -1322,17 +1419,18 @@ function showConversation(): void {
   const surface = surfaceOf(layout.value, surfaceId)
   const win = surface === undefined ? null : activeMemberOf(surface)
   if (win !== null && win.content.kind === 'chat') return
-  const chats = memberWindows(layout.value, surfaceId).flatMap((item) => (item.content.kind === 'chat' ? [item.content] : []))
+  const chats = visibleMemberWindows(layout.value, surfaceId).flatMap((item) => (item.content.kind === 'chat' ? [item.content] : []))
   const target = chats.find((item) => item.sessionId === landingSessionId.value) ?? chats[0]
   if (target === undefined) return
   activateChatContent(surfaceId, target)
 }
 // 重装工作台视图:取项目列表 → 取该 Agent 全部已打开项目的会话 → 对齐落点 → 刷新落点的转录 / 遥测。
 // 平权之后**没有「当前项目」**:不再「落到选中项目」,而是装载整个 Agent 的会话(跨它已打开的项目)。
-async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false): Promise<void> {
-  if (isBusy.value) { isLocalePending.value = true; return }
+async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false, force = false): Promise<void> {
+  if (isBusy.value && !force) { isLocalePending.value = true; return }
   workspaceVersion += 1
   const version = workspaceVersion
+  const navigationAtStart = userNavigationVersion
   projectsStatus.value = 'loading'
   const projectResult = await listProjects(selectedAgent.value)
   if (!isAlive.value || version !== workspaceVersion) return
@@ -1360,9 +1458,12 @@ async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false): P
   sessions.value = sessionResult.ok ? sessionResult.value : []
   sessionStatus.value = sessionResult.ok ? (sessions.value.length ? 'ready' : 'empty') : 'error'
   // 落到首条:调用方要求时,或落点非空却不属于本 Agent 的会话集(换了 Agent)。
-  const belongsHere = sessions.value.some((item) => item.id === landingSessionId.value)
-  if (pickFirstSession || (landingSessionId.value !== '' && !belongsHere)) landingSessionId.value = sessions.value[0]?.id ?? ''
-  reconcileLanding()
+  // 只有在**这次装载期间用户没有显式导航**时才重置落点 —— 否则会把用户刚选的会话抢回去。
+  if (navigationAtStart === userNavigationVersion) {
+    const belongsHere = sessions.value.some((item) => item.id === landingSessionId.value)
+    if (pickFirstSession || (landingSessionId.value !== '' && !belongsHere)) landingSessionId.value = sessions.value[0]?.id ?? ''
+    reconcileLanding()
+  }
   // 转录:只刷新落点会话(其余可见对话各由 visibleChatIds 的 watcher 按需取)。
   // 正在生成的会话由客户端持有 —— 刷新会把它打断,故跳过(草稿 / 转录在这条路径上都不会丢)。
   const landing = landingSessionId.value
@@ -1464,6 +1565,8 @@ function leaveDataDemoState(): boolean {
 // 菜单开合:整页**至多一个区域**的菜单打开 —— 打开一个即收起别的(展开态按区域收窄,
 // 但同一时刻只允许一个,免得两个浮层同时压在界面上)。
 function onMenuOpen(surfaceId: string, open: boolean): void {
+  // ▾ 菜单与文件选择浮层互斥:菜单一旦打开,文件浮层让位(两者都锚在标题行,叠加会互相遮挡)。
+  if (open) closeFilePicker()
   openMenuSurfaceId.value = open ? surfaceId : ''
 }
 // tab 重排的 aria-live 播报:先清空再设置,连续两次相同文本也能重新触发。通道是全页唯一的那条,
@@ -1475,9 +1578,11 @@ function onTabAnnounce(text: string): void {
 // 选中会话:把该对话作为**它所在那块区域**的活动成员,收起对话切换器。**不动草稿** ——
 // 每段对话的草稿各自独立,切走再切回必须原样还在(本需求的核心不变量)。
 async function selectSession(surfaceId: string, target: ChatSession): Promise<void> {
-  if (isBusy.value) return
+  userNavigationVersion += 1
   openMenuSurfaceId.value = ''
   landingSessionId.value = target.id
+  const restoredSurface = restoreWindowGroup(windowIdOf(chatTabOf(target)))
+  if (restoredSurface !== '') surfaceId = restoredSurface
   // 点对话 tab = 显示它:先让遮挡这块区域的浮窗让位。目标本身是**悬浮**窗体时不适用 ——
   // 那条路是「置顶它」,收起会把它自己也收掉。窗体身份是复合键(项目 + 会话)。
   const targetWin = layout.value.windows.find((item) => item.id === windowIdOf(chatTabOf(target)))
@@ -1487,6 +1592,170 @@ async function selectSession(surfaceId: string, target: ChatSession): Promise<vo
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
 }
+// 显式打开最小化成员时先恢复其组，返回原区域，绝不把它搬到发起区域。
+function restoreWindowGroup(id: string): string {
+  const group = groupOfWindow(layout.value, id)
+  if (group === undefined) return ''
+  restoreDockGroup(group.id, id)
+  return surfaceOwning(layout.value, id)?.id ?? rootId.value
+}
+function focusRestoredTab(id: string, surfaceId: string): void {
+  void nextTick(() => {
+    const win = layout.value.windows.find((item) => item.id === id)
+    const chatId = win?.content.kind === 'chat' ? win.content.sessionId : ''
+    const tab = document.querySelector<HTMLElement>(`.conversation-tab[data-tab-id="${CSS.escape(chatId)}"], .file-tab[data-file-key="${CSS.escape(id)}"]`)
+    if (tab !== null) { tab.focus(); return }
+    document.getElementById(panelIdOf(surfaceId))?.focus()
+  })
+}
+function minimizableProjectsOf(surfaceId: string): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const win of tabWindowsOf(surfaceId)) {
+    const projectId = win.content.projectId
+    counts[projectId] = (counts[projectId] ?? 0) + 1
+  }
+  return counts
+}
+// 当前活动 tab 的归属项目:tab 条上的整组最小化钮按它决定「收哪一组」。
+function minimizeProject(surfaceId: string, projectId: string): void {
+  const visible = visibleMemberWindows(layout.value, surfaceId)
+  const memberIds = visible.filter((win) => win.content.projectId === projectId).map((win) => win.id)
+  if (memberIds.length === 0) return
+  // 该项目的页签就是这块区域仅剩的可见内容 → 收起的是整块显示区。
+  // 根区域例外:它不会被 minimized(否则整页没有可渲染的区域),项目组仍按组逐个收,
+  // 全部收起后由「全部最小化」空态承接;条上的最小化钮仍按整区收起。
+  const surface = surfaceOf(layout.value, surfaceId)
+  if (memberIds.length === visible.length && surface !== undefined && surface.parentId !== null) {
+    minimizeSurface(surfaceId)
+    return
+  }
+  const name = projectNameOf(projectId)
+  const lastActiveId = surfaceOf(layout.value, surfaceId)?.activeId ?? ''
+  const sourceWindowId = memberIds.includes(lastActiveId) ? lastActiveId : (memberIds.at(-1) ?? '')
+  const source = flightRectOf(tabFlightSelector(sourceWindowId))
+  patchLayout((current) => minimizeGroup(current, { surfaceId, projectId, name, memberIds, lastActiveId, isSurface: false }))
+  openMenuSurfaceId.value = ''
+  announcePlacement(t.value.workspace.dock.minimizedAnnounce.replace('{name}', name).replace('{count}', String(memberIds.length)))
+  const groupId = `group:${surfaceId}:${projectId}`
+  afterNextPaint(() => {
+    const target = flightRectOf(chipFlightSelector(groupId))
+    if (source !== null && target !== null) flight.fly(source, target)
+    pulseDockGroup(groupId)
+  })
+  void nextTick(() => document.querySelector<HTMLButtonElement>(`[data-group-menu="${CSS.escape(groupId)}"]`)?.focus())
+}
+// 收起整块显示区:区域树位置 / 权重不动,只置 minimized;渲染层跳过它,兄弟区域吃满空间。
+// 底栏条目按「整块显示区」恢复,不会把成员搬进兄弟区域。
+function minimizeSurface(surfaceId: string): void {
+  const surface = surfaceOf(layout.value, surfaceId)
+  if (surface === undefined) return
+  const members = memberWindows(layout.value, surfaceId)
+  const active = members.find((win) => win.id === surface.activeId) ?? members[0]
+  if (active === undefined) return
+  const name = projectNameOf(active.content.projectId)
+  const sourceElement = document.querySelector<HTMLElement>(surfaceFlightSelector(surfaceId))
+  const source = sourceElement === null ? null : (() => {
+    const rect = sourceElement.getBoundingClientRect()
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+  })()
+  // 状态切换后源面板就不在 DOM 里了,快照必须**切换前**克隆。
+  const sourceClone = sourceElement === null ? null : sourceElement.cloneNode(true) as HTMLElement
+  // 根区域不能被标记 minimized(它必须留在树里承载引导页),故这里按项目拆成**普通组**,
+  // 与 minimizeProject 的既有分流一致。单项目时底栏仍只有一条(标签 / 数量不变);
+  // 多项目时每个项目一条,恢复入口与项目标签对得上。若继续为根区域建 isSurface 组,
+  // 组快照会在该区域新增成员后落后于 surface.members,违反「整区组必须覆盖全部成员」
+  // 的不变量(DEV 下稳定报 [layout-invariant])。
+  const isRoot = surface.parentId === null
+  const groupId = isRoot
+    ? `group:${surfaceId}:${active.content.projectId}`
+    : `group:${surfaceId}:surface`
+  patchLayout((current) => {
+    if (!isRoot) return minimizeSurfaceOp(current, { surfaceId, projectId: active.content.projectId, name, lastActiveId: active.id })
+    const projectIds = [...new Set(members.map((win) => win.content.projectId))]
+    return projectIds.reduce((next, projectId) => {
+      const ids = members.filter((win) => win.content.projectId === projectId).map((win) => win.id)
+      return minimizeGroup(next, {
+        surfaceId,
+        projectId,
+        name: projectNameOf(projectId),
+        memberIds: ids,
+        lastActiveId: ids.includes(surface.activeId) ? surface.activeId : (ids.at(-1) ?? ''),
+        isSurface: false,
+        // 这些组由「最小化这个显示区」产生;恢复时若来源区域已有新内容(收起后新建的对话),
+        // 要切出一块新区域与它并排,而不是把新旧内容并进同一个 tab 区(见 restoreAreaGroup)。
+        isArea: true,
+      })
+    }, current)
+  })
+  openMenuSurfaceId.value = ''
+  announcePlacement(t.value.workspace.dock.minimizedAnnounce.replace('{name}', name).replace('{count}', String(members.length)))
+  // 收起的区域若本来持有焦点(典型:左侧根区),把焦点交给仍可见的下一块区域的 active 成员 ——
+  // 否则全页 h1 会落回根区域并读成「新建对话」,与屏幕上剩下的右侧区域对不上。
+  if (layout.value.focus === '') {
+    const fallback = layout.value.surfaces.find((item) => !item.minimized && item.activeId !== '' && !isMinimizedWindow(layout.value, item.activeId))
+    if (fallback !== undefined) patchLayout((current) => focusWindow(current, fallback.activeId))
+  }
+  afterNextPaint(() => {
+    const target = flightRectOf(chipFlightSelector(groupId))
+    if (source !== null && target !== null) flight.fly(source, target, { sourceClone })
+    pulseDockGroup(groupId)
+  })
+  void nextTick(() => document.querySelector<HTMLButtonElement>(`.workspace-dock__menu[data-group-menu="${CSS.escape(groupId)}"]`)?.focus())
+}
+function restoreDockGroup(groupId: string, memberId = ''): void {
+  userNavigationVersion += 1
+  const group = layout.value.groups.find((item) => item.id === groupId)
+  if (group === undefined) return
+  const source = flightRectOf(chipFlightSelector(groupId))
+  // 恢复前该区域**自身没有任何可见成员**:面板此刻没有内容态(根区域还可能带着可见兄弟区)。
+  // 这种「从无到有」的恢复应演成窗体放大;仍有可见成员的项目组则飞向它的 tab。
+  const hadNoVisibleMembers = visibleMemberWindows(layout.value, group.surfaceId).length === 0
+  patchLayout((current) => group.isArea && !group.isSurface ? restoreAreaGroup(current, groupId) : restoreGroup(current, groupId))
+  const surfaceId = surfaceOwning(layout.value, memberId || group.memberIds[0] || '')?.id ?? rootId.value
+  if (memberId !== '' && group.memberIds.includes(memberId)) patchLayout((current) => activateTab(current, surfaceId, memberId))
+  const activeId = surfaceOf(layout.value, surfaceId)?.activeId ?? ''
+  // 恢复是**用户显式动作**:把装载落点同步到恢复出来的对话,免得切 Agent 后仍在途的
+  // reloadWorkspace 用旧落点把活动项抢回 weekly(实测底栏成员恢复后又被重置)。
+  const activeWin = layout.value.windows.find((win) => win.id === activeId)
+  if (activeWin?.content.kind === 'chat') landingSessionId.value = activeWin.content.sessionId
+  uncoverSurface(surfaceId)
+  announcePlacement(t.value.workspace.dock.restoredAnnounce.replace('{name}', group.name).replace('{count}', String(group.memberIds.length)))
+  afterNextPaint(() => {
+    if (group.isSurface || group.isArea || hadNoVisibleMembers) {
+      const surfaceElement = document.querySelector<HTMLElement>(surfaceFlightSelector(surfaceId))
+      if (surfaceElement !== null && source !== null) playSurfaceEntrance(surfaceElement, source)
+    } else {
+      const target = flightRectOf(tabFlightSelector(activeId)) ?? flightRectOf(surfaceFlightSelector(surfaceId))
+      if (source !== null && target !== null) flight.fly(source, target)
+    }
+    if (activeId !== '') pulseWindow(activeId)
+  })
+  focusRestoredTab(activeId, surfaceId)
+}
+function closeDockGroup(groupId: string): void {
+  if (isBusy.value) return
+  const group = layout.value.groups.find((item) => item.id === groupId)
+  if (group === undefined) return
+  patchLayout((current) => pruneEmptySurfaces(closeGroup(current, groupId)))
+  announcePlacement(t.value.workspace.dock.closedGroupAnnounce.replace('{name}', group.name))
+  void nextTick(() => document.querySelector<HTMLButtonElement>('.workspace-dock__settings-trigger')?.focus())
+}
+async function openNotification(item: AgentNotification): Promise<void> {
+  userNavigationVersion += 1
+  if (selectedAgent.value !== item.agentId) await onSelectAgent(item.agentId, item.sessionId)
+  else if (sessionStatus.value === 'loading') await reloadWorkspace(false, false, true)
+  if (!isAlive.value || selectedAgent.value !== item.agentId) return
+  const target = sessions.value.find((session) => session.id === item.sessionId)
+  if (target === undefined) return
+  const id = windowIdOf(chatTabOf(target))
+  const surfaceId = restoreWindowGroup(id) || surfaceOwning(layout.value, id)?.id || rootId.value
+  landingSessionId.value = item.sessionId
+  activateChatContent(surfaceId, chatTabOf(target))
+  await ensureRuntime(target.id)
+  if (isDrawerOpen.value) await closeDrawer()
+  focusRestoredTab(id, surfaceId)
+}
+
 // ---- 项目选择浮层:触发规则与两种用途 ----
 // 新建对话**归谁**(用户已确认的规则,平权之后没有「当前项目」):
 //   ① 该 Agent 已打开 **≥2 个项目** → 一律弹出浮层让用户选(高亮推断出的那个,回车一步直达);
@@ -1502,12 +1771,56 @@ function inferredProjectForNewChat(surfaceId: string): string {
   return win === null ? '' : win.content.projectId
 }
 function openProjectPicker(request: ProjectPickerRequest, origin: WindowRect): void {
+  // 两种浮层互斥:项目选择浮层打开时,文件选择浮层让位(否则两层浮层叠在同一处)。
+  closeFilePicker()
   projectPickerAnchor.value = origin
   projectPicker.value = request
 }
 function closeProjectPicker(): void {
   projectPicker.value = null
 }
+
+// ---- 文件分组的 ＋ 与文件选择浮层 ----
+// 打开文件选择浮层。触发点是 ＋ 菜单里的「打开文件」——浮层以 ＋ 为锚点,一次只存在一个。
+function openFilePicker(surfaceId: string, origin: WindowRect): void {
+  if (isBusy.value) return
+  closeProjectPicker()
+  openMenuSurfaceId.value = ''
+  filePicker.value = { surfaceId, anchor: origin }
+  // 浮层要按项目列出文件树:把还没取过的树一次性触发加载(已取过的不会重复请求)。
+  for (const project of projects.value) void ensureProjectTree(project.id)
+}
+function closeFilePicker(): void {
+  filePicker.value = null
+}
+function retryProjectTree(projectId: string): void {
+  void ensureProjectTree(projectId, true)
+}
+function openProjectFromPicker(): void {
+  closeFilePicker()
+  isPickerOpen.value = true
+}
+// 选中一个文件 = 在这个区域里打开它。复用**显示**规则:已停靠在别的区域 → 切过去;
+// 正悬浮 → 置顶;都没有 → 作为本区域的 tab 打开(而不是再开一个悬浮窗)。
+function chooseFile(projectId: string, path: string): void {
+  const request = filePicker.value
+  if (request === null) return
+  const surfaceId = request.surfaceId
+  closeFilePicker()
+  if (isBusy.value) return
+  const id = fileWindowId(projectId, path)
+  revealWindow(id, (current) => openTab(current, surfaceId, { kind: 'file', projectId, path }))
+  announcePlacement(t.value.workspace.filePicker.opened.replace('{name}', fileBaseName(path)))
+  // 焦点落到刚打开的 tab;若它被显示在别的区域,那条规则已经把焦点带过去,这里只是兜住
+  // 「tab 条上确实渲染了它」的情况。
+  const owner = surfaceOwning(layout.value, id)
+  if (owner !== undefined) focusRestoredTab(id, owner.id)
+}
+// 浮层开着时新打开 / 关闭项目:把新出现的项目树补上,已加载的项目不受影响。
+watch(projects, (list) => {
+  if (filePicker.value === null) return
+  for (const project of list) void ensureProjectTree(project.id)
+})
 // 浮层的标题(按用途给):新建问「在哪个项目里新建」,改归属问「移到哪个项目」。
 const projectPickerTitle = computed(() => {
   const request = projectPicker.value
@@ -1586,6 +1899,7 @@ async function newConversation(surfaceId: string, origin: WindowRect): Promise<v
 // 在指定项目的**发起区域**建一段会话(浮层选完与「唯一项目直接建」两条路共用)。
 // 创建后的落点不变:仍落在发起的那块区域 —— 归属与落点是两件事。
 async function createChatInProject(surfaceId: string, projectId: string): Promise<void> {
+  userNavigationVersion += 1
   closeProjectPicker()
   const created = await createSession(projectId)
   if (!isAlive.value || !created.ok) return
@@ -1628,15 +1942,18 @@ function reassignSession(sessionId: string, projectId: string): void {
   announcePlacement(t.value.workspace.reassignDone.replace('{title}', session.title).replace('{project}', projectNameOf(projectId)))
 }
 // 选择器只写入自己的值;换 Agent 即换项目列表与会话,故一并重装。
-async function onSelectAgent(agent: ChatSession['agent']): Promise<void> {
-  if (isBusy.value) return
+async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''): Promise<void> {
   if (selectedAgent.value === agent) return
+  closeFilePicker()
   openMenuSurfaceId.value = ''
   clearHighlights()
   // 离开当前分域前先把内容区交回对话(域键是 Agent,故这一步必须在改 selectedAgent **之前**)。
   showConversation()
+  // 清掉旧域列表，避免 domain watcher 把旧 Agent 的成员补进新域。
+  sessions.value = []
   selectedAgent.value = agent
-  await reloadWorkspace(true, true)
+  if (targetSessionId !== '') landingSessionId.value = targetSessionId
+  await reloadWorkspace(targetSessionId === '', true, true)
 }
 // 会话搜索:在当前 Agent 已装载的全部会话里筛选(跨它已打开的项目)。请求带版本号,避免旧结果覆盖新结果。
 function onSearchInput(value: string): void {
@@ -1686,10 +2003,14 @@ function resetSearch(): void {
 // 点击命中:切到该会话、定位并高亮 turnId(标题命中没有具体轮次,不跳转)。
 async function openHit(hit: ConversationSearchHit): Promise<void> {
   if (isBusy.value) return
+  userNavigationVersion += 1
   openMenuSurfaceId.value = ''
   landingSessionId.value = hit.sessionId
   const found = sessions.value.find((item) => item.id === hit.sessionId)
-  if (found !== undefined) activateChatContent(rootId.value, chatTabOf(found))
+  if (found !== undefined) {
+    const surfaceId = restoreWindowGroup(windowIdOf(chatTabOf(found))) || rootId.value
+    activateChatContent(surfaceId, chatTabOf(found))
+  }
   patchRuntime(hit.sessionId, (current) => ({ ...current, highlightTurnId: hit.reason === 'body' ? hit.turnId : null }))
   if (isDrawerOpen.value) await closeDrawer()
   if (!leaveDataDemoState()) await reloadWorkspace(false)
@@ -1839,7 +2160,7 @@ watch(() => currentRoute.value.demoState, (demo) => {
 // 来源是**当前 Agent 已装载的全部会话**(跨它已打开的项目)—— 多项目并行时,别的项目的会话
 // 也要作为 tab 出现在同一张表上,归属由各自的复合键承担。
 function syncChatMembers(): void {
-  const contents = sessions.value.map((session) => chatTabOf(session))
+  const contents = sessions.value.filter((session) => session.agent === selectedAgent.value).map((session) => chatTabOf(session))
   const domain = domainKey.value
   const current = layoutOf(workspaceMap.value, domain)
   const targetSurface = rootId.value
@@ -1856,7 +2177,7 @@ function syncChatMembers(): void {
 }
 watch([sessions, domainKey], () => { syncChatMembers() })
 // 「已看过」的唯一登记点:某会话在 awaiting / completed 期间成为**某个区域的活动成员**即记入。
-watch([layout, sessions], () => {
+watch([layout, sessions, chatRuntimes], () => {
   const next = new Set(seenSessions.value)
   let changed = false
   for (const surface of layout.value.surfaces) {
@@ -1865,20 +2186,28 @@ watch([layout, sessions], () => {
     const content = win.content
     if (content.kind !== 'chat') continue
     const found = sessions.value.find((item) => item.id === content.sessionId)
-    if (found === undefined || (found.status !== 'awaiting' && found.status !== 'completed')) continue
+    if (found === undefined) continue
+    const status = sessionStatusOf(found) ?? found.status
+    if (status !== 'awaiting' && status !== 'completed') continue
     if (next.has(found.id)) continue
     next.add(found.id)
     changed = true
   }
   if (changed) seenSessions.value = next
 })
-watch([sessions, seenSessions], () => { void loadAgentSignals() })
-async function loadAgentSignals(): Promise<void> {
-  agentSignalVersion += 1
-  const version = agentSignalVersion
-  const result = await listAgentSignals([...seenSessions.value])
-  if (!isAlive.value || version !== agentSignalVersion) return
-  agentSignals.value = result.ok ? result.value : []
+watch([sessions, seenSessions, () => Object.entries(chatRuntimes.value).map(([id, runtime]) => `${id}:${runtime.generation}:${runtime.isSaving}`).join('|')], () => { void loadAgentNotifications() })
+function retryAgentNotifications(): void {
+  notificationsStatus.value = 'loading'
+  if (!leaveDataDemoState()) void loadAgentNotifications()
+}
+async function loadAgentNotifications(): Promise<void> {
+  notificationVersion += 1
+  const version = notificationVersion
+  if (agentNotifications.value.length === 0) notificationsStatus.value = 'loading'
+  const result = await listAgentNotifications([...seenSessions.value])
+  if (!isAlive.value || version !== notificationVersion) return
+  notificationsStatus.value = result.ok ? 'ready' : 'error'
+  if (result.ok) agentNotifications.value = result.value
 }
 
 onMounted(() => {
@@ -1898,6 +2227,8 @@ onBeforeUnmount(() => {
   isAlive.value = false
   for (const timer of streamTimers.values()) clearInterval(timer)
   streamTimers.clear()
+  clearTimeout(pulseTimer)
+  clearTimeout(groupPulseTimer)
   narrowMedia.removeEventListener('change', onViewportChange)
   motionMedia.removeEventListener('change', onMotionChange)
   document.removeEventListener('keydown', drawerKeyboard)
@@ -1923,8 +2254,11 @@ onBeforeUnmount(() => {
         :inert="isNarrow && !isDrawerOpen" :role="isNarrow && isDrawerOpen ? 'dialog' : undefined"
         :aria-modal="isNarrow && isDrawerOpen ? true : undefined" :aria-label="t.workspace.workspacePanel"
       >
-        <div v-if="isNarrow" class="sidebar-actions">
-          <button class="workspace-button icon-button" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
+        <!-- 侧栏顶部 = Agent 选择器(全局导航放在最上方,与项目区用间距分开);
+             窄屏抽屉里再并排一枚关闭钮。 -->
+        <div class="sidebar-head">
+          <AgentContextSwitcher :value="selectedAgent" :agents="AGENT_ORDER" variant="sidebar" @select="onSelectAgent" />
+          <button v-if="isNarrow" class="workspace-button icon-button sidebar-close" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
         </div>
         <section class="workspace-projects">
           <h2 class="sidebar-label" aria-hidden="true">{{ t.workspace.projects }}</h2>
@@ -2011,7 +2345,7 @@ onBeforeUnmount(() => {
                窄屏在它之上再给一枚侧栏触发钮:那枚钮原本住在会话头里,而引导页没有会话头,
                缺了它在窄屏就打不开侧栏。 -->
           <div v-if="isGuideSurface(surfaceId)" class="guide-shell">
-            <button v-if="isNarrow" :ref="bindSidebarTrigger" class="workspace-button icon-button guide-shell__trigger" :aria-label="t.workspace.openSidebar" :aria-expanded="isDrawerOpen" aria-controls="workspace-sidebar" @click="openDrawer">
+            <button v-if="isNarrow && isPrimarySurface(surfaceId)" :ref="bindSidebarTrigger" class="workspace-button icon-button guide-shell__trigger" :aria-label="t.workspace.openSidebar" :aria-expanded="isDrawerOpen" aria-controls="workspace-sidebar" @click="openDrawer">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
             <WorkspaceOnboarding
@@ -2032,7 +2366,7 @@ onBeforeUnmount(() => {
               <!-- 侧栏触发钮**每块区域各一份**(与 ＋ / 菜单同一条纪律:每块区域功能完全一样)。
                    之前只挂在根区域那份会话头上 —— 现在根区域可能是容器或引导页(没有会话头),
                    只挂在那里会让窄屏彻底失去侧栏入口。 -->
-              <button v-if="isNarrow" :ref="bindSidebarTrigger" class="workspace-button icon-button" :aria-label="t.workspace.openSidebar" :aria-expanded="isDrawerOpen" aria-controls="workspace-sidebar" @click="openDrawer">
+              <button v-if="isNarrow && isPrimarySurface(surfaceId)" :ref="bindSidebarTrigger" class="workspace-button icon-button" :aria-label="t.workspace.openSidebar" :aria-expanded="isDrawerOpen" aria-controls="workspace-sidebar" @click="openDrawer">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
               </button>
               <ConversationSwitcher
@@ -2042,6 +2376,9 @@ onBeforeUnmount(() => {
                 :sessions="sessions"
                 :sessions-status="sessionStatus"
                 :projects="projects"
+                :minimizable-project-counts="minimizableProjectsOf(surfaceId)"
+                @minimize-project="minimizeProject(surfaceId, $event)"
+                @minimize-surface="minimizeSurface(surfaceId)"
                 :excluded-session-ids="switcherExcludedSessionIds(surfaceId)"
                 :search-query="searchQuery"
                 :search-hits="searchHits"
@@ -2053,7 +2390,6 @@ onBeforeUnmount(() => {
                 :pulse-key="pulseWindowId"
                 :format-time="formatTime"
                 :disabled="isBusy"
-                :new-chat-picker-open="newChatPickerOpenFor(surfaceId)"
                 :files="fileTabsOf(surfaceId)"
                 :active-file-path="focusedWindowId"
                 :visible-file-paths="visibleFilePaths"
@@ -2066,6 +2402,7 @@ onBeforeUnmount(() => {
                 @clear-search="clearSearch"
                 @reset-search="resetSearch"
                 @new-chat="newConversation(surfaceId, $event)"
+                @open-file-picker="openFilePicker(surfaceId, $event)"
                 @close="closeChatTab(surfaceId, $event)"
                 @reorder="reorderChatTabs(surfaceId, $event)"
                 @announce="onTabAnnounce"
@@ -2100,7 +2437,7 @@ onBeforeUnmount(() => {
                 <p v-if="isDockTarget && isPrimarySurface(surfaceId)" class="conversation-heading__dock-hint" aria-hidden="true">{{ dockHintText }}</p>
               </Transition>
             </header>
-            <div class="conversation-panel" :id="panelIdOf(surfaceId)" role="tabpanel" :aria-labelledby="tabpanelLabelIdOf(surfaceId)">
+            <div class="conversation-panel" :id="panelIdOf(surfaceId)" tabindex="-1" role="tabpanel" :aria-labelledby="tabpanelLabelIdOf(surfaceId)">
               <div class="transcript-area">
                 <!-- 停靠的对话**没有标题栏**:tab 条下方直接就是转录区。归属由 tab 自己承担
                      (3px 项目色条 + 等宽缩写),改归属的入口搬进了输入坞底行(空对话时项目名
@@ -2116,6 +2453,8 @@ onBeforeUnmount(() => {
                   mode="docked"
                   :window-id="activeFileWindow(surfaceId)?.id ?? ''"
                   :state="contentOf(activeFileWindow(surfaceId)?.id ?? '')"
+                  :draft="fileDrafts[activeFileWindow(surfaceId)?.id ?? ''] ?? null"
+                  @update:draft="fileDrafts[activeFileWindow(surfaceId)?.id ?? ''] = $event"
                   :path="activeFilePath(surfaceId)"
                   :project-name="projectNameOf(activeFileWindow(surfaceId)?.content.projectId ?? '')"
                   :project-path="projectPathOf(activeFileWindow(surfaceId)?.content.projectId ?? '')"
@@ -2199,6 +2538,8 @@ onBeforeUnmount(() => {
           mode="floating"
           :window-id="win.id"
           :state="contentOf(win.id)"
+          :draft="fileDrafts[win.id] ?? null"
+          @update:draft="fileDrafts[win.id] = $event"
           :path="windowPath(win)"
           :project-name="projectNameOf(win.content.projectId)"
           :project-path="projectPathOf(win.content.projectId)"
@@ -2267,9 +2608,7 @@ onBeforeUnmount(() => {
       <Transition name="split-preview">
         <div v-if="splitPreview" class="split-preview" aria-hidden="true" :style="splitPreviewStyle" />
       </Transition>
-      <div class="agent-bar-dock">
-        <AgentBar :value="selectedAgent" :agents="AGENT_ORDER" :signals="agentSignals" @select="onSelectAgent" />
-      </div>
+      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="AGENT_ORDER" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" />
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
@@ -2284,6 +2623,21 @@ onBeforeUnmount(() => {
       :anchor="projectPickerAnchor"
       @select="chooseProject"
       @cancel="closeProjectPicker"
+    />
+    <!-- 文件选择浮层:文件分组段的 ＋ 打开。挂在页面级、position: fixed —— 它要跨出区域面板
+         (区域有 container-type,会成为 fixed 后代的包含块),且一次只允许存在一个。 -->
+    <FilePickerPopover
+      v-if="filePicker !== null"
+      :key="filePicker.surfaceId"
+      :projects="projects"
+      :project-trees="projectTrees"
+      :tree-status="treeStatus"
+      :state-of="entryStateOfPath"
+      :anchor="filePicker.anchor"
+      @select="chooseFile"
+      @cancel="closeFilePicker"
+      @retry="retryProjectTree"
+      @open-project="openProjectFromPicker"
     />
     <!-- 全页两条礼貌播报通道(各一条):tab 重排(aria-live,只挂属性不加 role=status)与
          区域 / 窗体变化(role=status)。它们都住在页面级 —— 与 h1 同理,不能住在某个区域的会话头里。 -->
@@ -2308,8 +2662,10 @@ onBeforeUnmount(() => {
   --workspace-tree-caret-slot: calc(var(--dl-icon-sm) + var(--dl-space-1));
   /* 导引线颜色:由三级文字色派生的低透明度中性线,不新增 ramp 阶。 */
   --workspace-tree-guide: color-mix(in srgb, var(--dl-text-tertiary) 40%, transparent);
-  /* 消息阅读列(正文列)上限:与 Claude.ai / ChatGPT 的 768px 对齐。 */
-  --workspace-column-max: 768px;
+  /* 会话转录列上限:48em(720px)。这是 AI 对话产品的通行区间下沿(Claude.ai / ChatGPT ≈768,
+     Perplexity ≈720),适合短消息流与代码 / 表格;长文正文仍用 --dl-measure(35em)。
+     例外条款见 design-language.md ⑤「会话转录例外」。 */
+  --workspace-column-max: 48em;
   /* 横向 tab 条(会话头 / 文件栏)共用的组件级自定属性。**定义在工作台根上**:文件栏是侧栏与
      对话面板的兄弟节点,故这些值必须在共同祖先上给出,两条栏才能共用同一套 tab 语言与紧凑档尺寸。 */
   --workspace-tab-min: 160px;
@@ -2332,24 +2688,18 @@ onBeforeUnmount(() => {
   height: calc(100dvh - var(--dl-header-height-current) - var(--dl-border-width));
   min-height: 0;
 }
-/* 外壳网格:两列(侧栏 / 对话)+ 两行(面板行 / Agent 栏行)。 */
+/* 外壳网格:两列(侧栏 / 对话)+ 两行(面板行 / 最小化栏行)。 */
 .workspace-layout { display: grid; grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100%; padding: var(--workspace-shell-inset); gap: var(--workspace-shell-inset); }
-/* Agent 栏(工作台级底栏):外壳网格的第二行,横跨侧栏左缘到对话面板右缘。 */
-.agent-bar-dock {
-  grid-column: 1 / -1;
-  padding: var(--dl-space-2) var(--dl-space-4);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-xl);
-  background: var(--dl-bg-elevated);
-}
 /* 侧栏为一块独立圆角面板:四面发丝框 + xl 圆角,overflow 让内部滚动区与满宽分隔线被圆角裁切。 */
-.workspace-sidebar { min-height: 0; display: flex; flex-direction: column; background: var(--dl-bg-elevated); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); overflow: hidden; padding: var(--dl-space-4); gap: var(--dl-space-4); }
+.workspace-sidebar { min-height: 0; display: flex; flex-direction: column; background: var(--dl-bg-elevated); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); overflow: visible; padding: var(--dl-space-4); gap: var(--dl-space-4); }
 .workspace-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--dl-space-2); min-height: var(--dl-target-size); min-width: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); background: var(--dl-bg-elevated); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .workspace-button:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
 .workspace-button:active { transform: translateY(var(--dl-lift-press)); }
 .workspace-button:focus-visible { box-shadow: var(--dl-focus-ring); }
 .workspace-button:disabled, .workspace-button[aria-disabled='true'] { cursor: not-allowed; color: var(--dl-text-disabled); background: var(--dl-bg-sunken); transform: none; }
-.sidebar-actions { display: flex; justify-content: flex-end; }
+/* 侧栏头部:Agent 选择器占满,窄屏抽屉里右侧并排一枚关闭钮。 */
+.sidebar-head { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
+.sidebar-close { flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); padding: 0; font-size: var(--dl-font-size-lg); }
 /* 区块标题:文案居中,左右各一条 1px 虚线。 */
 .sidebar-label { display: flex; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-weight: 500; letter-spacing: var(--dl-tracking-label); white-space: nowrap; }
 .sidebar-label::before, .sidebar-label::after { content: ''; flex: 1 1 0; min-width: 0; border-block-start: var(--dl-border-width) dashed var(--dl-border-base); }
@@ -2362,8 +2712,8 @@ onBeforeUnmount(() => {
 .project-item + .project-item { border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-start: var(--dl-space-2); }
 /* 项目行**粘性吸附**:滚动时项目名吸在侧栏滚动容器顶部,直到它的子树滚出(它的 .project-item 里)。
    sticky 需要不透明的底,否则下方的文件行会从背后透出来;层序走 --dl-z-sticky(不就地写数值)。
-   祖先 .project-scroll 有 overflow-y:auto、.workspace-sidebar 有 overflow:hidden —— sticky 相对
-   滚动容器定位,注意别被裁:行本身不超出滚动容器,故不受 hidden 影响。 */
+   祖先 .project-scroll 有 overflow-y:auto;.workspace-sidebar 现为 overflow:visible(让侧栏头部的
+   Agent 浮层不被裁切)—— sticky 相对滚动容器定位,注意别被裁:行本身不超出滚动容器,故不受影响。 */
 .project-row { position: sticky; inset-block-start: 0; z-index: var(--dl-z-sticky); display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: var(--dl-space-2); background: var(--dl-bg-elevated); border-radius: var(--dl-radius-sm); }
 .project-row__button { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--dl-space-2); padding-inline-start: var(--dl-space-1); min-height: var(--dl-target-size); text-align: left; border-radius: var(--dl-radius-sm); }
 /* 项目色点:归属的**颜色通道**(第二通道)。只作图形,不填整块区域、不作文字色 ——
@@ -2415,10 +2765,17 @@ onBeforeUnmount(() => {
 /* 对话面板:外层是面板(四面发丝框 + xl 圆角),纵向分成 [会话头(tablist)| tabpanel]。
    刻意不给本面板加 overflow: hidden —— 子元素的 :focus-visible 焦点环是向外画的 box-shadow,
    裁切会把环的竖边整条抹掉(基线 ⑦ 禁止吞焦点样式)。 */
-.conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); }
+.conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); container-type: inline-size; }
+/* 极窄显示区(375 分屏 / 分隔线拖到极值)降级:藏掉侧栏触发钮,避免一个 44px 控件
+   把会话头撑出区域。非根区域本来就不挂这枚钮(见模板),根区域在 <100px 时也不再挂。 */
+@container (max-width: 100px) {
+  .conversation-heading > .workspace-button.icon-button { display: none; }
+}
 /* 引导页外壳:窄屏在引导页之上再放一枚侧栏触发钮(引导页没有会话头,而那枚钮原本住在会话头里);
    其余情况它只是一层撑满的透明容器,让引导页照常填满这一格。 */
 .guide-shell { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* 「全部最小化」不再有独立空态:根区域没有可见成员时回到创建会话的引导(见 isGuideSurface),
+   底栏是恢复入口。 */
 .guide-shell__trigger { align-self: flex-start; margin-block-end: var(--dl-space-2); }
 .guide-shell__body { flex: 1; min-height: 0; }
 /* 落点区域整体描边高亮(并入 / 切分同一族手法):让「松手落到这块区域」一眼可见。

@@ -1,17 +1,17 @@
 <script setup lang="ts">
 // 插件配置弹层:渲染插件 manifest 声明的配置项(文本 / 密钥 / 开关)。
 //
-// 密钥永不回显:表单里留空 = 保持已保存的值,isSet 用占位文案表达。必填项为空时在本地
-// 先拦一次(接口还会再校验),失败不清空用户已输入的内容。
+// 配置属于**这次安装**所在的 Agent 或项目,不会跨作用域共享。
+// 密钥永不回显:表单里留空 = 保持已保存的值;必填项为空时在本地先拦一次。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { Plugin } from '../contracts/generated/plugin'
+import type { InstalledPlugin } from '../contracts/generated/installed-plugin'
 import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{
   open: boolean
-  plugin: Plugin | undefined
-  marketplaceId: string
+  installed: InstalledPlugin | undefined
+  ownerName: string
   busy: boolean
   error: string
 }>()
@@ -30,14 +30,19 @@ const dialogId = `plugin-config-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 
+const plugin = computed(() => props.installed?.plugin)
+const fields = computed(() => props.installed?.config ?? [])
 const errorText = computed(() => localError.value !== '' ? localError.value : props.error)
-const scopeLabel = computed(() => (props.plugin === undefined
+const scopeLabel = computed(() => (props.installed === undefined
   ? ''
-  : t.value.workspace.plugins.scopeLabel[props.plugin.scope]))
+  : t.value.workspace.plugins.scopeLabel[props.installed.scope]))
+const hint = computed(() => (props.installed?.scope === 'project'
+  ? t.value.workspace.plugins.configureHintProject
+  : t.value.workspace.plugins.configureHintAgent).replace('{name}', props.ownerName))
 
 function reset(): void {
   const next: Record<string, string> = {}
-  for (const field of props.plugin?.config ?? []) {
+  for (const field of fields.value) {
     // 密钥一律从空开始:真实值不回显,留空即保持。
     next[field.key] = field.type === 'secret' ? '' : field.value
   }
@@ -60,11 +65,10 @@ function finish(): void {
 }
 
 function submit(): void {
-  const plugin = props.plugin
-  if (plugin === undefined || props.busy) return
+  if (props.installed === undefined || props.busy) return
   const values: PluginConfigValue[] = []
   let invalid = false
-  for (const field of plugin.config) {
+  for (const field of fields.value) {
     const raw = drafts.value[field.key] ?? ''
     if (field.type === 'boolean') {
       values.push({ key: field.key, value: raw === 'true' ? 'true' : 'false' })
@@ -123,15 +127,15 @@ onBeforeUnmount(() => dialogRef.value?.close())
   >
     <div class="config__head">
       <h2 :id="titleId" class="config__title">{{ t.workspace.plugins.configureTitle.replace('{name}', plugin?.name ?? '') }}</h2>
-      <p :id="hintId" class="config__hint">{{ t.workspace.plugins.configureHint }}</p>
-      <p v-if="plugin" class="config__identity">
-        <code>{{ plugin.id }}@{{ marketplaceId }}</code>
+      <p :id="hintId" class="config__hint">{{ hint }}</p>
+      <p v-if="installed && plugin" class="config__identity">
+        <code>{{ plugin.id }}@{{ plugin.marketplaceId }}</code>
         <span class="config__scope">{{ scopeLabel }}</span>
       </p>
     </div>
 
     <form ref="bodyRef" class="config__body" @submit.prevent="submit">
-      <div v-for="field in plugin?.config ?? []" :key="field.key" class="field" :data-type="field.type">
+      <div v-for="field in fields" :key="field.key" class="field" :data-type="field.type">
         <div class="field__label-row">
           <label class="field__label" :for="`${dialogId}-${field.key}`">{{ field.label }}</label>
           <span v-if="field.required" class="field__required">{{ t.workspace.plugins.required }}</span>
@@ -179,8 +183,8 @@ onBeforeUnmount(() => dialogRef.value?.close())
   color: var(--dl-text-primary);
   font: inherit;
   text-align: left;
+  color-scheme: dark;
 }
-.config { color-scheme: dark; }
 .config::backdrop { background-color: var(--dl-bg-sunken); }
 .config[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 

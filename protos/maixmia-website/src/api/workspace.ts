@@ -3,6 +3,7 @@ import type { AgentId, ChatSession } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { Marketplace } from '../contracts/generated/marketplace'
+import type { InstalledPlugin, PluginInstallScopeId } from '../contracts/generated/installed-plugin'
 import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
 import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
 
@@ -31,10 +32,12 @@ import {
   mockDeleteAgent,
   mockAddMarketplace,
   mockInstallPlugin,
+  mockInstalledPlugins,
   mockMarketplaces,
   mockRemoveMarketplace,
   mockSavePluginConfig,
   mockSetMarketplaceAutoUpdate,
+  mockUpdateInstalledPlugin,
   mockUpdateMarketplace,
   mockSetPluginEnabled,
   mockUninstallPlugin,
@@ -91,85 +94,105 @@ export async function deleteAgent(agentId: AgentId): Promise<Result<AgentId>> {
   return { ok: true, value: agentId }
 }
 
-// ---- 插件与插件市场(按 Agent 隔离)----
+// ---- 插件与插件市场 ----
+//
+// 市场是全局来源;插件安装态分 agent / project 两层。自动更新属于市场。
 
-// 市场与它名下的插件一起返回:归属关系由数据结构表达,调用方不需要自己拼。
-export async function listMarketplaces(agentId: AgentId): Promise<Result<Marketplace[]>> {
+export async function listMarketplaces(): Promise<Result<Marketplace[]>> {
   await delay()
-  const marketplaces = mockMarketplaces(agentId)
-  if (marketplaces === null) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
-  return { ok: true, value: marketplaces }
+  return { ok: true, value: mockMarketplaces() }
 }
 
-// 安装状态变化后返回**整个市场**:插件在「已安装 / 可安装」两组间移动、计数也随之一并更新。
-export async function installPlugin(agentId: AgentId, marketplaceId: string, pluginId: string): Promise<Result<Marketplace>> {
+export async function addMarketplace(config: MarketplaceConfig): Promise<Result<Marketplace>> {
   await delay()
-  const marketplace = mockInstallPlugin(agentId, marketplaceId, pluginId)
-  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  return { ok: true, value: marketplace }
-}
-
-export async function uninstallPlugin(agentId: AgentId, marketplaceId: string, pluginId: string): Promise<Result<Marketplace>> {
-  await delay()
-  const marketplace = mockUninstallPlugin(agentId, marketplaceId, pluginId)
-  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  return { ok: true, value: marketplace }
-}
-
-export async function setPluginEnabled(agentId: AgentId, marketplaceId: string, pluginId: string, enabled: boolean): Promise<Result<Marketplace>> {
-  await delay()
-  const marketplace = mockSetPluginEnabled(agentId, marketplaceId, pluginId, enabled)
-  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  return { ok: true, value: marketplace }
-}
-
-// 自动更新属于市场:改一次,该市场下所有插件继承新的更新方式。
-export async function setMarketplaceAutoUpdate(agentId: AgentId, marketplaceId: string, autoUpdate: boolean): Promise<Result<Marketplace>> {
-  await delay()
-  const marketplace = mockSetMarketplaceAutoUpdate(agentId, marketplaceId, autoUpdate)
-  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  return { ok: true, value: marketplace }
-}
-
-// 手动更新市场:仅当自动更新关闭时由界面提供。已安装插件会前进一个补丁版本。
-export async function updateMarketplace(agentId: AgentId, marketplaceId: string): Promise<Result<Marketplace>> {
-  await delay()
-  const marketplace = mockUpdateMarketplace(agentId, marketplaceId)
-  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidMarketplace) }
-  return { ok: true, value: marketplace }
-}
-
-// 添加 / 移除市场:两者都只影响当前 Agent 的市场副本。
-export async function addMarketplace(agentId: AgentId, config: MarketplaceConfig): Promise<Result<Marketplace>> {
-  await delay()
-  if (!mockAgentExists(agentId)) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
   if (!config.name.trim() || !config.source.trim()) return { ok: false, error: new Error(t.value.workspace.plugins.marketplaceRequired) }
-  const marketplace = mockAddMarketplace(agentId, config)
+  const marketplace = mockAddMarketplace(config)
   if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.marketplaceExists) }
   return { ok: true, value: marketplace }
 }
 
-export async function removeMarketplace(agentId: AgentId, marketplaceId: string): Promise<Result<string>> {
+export async function removeMarketplace(marketplaceId: string): Promise<Result<string>> {
   await delay()
-  if (!mockRemoveMarketplace(agentId, marketplaceId)) {
+  if (!mockRemoveMarketplace(marketplaceId)) {
     return { ok: false, error: new Error(t.value.workspace.plugins.invalidMarketplace) }
   }
   return { ok: true, value: marketplaceId }
 }
 
-// 保存插件配置:返回整个市场,插件行上的「需配置」状态随之更新。
-// secret 留空 = 保持原值;必填项仍为空时返回失败。
+// 自动更新属于市场:改一次,该市场下所有插件继承新的更新方式。
+export async function setMarketplaceAutoUpdate(marketplaceId: string, autoUpdate: boolean): Promise<Result<Marketplace>> {
+  await delay()
+  const marketplace = mockSetMarketplaceAutoUpdate(marketplaceId, autoUpdate)
+  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidMarketplace) }
+  return { ok: true, value: marketplace }
+}
+
+// 手动更新市场:仅当自动更新关闭时由界面提供。该市场的插件补丁版本 +1。
+export async function updateMarketplace(marketplaceId: string): Promise<Result<Marketplace>> {
+  await delay()
+  const marketplace = mockUpdateMarketplace(marketplaceId)
+  if (marketplace === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidMarketplace) }
+  return { ok: true, value: marketplace }
+}
+
+// 某个 Agent / 项目里的已安装插件。scope 决定归属,ownerId 是 Agent id 或项目路径。
+export async function listInstalledPlugins(scope: PluginInstallScopeId, ownerId: string): Promise<Result<InstalledPlugin[]>> {
+  await delay()
+  const installed = mockInstalledPlugins(scope, ownerId)
+  if (installed === null) {
+    return { ok: false, error: new Error(scope === 'agent' ? t.value.workspace.invalidAgent : t.value.workspace.invalidProject) }
+  }
+  return { ok: true, value: installed }
+}
+
+export async function installPlugin(scope: PluginInstallScopeId, ownerId: string, marketplaceId: string, pluginId: string): Promise<Result<InstalledPlugin>> {
+  await delay()
+  const installed = mockInstallPlugin(scope, ownerId, marketplaceId, pluginId)
+  if (installed === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  return { ok: true, value: installed }
+}
+
+export async function uninstallPlugin(scope: PluginInstallScopeId, ownerId: string, marketplaceId: string, pluginId: string): Promise<Result<string>> {
+  await delay()
+  if (!mockUninstallPlugin(scope, ownerId, marketplaceId, pluginId)) {
+    return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  }
+  return { ok: true, value: pluginId }
+}
+
+export async function setPluginEnabled(scope: PluginInstallScopeId, ownerId: string, marketplaceId: string, pluginId: string, enabled: boolean): Promise<Result<InstalledPlugin>> {
+  await delay()
+  const installed = mockSetPluginEnabled(scope, ownerId, marketplaceId, pluginId, enabled)
+  if (installed === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  return { ok: true, value: installed }
+}
+
+// 单个插件的手动更新:只更新这一份安装,不改变市场策略。
+export async function updateInstalledPlugin(
+  scope: PluginInstallScopeId,
+  ownerId: string,
+  marketplaceId: string,
+  pluginId: string,
+): Promise<Result<InstalledPlugin>> {
+  await delay()
+  const installed = mockUpdateInstalledPlugin(scope, ownerId, marketplaceId, pluginId)
+  if (installed === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  return { ok: true, value: installed }
+}
+
+// 保存插件配置:secret 留空 = 保持原值;必填项仍为空时返回失败。
 export async function savePluginConfig(
-  agentId: AgentId,
+  scope: PluginInstallScopeId,
+  ownerId: string,
   marketplaceId: string,
   pluginId: string,
   values: readonly PluginConfigValue[],
-): Promise<Result<Marketplace>> {
+): Promise<Result<InstalledPlugin>> {
   await delay()
-  const result = mockSavePluginConfig(agentId, marketplaceId, pluginId, values)
+  const result = mockSavePluginConfig(scope, ownerId, marketplaceId, pluginId, values)
   if (result.status === 'missing') return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
   if (result.status === 'invalid') return { ok: false, error: new Error(t.value.workspace.plugins.configRequired) }
-  return { ok: true, value: result.marketplace }
+  return { ok: true, value: result.installed }
 }
 
 // 某个 Agent 下的会话列表:返回它**当前已打开的全部项目**里的会话。

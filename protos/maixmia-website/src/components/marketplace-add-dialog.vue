@@ -6,7 +6,6 @@
 // 一次性声明,和插件行里的启用开关不是同一种控件。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
-import type { PluginScopeId } from '../contracts/generated/plugin'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{
@@ -25,23 +24,16 @@ const sourceRef = ref<HTMLInputElement | null>(null)
 const returnFocusRef = ref<HTMLElement | null>(null)
 const source = ref('')
 const name = ref('')
-const scope = ref<PluginScopeId>('user')
 const autoUpdate = ref(false)
 const dialogId = `marketplace-add-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 
-const scopeOptions = computed(() => (['user', 'project', 'local'] as const).map((id) => ({
-  id,
-  label: t.value.workspace.plugins.scopeLabel[id],
-  hint: t.value.workspace.plugins.scopeHint[id],
-})))
 const canSubmit = computed(() => source.value.trim() !== '' && name.value.trim() !== '' && !props.busy)
 
 function reset(): void {
   source.value = ''
   name.value = ''
-  scope.value = 'user'
   autoUpdate.value = false
 }
 
@@ -56,7 +48,6 @@ function submit(): void {
   emit('submit', {
     name: name.value.trim(),
     source: source.value.trim(),
-    scope: scope.value,
     autoUpdate: autoUpdate.value,
   })
 }
@@ -115,17 +106,6 @@ onBeforeUnmount(() => dialogRef.value?.close())
         >
       </label>
 
-      <fieldset class="market-add__scopes">
-        <legend class="field__label">{{ t.workspace.plugins.marketplaceScope }}</legend>
-        <label v-for="option in scopeOptions" :key="option.id" class="scope-option" :data-checked="scope === option.id ? 'true' : undefined">
-          <input v-model="scope" type="radio" name="marketplace-scope" :value="option.id">
-          <span class="scope-option__body">
-            <span class="scope-option__label">{{ option.label }}</span>
-            <span class="scope-option__hint">{{ option.hint }}</span>
-          </span>
-        </label>
-      </fieldset>
-
       <label class="market-add__check">
         <input v-model="autoUpdate" type="checkbox">
         <span class="market-add__check-body">
@@ -173,15 +153,6 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .field__input { inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .field__input::placeholder { color: var(--dl-text-tertiary); }
 .field__input:focus-visible { border-color: var(--dl-border-strong); outline: none; box-shadow: var(--dl-focus-ring); }
-
-.market-add__scopes { display: grid; gap: var(--dl-space-2); border: none; margin: 0; padding: 0; }
-.scope-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); }
-.scope-option[data-checked='true'] { border-color: var(--dl-accent); background: var(--dl-accent-soft); }
-.scope-option input { inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); margin-block-start: var(--dl-border-width); accent-color: var(--dl-accent); }
-.scope-option__body { display: grid; gap: var(--dl-space-1); min-width: 0; }
-.scope-option__label { color: var(--dl-text-primary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); letter-spacing: var(--dl-tracking-caps); }
-.scope-option__hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
-.scope-option:focus-within { box-shadow: var(--dl-focus-ring); }
 
 .market-add__check { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--dl-space-2); }
 .market-add__check input { inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); margin-block-start: var(--dl-border-width); accent-color: var(--dl-accent); }

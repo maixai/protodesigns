@@ -9,6 +9,8 @@ import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import { AGENT_MODELS, DEFAULT_AGENT_MODEL } from '../data/agents'
 import { useI18n } from '../i18n'
+import PluginManager from './plugin-manager.vue'
+import SidebarViewTabs from './sidebar-view-tabs.vue'
 
 const props = defineProps<{
   open: boolean
@@ -34,6 +36,8 @@ const name = ref('')
 const role = ref('')
 const modelId = ref(DEFAULT_AGENT_MODEL)
 const selectedTemplate = ref('')
+// 编辑模式分「身份 / 插件」两页;创建模式只有表单。
+const activeTab = ref<'identity' | 'plugins'>('identity')
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
@@ -48,12 +52,21 @@ const templates = computed<{ id: TemplateId; label: string; hint: string }[]>(()
 
 const isCreate = computed(() => props.mode === 'create')
 const title = computed(() => (isCreate.value ? t.value.workspace.agentAdmin.createTitle : t.value.workspace.agentAdmin.settingsTitle))
-const hint = computed(() => (isCreate.value ? t.value.workspace.agentAdmin.createHint : t.value.workspace.agentAdmin.settingsHint))
+const tabs = computed(() => [
+  { id: 'identity', label: t.value.workspace.agentAdmin.tabIdentity },
+  { id: 'plugins', label: t.value.workspace.agentAdmin.tabPlugins },
+])
+const hint = computed(() => {
+  if (isCreate.value) return t.value.workspace.agentAdmin.createHint
+  // 插件页的说明由插件管理器自己给(更贴近内容),头部不再重复一遍。
+  return activeTab.value === 'plugins' ? '' : t.value.workspace.agentAdmin.settingsHint
+})
 const canSubmit = computed(() => name.value.trim() !== '' && role.value.trim() !== '' && !props.busy)
 
 function reset(): void {
   confirmingDelete.value = false
   selectedTemplate.value = ''
+  activeTab.value = 'identity'
   name.value = props.agent?.name ?? ''
   role.value = props.agent?.role ?? ''
   modelId.value = props.agent?.modelId ?? DEFAULT_AGENT_MODEL
@@ -124,16 +137,26 @@ onBeforeUnmount(() => dialogRef.value?.close())
 <template>
   <dialog
     ref="dialogRef" class="agent-editor" aria-modal="true"
-    :aria-labelledby="titleId" :aria-describedby="hintId"
+    :aria-labelledby="titleId" :aria-describedby="hint !== '' ? hintId : undefined"
     @cancel.prevent="finish('cancel')" @click="onBackdropClick"
   >
     <div class="agent-editor__head">
       <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
       <span v-if="!isCreate && agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
-      <p :id="hintId" class="agent-editor__hint">{{ hint }}</p>
+      <p v-if="hint !== ''" :id="hintId" class="agent-editor__hint">{{ hint }}</p>
     </div>
 
-    <div class="agent-editor__body">
+    <SidebarViewTabs
+      v-if="!isCreate" id-prefix="agent-settings" v-model="activeTab"
+      :options="tabs" :label="t.workspace.agentAdmin.tabsLabel"
+    />
+
+    <div
+      v-if="isCreate || activeTab === 'identity'" class="agent-editor__body"
+      :id="!isCreate ? 'agent-settings-panel-identity' : undefined"
+      :role="!isCreate ? 'tabpanel' : undefined"
+      :aria-labelledby="!isCreate ? 'agent-settings-tab-identity' : undefined"
+    >
       <fieldset v-if="isCreate" class="agent-editor__templates">
         <legend class="agent-editor__legend">{{ t.workspace.agentAdmin.templates }}</legend>
         <div class="template-grid">
@@ -191,11 +214,21 @@ onBeforeUnmount(() => dialogRef.value?.close())
       </section>
     </div>
 
-    <div class="agent-editor__actions">
+    <div
+      v-else id="agent-settings-panel-plugins" role="tabpanel"
+      aria-labelledby="agent-settings-tab-plugins" class="agent-editor__body agent-editor__body--plugins"
+    >
+      <PluginManager v-if="open && agent" scope="agent" :owner-id="agent.id" :owner-name="agent.name" />
+    </div>
+
+    <div v-if="isCreate || activeTab === 'identity'" class="agent-editor__actions">
       <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish('cancel')">{{ t.workspace.agentAdmin.cancel }}</button>
       <button type="button" class="dl-btn dl-btn--primary" :disabled="!canSubmit" @click="finish('submit')">
         {{ busy ? (isCreate ? t.workspace.agentAdmin.creating : t.workspace.agentAdmin.saving) : (isCreate ? t.workspace.agentAdmin.create : t.workspace.agentAdmin.save) }}
       </button>
+    </div>
+    <div v-else class="agent-editor__actions">
+      <button type="button" class="dl-btn dl-btn--ghost" @click="finish('cancel')">{{ t.workspace.plugins.done }}</button>
     </div>
   </dialog>
 </template>
@@ -223,6 +256,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .agent-editor__hint { flex-basis: 100%; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
 .agent-editor__body { display: flex; flex-direction: column; gap: var(--dl-space-4); min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-inline-end: var(--dl-space-1); }
+.agent-editor__body--plugins { gap: 0; }
 
 .agent-editor__templates { display: grid; gap: var(--dl-space-2); border: none; padding: 0; margin: 0; }
 .agent-editor__legend { margin-block-end: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }

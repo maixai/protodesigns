@@ -11,7 +11,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from '../i18n'
 
 defineProps<{ projectName: string }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; settings: [] }>()
 
 const { t } = useI18n()
 const isOpen = ref(false)
@@ -21,7 +21,7 @@ const opensUpward = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 // 浮层高度的估计值(一条菜单项的触达尺寸 + 内边距),只用于「下方是否放得下」的判断。
-const MENU_HEIGHT = 60
+const MENU_HEIGHT = 120
 
 function measurePlacement(): void {
   const trigger = triggerRef.value
@@ -86,7 +86,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
       <span aria-hidden="true">⋯</span>
     </button>
     <div v-if="isOpen" class="project-menu__popover" :class="{ 'is-up': opensUpward }" role="menu">
-      <button type="button" class="project-menu__item" role="menuitem" @click="close(false); emit('close')">
+      <button type="button" class="project-menu__item" role="menuitem" @click="close(false); emit('settings')">
+        {{ t.workspace.projectSettings.title }}
+      </button>
+      <button type="button" class="project-menu__item" data-tone="danger" role="menuitem" @click="close(false); emit('close')">
         {{ t.workspace.closeProject }}
       </button>
     </div>
@@ -160,6 +163,8 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
   text-align: left;
   white-space: nowrap;
 }
+
+.project-menu__item[data-tone='danger'] { color: var(--dl-error); }
 
 .project-menu__item:hover {
   background: var(--dl-bg-hover);

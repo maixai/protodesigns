@@ -380,10 +380,20 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .install__trust[data-trust='trusted'] { color: var(--dl-accent); }
 
 .install__search { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-tertiary); }
-.install__search:focus-within { border-color: var(--dl-border-strong); box-shadow: var(--dl-focus-ring); }
+/* 聚焦指示是一个整体:1px 强调色描边 + 1px 半透明外沿拼成一条约 2px 的实边
+   (WCAG 2.2 焦点外观的面积下限),而不是全局 3px/45% 的粗环 —— 整行高的搜索框上
+   那圈会读作一道粗绿边框。 */
+.install__search:focus-within {
+  border-color: var(--dl-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--dl-accent) 60%, transparent);
+}
 .install__search-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .install__search-input::placeholder { color: var(--dl-text-tertiary); }
-.install__search-input:focus { outline: none; }
+/* 焦点环只留外层容器那一圈(画在 .install__search:focus-within 上)。输入框是透明无框的,
+   若再继承全局 :focus-visible 的 box-shadow,会与容器那圈叠成「内外双层青瓷粗框」;
+   故这里显式抹掉,让聚焦时只有容器描边外侧的一圈。 */
+.install__search-input:focus,
+.install__search-input:focus-visible { outline: none; box-shadow: none; }
 
 .install__body { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-inline-end: var(--dl-space-1); }
 .install__empty { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-6) var(--dl-space-3); border: var(--dl-border-width) dashed var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); text-align: center; }

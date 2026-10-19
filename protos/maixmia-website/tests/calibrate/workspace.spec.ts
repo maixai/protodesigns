@@ -1760,6 +1760,18 @@ test('Agent 安装弹层:市场来源栏可增删;大目录分批加载', async 
   const install = page.getByRole('dialog', { name: '安装插件' })
   await expect(install.locator('.install__results-head')).toContainText('Anthropic Plugins')
 
+  // 搜索框聚焦时只保留容器一圈焦点指示:内层输入框不得再叠一层自己的焦点环(双层青瓷粗框)。
+  await install.locator('.install__search-input').focus()
+  const focusShadows = await install.locator('.install__search').evaluate((box) => {
+    const input = box.querySelector('input')
+    return {
+      box: getComputedStyle(box).boxShadow,
+      input: input instanceof HTMLElement ? getComputedStyle(input).boxShadow : 'missing',
+    }
+  })
+  expect(focusShadows.box).not.toBe('none')
+  expect(focusShadows.input).toBe('none')
+
   // 来源栏添加一个已知市场;新市场自动选中。
   await install.locator('.install__rail-add').click()
   const add = page.getByRole('dialog', { name: '添加市场' })

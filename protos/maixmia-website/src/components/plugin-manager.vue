@@ -394,26 +394,22 @@ watch([() => props.scope, () => props.ownerId], () => {
               />
             </span>
           </div>
-          <p class="plugin-group__source" :title="group.binding.marketplace.source">{{ group.binding.marketplace.source }}</p>
+          <div class="plugin-group__source-row">
+            <p class="plugin-group__source" :title="group.binding.marketplace.source">{{ group.binding.marketplace.source }}</p>
+            <!-- 手动更新是市场源的一次性命令,放在来源地址同一行右侧;始终可见。 -->
+            <button
+              type="button" class="plugin-group__update"
+              :aria-label="t.workspace.plugins.updateLabel.replace('{name}', group.binding.marketplace.name)"
+              :disabled="busyMarketplaceId === group.binding.marketplace.id"
+              @click="onUpdateMarket(group.binding.marketplace.id)"
+            >
+              <DliIcon name="sync" size="sm" />
+              <span>{{ busyMarketplaceId === group.binding.marketplace.id ? t.workspace.plugins.updating : t.workspace.plugins.updateNow }}</span>
+            </button>
+          </div>
         </div>
-        <ul v-if="group.installed.length > 0" class="plugin-manager__list plugin-group__list">
-          <PluginRow
-            v-for="item in group.installed" :key="`${item.plugin.id}@${item.plugin.marketplaceId}`"
-            :installed="item" :busy="pluginBusy(item)" :show-marketplace="false"
-            @update="onUpdate" @configure="openConfig" @uninstall="onUninstall" @toggle="onToggle"
-          />
-        </ul>
-        <p v-else class="plugin-group__empty">{{ t.workspace.plugins.marketplaceNoInstalledPlugins }}</p>
-        <!-- 底栏是市场级策略带:安装属于「这个市场的插件列表」,自动更新 / 更新属于整个市场。
-             自动更新用带明确状态的文字切换,而不是与插件启停同款的开关,避免两类开关混淆。 -->
-        <div class="plugin-group__footer" :data-after-list="group.installed.length > 0 ? 'true' : undefined">
-          <button
-            type="button" class="plugin-group__add"
-            @click="openInstall(group.binding.marketplace.id)"
-          >
-            <span aria-hidden="true">＋</span>
-            <span>{{ t.workspace.plugins.installPlugin }}</span>
-          </button>
+        <!-- 策略 / 安装栏属于插件列表:自动更新是持续策略,安装是列表的主行动。 -->
+        <div class="plugin-group__bar">
           <div class="plugin-group__policy">
             <button
               type="button" class="plugin-group__auto-toggle"
@@ -428,17 +424,23 @@ watch([() => props.scope, () => props.ownerId], () => {
                 {{ group.binding.autoUpdate ? t.workspace.plugins.autoUpdateStateOn : t.workspace.plugins.autoUpdateStateOff }}
               </span>
             </button>
-            <button
-              v-if="!group.binding.autoUpdate" type="button" class="plugin-group__update"
-              :aria-label="t.workspace.plugins.updateLabel.replace('{name}', group.binding.marketplace.name)"
-              :disabled="busyMarketplaceId === group.binding.marketplace.id"
-              @click="onUpdateMarket(group.binding.marketplace.id)"
-            >
-              <DliIcon name="sync" size="sm" />
-              <span>{{ busyMarketplaceId === group.binding.marketplace.id ? t.workspace.plugins.updating : t.workspace.plugins.updateNow }}</span>
-            </button>
           </div>
+          <button
+            type="button" class="plugin-group__add"
+            @click="openInstall(group.binding.marketplace.id)"
+          >
+            <span aria-hidden="true">＋</span>
+            <span>{{ t.workspace.plugins.installPlugin }}</span>
+          </button>
         </div>
+        <ul v-if="group.installed.length > 0" class="plugin-manager__list plugin-group__list">
+          <PluginRow
+            v-for="item in group.installed" :key="`${item.plugin.id}@${item.plugin.marketplaceId}`"
+            :installed="item" :busy="pluginBusy(item)" :show-marketplace="false"
+            @update="onUpdate" @configure="openConfig" @uninstall="onUninstall" @toggle="onToggle"
+          />
+        </ul>
+        <p v-else class="plugin-group__empty">{{ t.workspace.plugins.marketplaceNoInstalledPlugins }}</p>
       </li>
     </ul>
 
@@ -494,14 +496,15 @@ watch([() => props.scope, () => props.ownerId], () => {
 .plugin-group__trust[data-trust='trusted'] { color: var(--dl-accent); }
 .plugin-group__counts { flex: none; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; }
 .plugin-group__menu { margin-inline-start: auto; }
-.plugin-group__source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
-/* 底栏是市场级策略带:安装(左) + 自动更新 / 更新(右)。 */
-.plugin-group__footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dl-space-2); border-end-start-radius: var(--dl-radius-md); border-end-end-radius: var(--dl-radius-md); }
-.plugin-group__footer[data-after-list='true'] { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
-.plugin-group__add { display: flex; flex: 1; align-items: center; gap: var(--dl-space-1); min-inline-size: 0; min-block-size: var(--dl-space-8); padding-inline: var(--dl-space-3); border-end-start-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); text-align: left; }
-.plugin-group__add:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.plugin-group__add:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
-.plugin-group__policy { display: flex; align-items: center; gap: var(--dl-space-1); flex: none; margin-inline-start: auto; min-block-size: var(--dl-space-8); padding-inline: var(--dl-space-3); }
+.plugin-group__source-row { display: flex; align-items: center; gap: var(--dl-space-2); min-width: 0; }
+.plugin-group__source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+/* Header 下方的市场级动作条:自动更新在左,安装(主行动)在右;手动更新在 Header 的来源行。 */
+.plugin-group__bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dl-space-2); min-block-size: var(--dl-space-8); padding-inline: var(--dl-space-3); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+.plugin-group__policy { display: flex; align-items: center; gap: var(--dl-space-1); flex: none; min-block-size: var(--dl-space-8); }
+/* 安装是这个市场的主行动:ghost 文字动作放右侧,权重高于更新 / 自动更新,但不做成粗按钮。 */
+.plugin-group__add { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-8); margin-inline-start: auto; padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
+.plugin-group__add:hover { background: var(--dl-bg-hover); }
+.plugin-group__add:focus-visible { box-shadow: var(--dl-focus-ring); }
 /* 自动更新是带状态的文字切换:「自动更新 · 开 / 关」。
    不用开关,避免与插件行里的启停开关混淆;状态词本身承担状态,不只靠颜色。 */
 .plugin-group__auto-toggle { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
@@ -511,8 +514,9 @@ watch([() => props.scope, () => props.ownerId], () => {
 .plugin-group__auto-sep { color: var(--dl-text-tertiary); }
 .plugin-group__auto-state { color: var(--dl-text-tertiary); font-variant-numeric: tabular-nums; }
 .plugin-group__auto-state[data-on='true'] { color: var(--dl-accent); }
-.plugin-group__update { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
-.plugin-group__update:hover:not(:disabled) { border-color: var(--dl-border-strong); background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+/* 手动更新是 ghost 动作:与自动更新状态同一行、同一视觉重量,不再是一颗孤立描边按钮。 */
+.plugin-group__update { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
+.plugin-group__update:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .plugin-group__update:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
 .plugin-group__update:focus-visible { box-shadow: var(--dl-focus-ring); }
 .plugin-group__list { padding-inline: var(--dl-space-3); }

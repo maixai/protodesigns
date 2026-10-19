@@ -151,6 +151,9 @@ async function waitForStable(page: Page, state = 'ready', heading: string = zhHe
   await expect(page.getByRole('log')).toHaveAttribute('data-state', state)
   // 视觉隐藏的 h1 文字 = 当前会话标题(Agent 副标题已下线,故这就是纯标题)。
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(heading)
+  // 遥测在转录之后异步到达;375 下它会让 composer 底行多折一行(24px),直接改变坞高。
+  // 几何类断言必须等它落定,否则会量到「遥测未到」的瞬时高度(实测 375 串行/并行都会偶发)。
+  if (state === 'ready') await expect(page.locator('.telemetry__item--context')).toBeVisible()
   await expect.poll(() => page.locator('.workspace-page').evaluate((element) => getComputedStyle(element).fontSize)).toBe('15px')
   await page.evaluate(async () => { await document.fonts.ready })
 }
@@ -289,10 +292,7 @@ for (const width of WIDTHS) {
     //      **卡片外**的项目挂耳标签属独立控件档(44),不适用本档;本用例的语料(weekly 已有消息 →
     //      标签为只读纯文本 span,不是 button)不渲染那个按钮,故无需排除,它的 44×44 命中区
     //      在「空对话可改归属」用例里核对。
-    //   ⑨ **项目内容 tab 与 Skill 行**——tab 是横向密集行(.view-tabs__tab,与侧栏顶层 tab 同档,
-    //      任何宽度都保持 28);Skill 行是纵向密集行(桌面 36 / 抽屉 44)。两者都整行可点,
-    //      相邻中心距 > 24。判据在 skills.spec.ts 的「项目内容 tab 与 Skills 行」用例逐条核对。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.project-skills__row):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -3100,9 +3100,8 @@ test('项目专属前导记号:色点 10px、aria-hidden;树里图标数为 0', 
   if (box === null) return
   expect(Math.abs(box.width - 10), '色点宽 10(--dl-identity-dot-size)').toBeLessThanOrEqual(1)
   expect(Math.abs(box.height - 10), '色点高 10').toBeLessThanOrEqual(1)
-  // 文件树**行**里没有任何图标元素(dl-icon)—— 项目行只靠色点 + 名称区分。
-  // Skills 分组自己的图标住在 .project-skills 内、不在 .entry-list 里,不属于这条断言。
-  await expect(page.locator('.project-tree .entry-list .dl-icon')).toHaveCount(0)
+  // 树里没有任何图标元素(dl-icon)—— 项目行只靠色点 + 名称区分。
+  await expect(page.locator('.project-tree .dl-icon')).toHaveCount(0)
 })
 
 test('展开脊线:与 level-1 caret 列左缘同一竖线;折叠时消失', async ({ page }) => {
@@ -3138,9 +3137,8 @@ test('项目行留白:上方 ≥ 下方 × 1.4(USWDS 标题归属规则)', async
     const first = items[0]?.getBoundingClientRect()
     const second = items[1]?.getBoundingClientRect()
     const row = items[1]?.querySelector('.project-row')?.getBoundingClientRect()
-    // 「项目行下方的第一个内容块」现在是项目内容 tab 条(文件 / Skills);
-    // 取它,保持原断言「项目行下方留白」的语义不变。
-    const firstContent = items[1]?.querySelector('.project-tree .view-tabs')?.getBoundingClientRect()
+    // 项目行的直接下方内容就是第一条文件行;用它量「项目行下方留白」。
+    const firstContent = items[1]?.querySelector('.entry-row')?.getBoundingClientRect()
     if (!first || !second || !row || !firstContent) return null
     return { above: second.top - first.bottom, below: firstContent.top - row.bottom }
   })
@@ -4157,10 +4155,11 @@ test('输入区内缩:四宽度 × 单/多行草稿,内缩静态、无 mask、�
       await waitForStable(page)
       const input = page.getByRole('textbox', { name: /与「.+」对话/ })
       const form = page.locator('.composer-form')
+      const singleFormHeight = (await form.boundingBox())?.height ?? 0
       if (multiline) {
         await input.fill('第一行草稿\n第二行草稿\n第三行草稿\n第四行草稿')
         // 多行输入框长高落定后再量静态内缩(它不应有任何变化)。
-        await expect.poll(async () => (await form.boundingBox())?.height ?? 0, { message: '多行输入框已长高' }).toBeGreaterThan(0)
+        await expect.poll(async () => (await form.boundingBox())?.height ?? 0, { message: '多行输入框已长高' }).toBeGreaterThan(singleFormHeight + 1)
       }
       const formHeight = (await form.boundingBox())?.height ?? 0
       // 贴底。
@@ -5182,13 +5181,14 @@ test('文件栏内缩:内缩静态一档,末条不与坞 / 遥测条 / 文件栏
       const label = `@${width} ${multiline ? '多行' : '单行'}`
       const form = page.locator('.composer-form')
       const bar = page.locator(FILE_BAR)
+      const singleFormHeight = (await form.boundingBox())?.height ?? 0
 
       // 常驻的实质好处:0 个文件与 N 个文件时,**内缩与转录区几何逐值相同**
       // (首次打开文件不再引起版面跳动)。多行草稿先填好并等输入框长高落定,免得把「草稿长高」
       // 误当成「打开文件」的影响。
       if (multiline) {
         await page.getByRole('textbox', { name: /与「.+」对话/ }).fill('第一行草稿\n第二行草稿\n第三行草稿\n第四行草稿')
-        await expect.poll(async () => (await form.boundingBox())?.height ?? 0, { message: `${label}:草稿长高落定` }).toBeGreaterThan(0)
+        await expect.poll(async () => (await form.boundingBox())?.height ?? 0, { message: `${label}:草稿长高落定` }).toBeGreaterThan(singleFormHeight + 1)
       }
       const emptyPad = await transcriptPadBottom(page)
       const emptyScrollPad = await transcriptScrollPadBottom(page)

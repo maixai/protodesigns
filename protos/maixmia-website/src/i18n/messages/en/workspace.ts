@@ -2,13 +2,8 @@
 export const workspace = {
   title: 'Workspace',
   newChat: 'New conversation',
-  projectContent: {
-    label: 'Project content',
-    files: 'Files',
-  },
   skills: {
     title: 'Skills',
-    loading: 'Loading skills…',
     error: 'Unable to load skills',
     retry: 'Retry skills',
     empty: 'No skills available',
@@ -16,9 +11,6 @@ export const workspace = {
     sourcePlugin: 'Plugin',
     projectScopeHint: '.claude/skills',
     agentPluginScope: 'Agent plugin, active in every project of this agent',
-    insertLabel: 'Insert skill “{command}” into the conversation',
-    inserted: 'Inserted /{command}',
-    needConversation: 'Open a conversation in “{name}” first',
     menuLabel: 'Choose a skill',
     searchPlaceholder: 'Search skills…',
     commandPlaceholder: 'Type a command or arguments…',

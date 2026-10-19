@@ -2,14 +2,9 @@
 export const workspace = {
   title: '工作台',
   newChat: '新建对话',
-  // 每个展开项目下的内容栏:文件 / Skills。默认文件;Skills 的计数常驻在 tab 上。
-  projectContent: {
-    label: '项目内容视图',
-    files: '文件',
-  },
+  // 输入框 slash 菜单的 Skill 词条。侧栏不再展示 Skill,这些只服务 `/` 菜单。
   skills: {
     title: 'Skills',
-    loading: '正在加载 Skills…',
     error: 'Skills 加载失败',
     retry: '重试 Skills',
     empty: '暂无可用 Skill',
@@ -17,9 +12,6 @@ export const workspace = {
     sourcePlugin: '插件',
     projectScopeHint: '.claude/skills',
     agentPluginScope: 'Agent 插件，对该 Agent 的所有项目生效',
-    insertLabel: '把 Skill「{command}」插入当前对话',
-    inserted: '已插入 /{command}',
-    needConversation: '请先打开「{name}」的对话',
     menuLabel: '选择 Skill',
     searchPlaceholder: '搜索 Skill…',
     commandPlaceholder: '输入命令或参数…',

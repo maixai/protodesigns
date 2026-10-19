@@ -7,10 +7,8 @@ import { computed } from 'vue'
 import { NSwitch } from 'naive-ui'
 import type { InstalledPlugin } from '../contracts/generated/installed-plugin'
 import { useI18n } from '../i18n'
-import DliIcon from './dl-icon.vue'
 import RowActionsMenu from './row-actions-menu.vue'
 import type { RowAction } from './row-actions-menu.vue'
-import { toIconName } from '../data/icons'
 
 const props = defineProps<{
   installed: InstalledPlugin
@@ -54,7 +52,6 @@ function onAction(id: string): void {
 
 <template>
   <li class="plugin-row" :data-update="hasUpdate ? 'true' : undefined" :data-config-needed="needsConfig ? 'true' : undefined">
-    <span class="plugin-row__icon" aria-hidden="true"><DliIcon :name="toIconName(plugin.icon)" size="sm" /></span>
     <div class="plugin-row__body">
       <div class="plugin-row__title">
         <span class="plugin-row__name" :title="keyLabel">{{ plugin.name }}</span>
@@ -82,8 +79,7 @@ function onAction(id: string): void {
 </template>
 
 <style scoped>
-.plugin-row { position: relative; display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-2); padding-block: var(--dl-space-2); }
-.plugin-row__icon { display: grid; place-items: center; inline-size: var(--dl-space-6); block-size: var(--dl-space-6); border-radius: var(--dl-radius-sm); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); }
+.plugin-row { position: relative; display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-2) var(--dl-space-4); }
 .plugin-row__body { display: grid; gap: var(--dl-space-1); min-width: 0; }
 .plugin-row__title { display: flex; align-items: baseline; gap: var(--dl-space-2); min-width: 0; }
 .plugin-row__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; line-height: var(--dl-line-snug); }

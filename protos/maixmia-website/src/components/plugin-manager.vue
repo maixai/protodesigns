@@ -349,14 +349,14 @@ watch([() => props.scope, () => props.ownerId], () => {
 <template>
   <section class="plugin-manager">
     <div class="plugin-manager__head">
-      <div class="plugin-manager__intro">
+      <div class="plugin-manager__title-row">
         <h3 class="plugin-manager__title">{{ t.workspace.plugins.pluginsTitle }}</h3>
-        <p class="plugin-manager__hint">{{ scopeHint }}</p>
+        <button type="button" class="plugin-manager__add-market" @click="openAddMarket">
+          <span aria-hidden="true">＋</span>
+          <span>{{ t.workspace.plugins.addMarketplace }}</span>
+        </button>
       </div>
-      <button type="button" class="plugin-manager__add-market" @click="openAddMarket">
-        <span aria-hidden="true">＋</span>
-        <span>{{ t.workspace.plugins.addMarketplace }}</span>
-      </button>
+      <p class="plugin-manager__hint">{{ scopeHint }}</p>
     </div>
 
     <p v-if="error !== ''" class="plugin-manager__error" role="alert">{{ error }}</p>
@@ -380,13 +380,29 @@ watch([() => props.scope, () => props.ownerId], () => {
       >
         <div class="plugin-group__head">
           <div class="plugin-group__title-row">
-            <span class="plugin-group__name" :title="group.binding.marketplace.name">{{ group.binding.marketplace.name }}</span>
-            <span class="plugin-group__trust" :data-trust="group.binding.marketplace.trust">{{ t.workspace.plugins.trustLabel[group.binding.marketplace.trust] }}</span>
-            <span class="plugin-group__counts">
-              {{ pluginCountLabel(group.binding.marketplace.plugins.length) }}
-              <span aria-hidden="true">·</span>
-              {{ installedCountLabel(group.installed.length) }}
-            </span>
+            <div class="plugin-group__title-main">
+              <span class="plugin-group__name" :title="group.binding.marketplace.name">{{ group.binding.marketplace.name }}</span>
+              <!-- 自动更新与更新贴着市场名。 -->
+              <button
+                type="button" class="plugin-group__auto-toggle"
+                :aria-pressed="group.binding.autoUpdate"
+                :aria-label="autoUpdateLabel(group.binding.marketplace.name, group.binding.autoUpdate)"
+                :disabled="busyMarketplaceId === group.binding.marketplace.id"
+                @click="onAutoUpdate(group.binding.marketplace.id, !group.binding.autoUpdate)"
+              >
+                <span class="plugin-group__auto-dot" :data-on="group.binding.autoUpdate ? 'true' : 'false'" aria-hidden="true"></span>
+                <span>{{ t.workspace.plugins.autoUpdate }}</span>
+              </button>
+              <button
+                type="button" class="plugin-group__update"
+                :title="t.workspace.plugins.updateLabel.replace('{name}', group.binding.marketplace.name)"
+                :aria-label="t.workspace.plugins.updateLabel.replace('{name}', group.binding.marketplace.name)"
+                :disabled="busyMarketplaceId === group.binding.marketplace.id"
+                @click="onUpdateMarket(group.binding.marketplace.id)"
+              >
+                <DliIcon name="sync" size="sm" />
+              </button>
+            </div>
             <span class="plugin-group__menu">
               <RowActionsMenu
                 :label="t.workspace.plugins.marketplaceMoreActions.replace('{name}', group.binding.marketplace.name)"
@@ -396,42 +412,23 @@ watch([() => props.scope, () => props.ownerId], () => {
           </div>
           <div class="plugin-group__source-row">
             <p class="plugin-group__source" :title="group.binding.marketplace.source">{{ group.binding.marketplace.source }}</p>
-            <!-- 手动更新是市场源的一次性命令,放在来源地址同一行右侧;始终可见。 -->
+            <!-- 安装是这张卡片的主行动:放在来源行右侧。 -->
             <button
-              type="button" class="plugin-group__update"
-              :aria-label="t.workspace.plugins.updateLabel.replace('{name}', group.binding.marketplace.name)"
-              :disabled="busyMarketplaceId === group.binding.marketplace.id"
-              @click="onUpdateMarket(group.binding.marketplace.id)"
+              type="button" class="plugin-group__add"
+              @click="openInstall(group.binding.marketplace.id)"
             >
-              <DliIcon name="sync" size="sm" />
-              <span>{{ busyMarketplaceId === group.binding.marketplace.id ? t.workspace.plugins.updating : t.workspace.plugins.updateNow }}</span>
+              <span aria-hidden="true">＋</span>
+              <span>{{ t.workspace.plugins.installPlugin }}</span>
             </button>
           </div>
         </div>
-        <!-- 策略 / 安装栏属于插件列表:自动更新是持续策略,安装是列表的主行动。 -->
-        <div class="plugin-group__bar">
-          <div class="plugin-group__policy">
-            <button
-              type="button" class="plugin-group__auto-toggle"
-              :aria-pressed="group.binding.autoUpdate"
-              :aria-label="autoUpdateLabel(group.binding.marketplace.name, group.binding.autoUpdate)"
-              :disabled="busyMarketplaceId === group.binding.marketplace.id"
-              @click="onAutoUpdate(group.binding.marketplace.id, !group.binding.autoUpdate)"
-            >
-              <span>{{ t.workspace.plugins.autoUpdate }}</span>
-              <span aria-hidden="true" class="plugin-group__auto-sep">·</span>
-              <span class="plugin-group__auto-state" :data-on="group.binding.autoUpdate ? 'true' : undefined">
-                {{ group.binding.autoUpdate ? t.workspace.plugins.autoUpdateStateOn : t.workspace.plugins.autoUpdateStateOff }}
-              </span>
-            </button>
-          </div>
-          <button
-            type="button" class="plugin-group__add"
-            @click="openInstall(group.binding.marketplace.id)"
-          >
-            <span aria-hidden="true">＋</span>
-            <span>{{ t.workspace.plugins.installPlugin }}</span>
-          </button>
+        <!-- 计数压在分割线上,不单独占一行。 -->
+        <div class="plugin-group__divider">
+          <span class="plugin-group__counts">
+            {{ pluginCountLabel(group.binding.marketplace.plugins.length) }}
+            <span aria-hidden="true">·</span>
+            {{ installedCountLabel(group.installed.length) }}
+          </span>
         </div>
         <ul v-if="group.installed.length > 0" class="plugin-manager__list plugin-group__list">
           <PluginRow
@@ -468,11 +465,12 @@ watch([() => props.scope, () => props.ownerId], () => {
 </template>
 
 <style scoped>
-.plugin-manager { display: flex; flex-direction: column; gap: var(--dl-space-3); min-height: 0; }
+.plugin-manager { display: flex; flex-direction: column; gap: var(--dl-space-4); min-height: 0; }
 
-.plugin-manager__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--dl-space-3); }
-.plugin-manager__intro { display: grid; gap: var(--dl-space-1); min-width: 0; }
-.plugin-manager__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; line-height: var(--dl-line-snug); }
+/* 标题与「添加市场」同一行,说明文字独占下一行:窄屏下说明不再被按钮挤成窄柱。 */
+.plugin-manager__head { display: grid; gap: var(--dl-space-1); }
+.plugin-manager__title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-3); }
+.plugin-manager__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-snug); }
 .plugin-manager__hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .plugin-manager__add-market { display: inline-flex; flex: none; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); white-space: nowrap; }
 .plugin-manager__add-market:hover { background: var(--dl-bg-hover); }
@@ -486,47 +484,53 @@ watch([() => props.scope, () => props.ownerId], () => {
 .plugin-manager__empty-title { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
 .plugin-manager__empty-hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
-/* 市场卡片:父级容器把来源、策略与它的插件绑成一組;不裁剪(行内菜单 / 焦点环要出界)。 */
-.plugin-groups { display: grid; gap: var(--dl-space-3); }
-.plugin-group { border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); }
-.plugin-group__head { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-3); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
-.plugin-group__title-row { display: flex; align-items: baseline; gap: var(--dl-space-2); flex-wrap: wrap; min-width: 0; }
-.plugin-group__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; line-height: var(--dl-line-snug); }
-.plugin-group__trust { flex: none; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
-.plugin-group__trust[data-trust='trusted'] { color: var(--dl-accent); }
-.plugin-group__counts { flex: none; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; }
-.plugin-group__menu { margin-inline-start: auto; }
+/* 市场卡片:父级容器把来源、策略与它的插件绑成一组;不裁剪(行内菜单 / 焦点环要出界)。 */
+.plugin-groups { display: grid; gap: var(--dl-space-4); }
+.plugin-group { border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-base); }
+/* Header 两行:名称 + 更新/自动更新 + 安装/溢出;来源独占下一行;计数压在分割线上。 */
+.plugin-group__head { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-3) var(--dl-space-4); }
+.plugin-group__title-row { display: flex; align-items: center; gap: var(--dl-space-1); min-width: 0; }
+.plugin-group__title-main { display: flex; align-items: center; gap: var(--dl-space-1); min-width: 0; }
+.plugin-group__name { flex: 0 1 auto; min-width: 0; margin-inline-end: var(--dl-space-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-snug); }
+.plugin-group__menu { display: flex; flex: none; align-items: center; margin-inline-start: auto; }
 .plugin-group__source-row { display: flex; align-items: center; gap: var(--dl-space-2); min-width: 0; }
 .plugin-group__source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
-/* Header 下方的市场级动作条:自动更新在左,安装(主行动)在右;手动更新在 Header 的来源行。 */
-.plugin-group__bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dl-space-2); min-block-size: var(--dl-space-8); padding-inline: var(--dl-space-3); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
-.plugin-group__policy { display: flex; align-items: center; gap: var(--dl-space-1); flex: none; min-block-size: var(--dl-space-8); }
-/* 安装是这个市场的主行动:ghost 文字动作放右侧,权重高于更新 / 自动更新,但不做成粗按钮。 */
-.plugin-group__add { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-8); margin-inline-start: auto; padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
-.plugin-group__add:hover { background: var(--dl-bg-hover); }
+/* 带标签的分割线:计数居中压在线上,线在文字两侧断开,不额外占一行。 */
+.plugin-group__divider { position: relative; display: flex; justify-content: center; align-items: center; }
+.plugin-group__divider::before { content: ''; position: absolute; inset-inline: 0; inset-block-start: 50%; block-size: var(--dl-border-width); background: var(--dl-border-base); }
+.plugin-group__counts { position: relative; padding-inline: var(--dl-space-2); background: var(--dl-bg-base); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); font-variant-numeric: tabular-nums; }
+/* 安装是这张卡片唯一的主行动:无底色的强调色文字动作,靠颜色与加号建立主次。 */
+.plugin-group__add { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
+.plugin-group__add:hover { background: var(--dl-bg-hover); color: var(--dl-accent-hover); }
 .plugin-group__add:focus-visible { box-shadow: var(--dl-focus-ring); }
-/* 自动更新是带状态的文字切换:「自动更新 · 开 / 关」。
-   不用开关,避免与插件行里的启停开关混淆;状态词本身承担状态,不只靠颜色。 */
+/* 自动更新用点亮 / 熄灭的圆点表示状态:实心为开,空心为关,不只靠颜色。
+   不用开关,避免与插件行里的启停开关混淆。 */
 .plugin-group__auto-toggle { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
 .plugin-group__auto-toggle:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .plugin-group__auto-toggle:focus-visible { box-shadow: var(--dl-focus-ring); }
 .plugin-group__auto-toggle:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
-.plugin-group__auto-sep { color: var(--dl-text-tertiary); }
-.plugin-group__auto-state { color: var(--dl-text-tertiary); font-variant-numeric: tabular-nums; }
-.plugin-group__auto-state[data-on='true'] { color: var(--dl-accent); }
-/* 手动更新是 ghost 动作:与自动更新状态同一行、同一视觉重量,不再是一颗孤立描边按钮。 */
-.plugin-group__update { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
+.plugin-group__auto-dot { box-sizing: border-box; inline-size: var(--dl-space-1); block-size: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); background: transparent; }
+.plugin-group__auto-dot[data-on='true'] { border-color: var(--dl-accent); background: var(--dl-accent); }
+/* 手动更新与 ⋯ 同为标题行的图标动作:同尺寸、同色阶,不额外占一行。 */
+.plugin-group__update { display: inline-grid; place-items: center; inline-size: var(--dl-space-6); block-size: var(--dl-space-6); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); }
 .plugin-group__update:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .plugin-group__update:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
 .plugin-group__update:focus-visible { box-shadow: var(--dl-focus-ring); }
-.plugin-group__list { padding-inline: var(--dl-space-3); }
-.plugin-group__empty { padding: var(--dl-space-3); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.plugin-group__list { padding-inline: 0; }
+.plugin-group__empty { padding: var(--dl-space-3) var(--dl-space-4); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
 .plugin-manager__list { display: grid; gap: 0; min-width: 0; }
 .plugin-manager__list > :deep(.plugin-row + .plugin-row) { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 
+/* 独立控件保持 44px;市场卡片内的动作属于密集工具栏,768 仍用 24px。 */
 @media (max-width: 1023px) {
-  .plugin-manager__add-market, .plugin-group__add, .plugin-group__auto-toggle,
-  .plugin-group__update, .plugin-group__policy { min-block-size: var(--dl-target-size); }
+  .plugin-manager__add-market { min-block-size: var(--dl-target-size); }
+}
+
+@media (max-width: 599px) {
+  /* 触屏窄幅才把市场卡片内的动作放大到 44px。 */
+  .plugin-group__add, .plugin-group__auto-toggle,
+  .plugin-group__update { min-block-size: var(--dl-target-size); }
+  .plugin-group__update { min-inline-size: var(--dl-target-size); }
 }
 </style>

@@ -1929,30 +1929,42 @@ test('Agent 插件页:市场策略与按市场分组', async ({ page }) => {
   const agentDialog = await openAgentPlugins(page)
   const manager = agentDialog.locator('.plugin-manager')
   const anthropic = manager.locator('.plugin-group[data-marketplace="anthropic"]')
-  // 动作条紧贴市场 Header 之下、插件列表之上;更新在 Header 的地址行,自动更新在左、安装在右。
+  // 计数压在 Header 与列表之间的分割线上;安装与更新 / 自动更新分居名称行与来源行右侧。
   const groupOrder = await anthropic.evaluate((group) => Array.from(group.children).map((child) => child.className))
   expect(groupOrder[0]).toContain('plugin-group__head')
-  expect(groupOrder[1]).toContain('plugin-group__bar')
-  const bar = anthropic.locator('.plugin-group__bar')
-  const barOrder = await bar.evaluate((element) => Array.from(element.children).map((child) => child.className))
-  expect(barOrder[0]).toContain('plugin-group__policy')
-  expect(barOrder[1]).toContain('plugin-group__add')
+  expect(groupOrder[1]).toContain('plugin-group__divider')
+  expect(groupOrder[2]).toContain('plugin-group__list')
+  await expect(anthropic.locator('.plugin-group__bar')).toHaveCount(0)
+  await expect(anthropic.locator('.plugin-group__divider')).toContainText('4 个插件')
+  // 自动更新与更新紧贴市场名,溢出留在名称行行尾;安装落在来源行右侧。
+  const titleRow = anthropic.locator('.plugin-group__title-row')
+  const titleOrder = await titleRow.evaluate((element) => Array.from(element.children).map((child) => child.className))
+  expect(titleOrder[0]).toContain('plugin-group__title-main')
+  expect(titleOrder[1]).toContain('plugin-group__menu')
+  const titleMain = anthropic.locator('.plugin-group__title-main')
+  const titleMainOrder = await titleMain.evaluate((element) => Array.from(element.children).map((child) => child.className))
+  expect(titleMainOrder[0]).toContain('plugin-group__name')
+  expect(titleMainOrder[1]).toContain('plugin-group__auto-toggle')
+  expect(titleMainOrder[2]).toContain('plugin-group__update')
+  const sourceRow = anthropic.locator('.plugin-group__source-row')
+  const sourceOrder = await sourceRow.evaluate((element) => Array.from(element.children).map((child) => child.className))
+  expect(sourceOrder[0]).toContain('plugin-group__source')
+  expect(sourceOrder[1]).toContain('plugin-group__add')
   const update = anthropic.getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })
-  await expect(anthropic.locator('.plugin-group__source-row').getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })).toHaveCount(1)
-  await expect(bar.getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })).toHaveCount(0)
+  await expect(titleMain.getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })).toHaveCount(1)
   const auto = anthropic.locator('.plugin-group__auto-toggle')
   await expect(auto).toHaveAttribute('aria-pressed', 'true')
-  await expect(auto.locator('.plugin-group__auto-state')).toHaveText('开')
+  await expect(auto.locator('.plugin-group__auto-dot')).toHaveAttribute('data-on', 'true')
   // 自动更新开着时,手动更新仍然可用。
   await expect(update).toBeVisible()
   await update.click()
   await expect(manager.locator('.plugin-manager__live')).toHaveText('已更新「Anthropic Plugins」')
   // 分组页原地刷新:同一市场卡片里的已装版本随之前进(只影响当前 Agent)。
   await expect(anthropic.locator('.plugin-row', { hasText: 'Code Review' }).locator('.plugin-row__version')).toHaveText('v1.4.3')
-  // 关闭自动更新后,手动更新入口仍在。
+  // 关闭自动更新后,圆点熄灭,手动更新入口仍在。
   await auto.click()
   await expect(auto).toHaveAttribute('aria-pressed', 'false')
-  await expect(auto.locator('.plugin-group__auto-state')).toHaveText('关')
+  await expect(auto.locator('.plugin-group__auto-dot')).toHaveAttribute('data-on', 'false')
   await expect(update).toBeVisible()
 
   // 添加已知来源的市场;同一 Agent 内去重。

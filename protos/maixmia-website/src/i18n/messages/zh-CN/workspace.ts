@@ -103,6 +103,8 @@ export const workspace = {
     projectScopeHint: '对打开此项目的所有 Agent 生效；同一插件在 Agent 里也启用时，Agent 设置优先。',
     noPluginsSynced: '尚未同步到插件',
     pluginsTitle: '插件',
+    backToPlugins: '返回插件',
+    breadcrumbLabel: '插件路径',
     installedPlugins: '已安装插件',
     installPlugin: '安装插件',
     installTitle: '安装插件',

@@ -100,6 +100,8 @@ export const workspace = {
     projectScopeHint: 'Active for every agent in this project. An agent-scoped entry overrides the same plugin here.',
     noPluginsSynced: 'No plugins synced yet',
     pluginsTitle: 'Plugins',
+    backToPlugins: 'Back to plugins',
+    breadcrumbLabel: 'Plugin path',
     installedPlugins: 'Installed plugins',
     installPlugin: 'Install plugin',
     installTitle: 'Install plugins',

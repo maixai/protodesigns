@@ -349,14 +349,11 @@ watch([() => props.scope, () => props.ownerId], () => {
 <template>
   <section class="plugin-manager">
     <div class="plugin-manager__head">
-      <div class="plugin-manager__title-row">
-        <h3 class="plugin-manager__title">{{ t.workspace.plugins.pluginsTitle }}</h3>
-        <button type="button" class="plugin-manager__add-market" @click="openAddMarket">
-          <span aria-hidden="true">＋</span>
-          <span>{{ t.workspace.plugins.addMarketplace }}</span>
-        </button>
-      </div>
       <p class="plugin-manager__hint">{{ scopeHint }}</p>
+      <!-- 说明与页级动作同排:说明占满剩余宽度,动作是可点的文字链。 -->
+      <button type="button" class="plugin-manager__add-market" @click="openAddMarket">
+        {{ t.workspace.plugins.addMarketplace }}
+      </button>
     </div>
 
     <p v-if="error !== ''" class="plugin-manager__error" role="alert">{{ error }}</p>
@@ -412,14 +409,11 @@ watch([() => props.scope, () => props.ownerId], () => {
           </div>
           <div class="plugin-group__source-row">
             <p class="plugin-group__source" :title="group.binding.marketplace.source">{{ group.binding.marketplace.source }}</p>
-            <!-- 安装是这张卡片的主行动:放在来源行右侧。 -->
+            <!-- 安装是这张卡片的主行动:纯文字按钮,不加图标。 -->
             <button
               type="button" class="plugin-group__add"
               @click="openInstall(group.binding.marketplace.id)"
-            >
-              <span aria-hidden="true">＋</span>
-              <span>{{ t.workspace.plugins.installPlugin }}</span>
-            </button>
+            >{{ t.workspace.plugins.installPlugin }}</button>
           </div>
         </div>
         <!-- 计数压在分割线上,不单独占一行。 -->
@@ -467,13 +461,11 @@ watch([() => props.scope, () => props.ownerId], () => {
 <style scoped>
 .plugin-manager { display: flex; flex-direction: column; gap: var(--dl-space-4); min-height: 0; }
 
-/* 标题与「添加市场」同一行,说明文字独占下一行:窄屏下说明不再被按钮挤成窄柱。 */
-.plugin-manager__head { display: grid; gap: var(--dl-space-1); }
-.plugin-manager__title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-3); }
-.plugin-manager__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-snug); }
+/* 说明与页级动作同排:说明左、动作右;动作是文字链,不与内容区主行动争抢。 */
+.plugin-manager__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--dl-space-3); row-gap: var(--dl-space-2); }
 .plugin-manager__hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
-.plugin-manager__add-market { display: inline-flex; flex: none; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); white-space: nowrap; }
-.plugin-manager__add-market:hover { background: var(--dl-bg-hover); }
+.plugin-manager__add-market { display: inline-flex; flex: none; align-items: center; min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
+.plugin-manager__add-market:hover { background: var(--dl-bg-hover); color: var(--dl-accent-hover); }
 .plugin-manager__add-market:focus-visible { box-shadow: var(--dl-focus-ring); }
 
 .plugin-manager__error { color: var(--dl-error); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
@@ -499,8 +491,8 @@ watch([() => props.scope, () => props.ownerId], () => {
 .plugin-group__divider { position: relative; display: flex; justify-content: center; align-items: center; }
 .plugin-group__divider::before { content: ''; position: absolute; inset-inline: 0; inset-block-start: 50%; block-size: var(--dl-border-width); background: var(--dl-border-base); }
 .plugin-group__counts { position: relative; padding-inline: var(--dl-space-2); background: var(--dl-bg-base); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); font-variant-numeric: tabular-nums; }
-/* 安装是这张卡片唯一的主行动:无底色的强调色文字动作,靠颜色与加号建立主次。 */
-.plugin-group__add { display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
+/* 安装是这张卡片唯一的主行动:无底色强调色文字按钮,不加图标。 */
+.plugin-group__add { display: inline-flex; align-items: center; min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); font-weight: 500; white-space: nowrap; }
 .plugin-group__add:hover { background: var(--dl-bg-hover); color: var(--dl-accent-hover); }
 .plugin-group__add:focus-visible { box-shadow: var(--dl-focus-ring); }
 /* 自动更新用点亮 / 熄灭的圆点表示状态:实心为开,空心为关,不只靠颜色。
@@ -528,7 +520,10 @@ watch([() => props.scope, () => props.ownerId], () => {
 }
 
 @media (max-width: 599px) {
-  /* 触屏窄幅才把市场卡片内的动作放大到 44px。 */
+  /* 窄屏:说明独占一行,页级动作落到下一行右对齐。 */
+  .plugin-manager__head { grid-template-columns: 1fr; }
+  .plugin-manager__add-market { justify-self: end; }
+  /* 触屏窄幅才把市场卡片内的图标动作放大到 44px。 */
   .plugin-group__add, .plugin-group__auto-toggle,
   .plugin-group__update { min-block-size: var(--dl-target-size); }
   .plugin-group__update { min-inline-size: var(--dl-target-size); }

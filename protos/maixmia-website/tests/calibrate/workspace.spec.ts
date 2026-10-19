@@ -1701,7 +1701,9 @@ test('Agent 设置插件:只列 Agent 作用域,安装 / 启停 / 卸载在层�
   await waitForStable(page)
   const dialog = await openAgentPlugins(page)
   const manager = dialog.locator('.plugin-manager')
-  await expect(manager.locator('.plugin-manager__title')).toHaveText('插件')
+  // 页签已标明「插件」,内容区不再重复标题;保留「添加市场」入口。
+  await expect(manager.locator('.plugin-manager__title')).toHaveCount(0)
+  await expect(manager.getByRole('button', { name: '添加市场' })).toBeVisible()
   // 插件按市场分组:市场名在父级卡片上,行内不再重复。
   const anthropicGroup = manager.locator('.plugin-group[data-marketplace="anthropic"]')
   await expect(anthropicGroup).toContainText('Anthropic Plugins')

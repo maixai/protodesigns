@@ -447,7 +447,7 @@ model InstalledPlugin {
   config: PluginConfigField[];
 }
 
-// 市场是插件的容器,也是自动更新策略的归属。
+// 插件市场目录:来源与插件元数据,不带任何作用域的安装 / 更新策略。
 @summary("Marketplace")
 @jsonSchema
 model Marketplace {
@@ -455,14 +455,22 @@ model Marketplace {
   name: string;
   source: string;
   trust: PluginTrustId;
-  autoUpdate: boolean;
-  lastUpdated: utcDateTime;
-  // 该市场下插件在所有 Agent / 项目中的安装总数(用于移除时的风险提示)。
-  installedCount: int32;
   plugins: Plugin[];
 }
 
-// 添加市场的输入(全局):source 是 marketplace.json 的来源。
+// 某个 Agent 或项目注册的市场。自动更新、最近刷新时间与安装计数属于**这次注册**,
+// 不属于市场目录本身 —— 同一来源可以被多个 Agent 各自注册、各自设置策略。
+@summary("MarketplaceBinding")
+@jsonSchema
+model MarketplaceBinding {
+  marketplace: Marketplace;
+  autoUpdate: boolean;
+  lastUpdated: utcDateTime;
+  // 当前作用域中从该市场安装的插件数(移除时的风险提示)。
+  installedCount: int32;
+}
+
+// 添加市场的输入:source 是 marketplace.json 的来源;注册到哪个 Agent / 项目由调用方给出。
 @summary("MarketplaceConfig")
 @jsonSchema
 model MarketplaceConfig {

@@ -15,6 +15,8 @@ import { toIconName } from '../data/icons'
 const props = defineProps<{
   installed: InstalledPlugin
   busy: boolean
+  // 插件已按市场分组展示时,行内不再重复市场名。
+  showMarketplace?: boolean
 }>()
 const emit = defineEmits<{
   update: [marketplaceId: string, pluginId: string]
@@ -58,8 +60,8 @@ function onAction(id: string): void {
         <span class="plugin-row__name" :title="keyLabel">{{ plugin.name }}</span>
         <span class="plugin-row__version">v{{ installed.installedVersion }}</span>
       </div>
-      <p class="plugin-row__meta">
-        <span class="plugin-row__marketplace">{{ installed.marketplaceName }}</span>
+      <p v-if="showMarketplace !== false || hasUpdate || needsConfig" class="plugin-row__meta">
+        <span v-if="showMarketplace !== false" class="plugin-row__marketplace">{{ installed.marketplaceName }}</span>
         <span v-if="hasUpdate" class="plugin-row__update-badge">{{ updateLabel }}</span>
         <button
           v-if="needsConfig" type="button" class="plugin-row__config-badge"

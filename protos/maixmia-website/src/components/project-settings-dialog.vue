@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 项目设置:项目级插件对打开该项目的所有 Agent 生效(对应 .claude/settings.json)。
 //
-// 市场与自动更新不在这里 —— 它们是全局来源与市场级策略,在全局设置里管理。
+// 项目级插件与市场都在这里:插件按所属市场分组,市场卡片头管来源、自动更新与移除。
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Project } from '../contracts/generated/project'
 import { useI18n } from '../i18n'

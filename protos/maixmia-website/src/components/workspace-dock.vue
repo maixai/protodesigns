@@ -33,7 +33,6 @@ const emit = defineEmits<{
   close: [groupId: string]
   notification: [item: AgentNotification]
   retry: []
-  marketplaces: []
 }>()
 const { t, locale, setLocale } = useI18n()
 const root = ref<HTMLElement | null>(null)
@@ -83,10 +82,6 @@ function badgeOf(group: MinimizedGroup): string {
   if (sessions.some((item) => stateOf(item) === 'streaming')) return t.value.workspace.sessionStatus.streaming
   if (sessions.some((item) => stateOf(item) === 'completed')) return t.value.workspace.sessionStatus.completed
   return ''
-}
-function openMarketplaces(): void {
-  close()
-  emit('marketplaces')
 }
 function close(restoreFocus = false): void {
   const previous = activePanel.value
@@ -190,11 +185,6 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
           <button type="button" :aria-pressed="locale === 'en'" @click="setLocale('en')">English</button>
         </div>
       </div>
-      <!-- 市场是全局来源:添加 / 移除 / 自动更新 / 立即更新都从这里进入。 -->
-      <button type="button" class="workspace-dock__setting-link" @click="openMarketplaces">
-        <DliIcon name="plug" size="sm" />
-        <span>{{ t.workspace.plugins.marketplaceManagerTitle }}</span>
-      </button>
       <div class="workspace-dock__panel-divider" aria-hidden="true" />
       <!-- 通知中心随设置入口一起承载:通知是全局的,与设置同置底栏右端。 -->
       <section class="workspace-dock__settings-notifications" :aria-label="t.workspace.notifications.title">
@@ -253,9 +243,6 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 /* 设置面板:一行设置的 label + 控件;语言是两个 aria-pressed 切换钮。 */
 .workspace-dock__setting-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); padding: var(--dl-space-2); }
 .workspace-dock__setting-label { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); }
-.workspace-dock__setting-link { display: flex; align-items: center; gap: var(--dl-space-2); inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); text-align: left; }
-.workspace-dock__setting-link:hover { background: var(--dl-bg-hover); }
-.workspace-dock__setting-link:focus-visible { box-shadow: var(--dl-focus-ring); }
 .workspace-dock__language { display: flex; align-items: center; gap: var(--dl-space-1); }
 .workspace-dock__language button { min-height: var(--dl-control-height); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .workspace-dock__language button[aria-pressed='true'] { border-color: transparent; background: var(--dl-accent); color: var(--dl-text-on-accent); }

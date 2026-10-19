@@ -6,12 +6,16 @@
 // 一次性声明,和插件行里的启用开关不是同一种控件。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
+import type { PluginInstallScopeId } from '../contracts/generated/installed-plugin'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{
   open: boolean
   busy: boolean
   error: string
+  // 市场绑定到哪个 Agent / 项目;只影响提示文案,提交时由调用方带上作用域。
+  scope: PluginInstallScopeId
+  ownerName: string
 }>()
 const emit = defineEmits<{
   submit: [config: MarketplaceConfig]
@@ -30,6 +34,12 @@ const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 
 const canSubmit = computed(() => source.value.trim() !== '' && name.value.trim() !== '' && !props.busy)
+const hint = computed(() => {
+  const template = props.scope === 'agent'
+    ? t.value.workspace.plugins.addMarketplaceHintAgent
+    : t.value.workspace.plugins.addMarketplaceHintProject
+  return template.replace('{name}', props.ownerName)
+})
 
 function reset(): void {
   source.value = ''
@@ -87,7 +97,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
   >
     <div class="market-add__head">
       <h2 :id="titleId" class="market-add__title">{{ t.workspace.plugins.addMarketplaceTitle }}</h2>
-      <p :id="hintId" class="market-add__hint">{{ t.workspace.plugins.addMarketplaceHint }}</p>
+      <p :id="hintId" class="market-add__hint">{{ hint }}</p>
     </div>
 
     <form class="market-add__body" @submit.prevent="submit">

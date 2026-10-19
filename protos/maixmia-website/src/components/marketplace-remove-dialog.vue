@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 「移除市场」确认:删除市场会连带卸载它名下的插件,必须先把影响说清楚。
 // 用原生 dialog.showModal();初始焦点固定在「保留」,不让破坏性动作成为默认。
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import type { PluginInstallScopeId } from '../contracts/generated/installed-plugin'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{
@@ -10,6 +11,9 @@ const props = defineProps<{
   installedCount: number
   busy: boolean
   error: string
+  // 移除只影响这次注册所在的作用域。
+  scope: PluginInstallScopeId
+  ownerName: string
 }>()
 const emit = defineEmits<{
   confirm: []
@@ -23,6 +27,14 @@ const returnFocusRef = ref<HTMLElement | null>(null)
 const dialogId = `marketplace-remove-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const bodyId = `${dialogId}-body`
+const body = computed(() => {
+  const template = props.scope === 'agent'
+    ? t.value.workspace.plugins.removeBodyAgent
+    : t.value.workspace.plugins.removeBodyProject
+  return template
+    .replace('{name}', props.ownerName)
+    .replace('{count}', String(props.installedCount))
+})
 
 function finish(confirmed: boolean): void {
   if (props.busy) return
@@ -65,7 +77,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
     @cancel.prevent="finish(false)" @click="onBackdropClick"
   >
     <h2 :id="titleId" class="market-remove__title">{{ t.workspace.plugins.removeTitle.replace('{name}', marketplaceName) }}</h2>
-    <p :id="bodyId" class="market-remove__body">{{ t.workspace.plugins.removeBody.replace('{count}', String(installedCount)) }}</p>
+    <p :id="bodyId" class="market-remove__body">{{ body }}</p>
     <p v-if="error !== ''" class="market-remove__error" role="alert">{{ error }}</p>
     <div class="market-remove__actions">
       <button ref="cancelRef" type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish(false)">{{ t.workspace.plugins.removeCancel }}</button>

@@ -34,7 +34,6 @@ import { useFlightGhost } from '../composables/use-flight-ghost'
 import type { FlightRect } from '../composables/use-flight-ghost'
 import AgentContextSwitcher from '../components/agent-context-switcher.vue'
 import AgentEditorDialog from '../components/agent-editor-dialog.vue'
-import MarketplaceManagerDialog from '../components/marketplace-manager-dialog.vue'
 import ProjectSettingsDialog from '../components/project-settings-dialog.vue'
 import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
@@ -111,7 +110,6 @@ const sidebarViewOptions = computed(() => [{
   count: projectsStatus.value === 'ready' ? projects.value.length : undefined,
 }])
 // 两个设置入口:全局插件市场、项目设置。
-const isMarketplaceManagerOpen = ref(false)
 const projectSettingsProject = ref<Project | null>(null)
 // Agent 设置 / 新建共用同一个对话框;模式决定多显示模板选择还是删除区。
 const isAgentEditorOpen = ref(false)
@@ -1580,9 +1578,6 @@ function retryAgents(): void {
   void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false, true) })
 }
 
-function openMarketplaceManager(): void {
-  isMarketplaceManagerOpen.value = true
-}
 function openProjectSettings(project: Project): void {
   projectSettingsProject.value = project
 }
@@ -2759,7 +2754,7 @@ onBeforeUnmount(() => {
       <Transition name="split-preview">
         <div v-if="splitPreview" class="split-preview" aria-hidden="true" :style="splitPreviewStyle" />
       </Transition>
-      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" @marketplaces="openMarketplaceManager" />
+      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" />
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <AgentEditorDialog
@@ -2768,7 +2763,6 @@ onBeforeUnmount(() => {
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
     />
-    <MarketplaceManagerDialog :open="isMarketplaceManagerOpen" @cancel="isMarketplaceManagerOpen = false" />
     <ProjectSettingsDialog
       :open="projectSettingsProject !== null" :project="projectSettingsProject ?? undefined"
       @cancel="closeProjectSettings"

@@ -5,6 +5,7 @@ import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { PluginComponentId } from '../contracts/generated/plugin'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
 import type { Marketplace, PluginTrustId } from '../contracts/generated/marketplace'
+import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
 import type { PluginConfigField } from '../contracts/generated/installed-plugin'
 import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
 import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
@@ -115,10 +116,11 @@ export function mockDeleteAgent(agentId: AgentId): boolean {
 
 // ---- 插件与插件市场 ----
 //
-// 市场是全局来源;安装态分两层:
-//   agent:<agentId>   该 Agent 的所有项目生效(程序化选项;优先级高于项目)
+// 市场目录是共享缓存;注册与安装态按作用域隔离:
+//   agent:<agentId>   该 Agent 的会话配置(程序化选项;优先级高于项目)
 //   project:<path>    打开该项目的所有 Agent 生效(.claude/settings.json)
-// 插件身份是 plugin@marketplace —— 不同市场可以有同名插件。
+// 绑定记录各作用域注册了哪些市场、是否自动更新。插件身份是 plugin@marketplace ——
+// 不同市场可以有同名插件。
 interface ConfigFieldSeed {
   key: string
   label: string
@@ -145,7 +147,8 @@ interface MarketplaceSeed {
   source: string
   trust: PluginTrustId
   // 官方市场默认自动更新开、第三方默认关(与 Claude Code 的默认策略一致)。
-  autoUpdate: boolean
+  // 这是**新建绑定**时的默认值;已有绑定的策略由 MarketplaceBindingState 单独保存。
+  defaultAutoUpdate: boolean
   lastUpdated: string
   plugins: PluginSeed[]
 }
@@ -156,7 +159,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
     name: 'Anthropic Plugins',
     source: 'github.com/anthropics/claude-plugins',
     trust: 'trusted',
-    autoUpdate: true,
+    defaultAutoUpdate: true,
     lastUpdated: '2026-10-18T07:20:00Z',
     plugins: [
       {
@@ -214,7 +217,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
     name: 'Community Registry',
     source: 'github.com/claude-community/plugins',
     trust: 'community',
-    autoUpdate: false,
+    defaultAutoUpdate: false,
     lastUpdated: '2026-10-15T18:05:00Z',
     plugins: [
       {
@@ -262,7 +265,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
     name: 'Studio Nine',
     source: 'git.studio-nine.dev/claude-marketplace',
     trust: 'community',
-    autoUpdate: false,
+    defaultAutoUpdate: false,
     lastUpdated: '2026-09-30T11:40:00Z',
     plugins: [
       {
@@ -290,7 +293,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
     name: 'Mia Labs',
     source: 'github.com/maixai/agent-plugins',
     trust: 'trusted',
-    autoUpdate: true,
+    defaultAutoUpdate: true,
     lastUpdated: '2026-10-17T09:10:00Z',
     plugins: [
       {
@@ -389,8 +392,14 @@ function cloneMarketplaceSeed(seed: MarketplaceSeed): MarketplaceSeed {
 
 // 全局市场表:添加 / 移除 / 更新都改这一份(对应一台机器一份 known_marketplaces.json)。
 const marketplaceStore: MarketplaceSeed[] = marketplaceCatalog.map(cloneMarketplaceSeed)
-const marketplaceAutoUpdate = new Map<string, boolean>()
 let marketplaceSequence = 0
+
+// 每个 Agent / 项目各自注册哪些市场、是否自动更新。市场目录是共享缓存,
+// 绑定状态按作用域隔离 —— 同一来源可以在多个 Agent 里各自设置策略与安装。
+interface MarketplaceBindingState {
+  autoUpdate: boolean
+}
+const marketplaceBindings = new Map<string, Map<string, MarketplaceBindingState>>()
 
 interface ScopedPluginState {
   enabled: boolean
@@ -426,6 +435,15 @@ function configMap(scope: InstallScope, ownerId: string): Map<string, Map<string
   if (existing !== undefined) return existing
   const created = new Map<string, Map<string, string>>()
   pluginConfigValues.set(key, created)
+  return created
+}
+
+function bindingMap(scope: InstallScope, ownerId: string): Map<string, MarketplaceBindingState> {
+  const key = scopeKey(scope, ownerId)
+  const existing = marketplaceBindings.get(key)
+  if (existing !== undefined) return existing
+  const created = new Map<string, MarketplaceBindingState>()
+  marketplaceBindings.set(key, created)
   return created
 }
 
@@ -465,6 +483,29 @@ for (const seed of INSTALL_SEEDS) {
   }
 }
 
+// 预置每个 Agent / 项目注册的市场。未指定 autoUpdate 时用目录的默认策略。
+const MARKETPLACE_BINDING_SEEDS: {
+  scope: InstallScope
+  ownerId: string
+  marketplaces: { id: string; autoUpdate?: boolean }[]
+}[] = [
+  { scope: 'agent', ownerId: 'planning', marketplaces: [{ id: 'anthropic' }, { id: 'community' }] },
+  { scope: 'agent', ownerId: 'research', marketplaces: [{ id: 'anthropic' }, { id: 'community' }] },
+  { scope: 'agent', ownerId: 'writing', marketplaces: [{ id: 'anthropic' }, { id: 'studio' }] },
+  { scope: 'project', ownerId: '~/work/weekly-report', marketplaces: [{ id: 'anthropic' }] },
+  { scope: 'project', ownerId: '~/work/product-docs', marketplaces: [{ id: 'anthropic' }] },
+  { scope: 'project', ownerId: '~/work/user-research', marketplaces: [{ id: 'community' }] },
+]
+
+for (const seed of MARKETPLACE_BINDING_SEEDS) {
+  const bindings = bindingMap(seed.scope, seed.ownerId)
+  for (const item of seed.marketplaces) {
+    const catalog = marketplaceSeedOf(item.id)
+    if (catalog === undefined) continue
+    bindings.set(item.id, { autoUpdate: item.autoUpdate ?? catalog.defaultAutoUpdate })
+  }
+}
+
 // 配置值种子:键为 scopeKey -> pluginKey -> 字段 key。
 function seedConfig(scope: InstallScope, ownerId: string, marketplaceId: string, pluginId: string, values: Record<string, string>): void {
   const map = configMap(scope, ownerId)
@@ -487,27 +528,25 @@ function pluginSeedOf(marketplaceId: string, pluginId: string): PluginSeed | und
   return marketplaceSeedOf(marketplaceId)?.plugins.find((item) => item.id === pluginId)
 }
 
-// 全局安装总数:移除市场前用来提示影响面。
-function installedCountOf(marketplaceId: string): number {
+// 当前作用域中从某市场安装的插件数(移除时的风险提示)。
+function installedCountOf(scope: InstallScope, ownerId: string, marketplaceId: string): number {
+  const states = pluginStates.get(scopeKey(scope, ownerId))
+  if (states === undefined) return 0
   const suffix = `@${marketplaceId}`
   let count = 0
-  for (const states of pluginStates.values()) {
-    for (const key of states.keys()) {
-      if (key.endsWith(suffix)) count += 1
-    }
+  for (const key of states.keys()) {
+    if (key.endsWith(suffix)) count += 1
   }
   return count
 }
 
+// 市场目录:来源与插件元数据,不含任何作用域状态。
 function marketplaceOf(seed: MarketplaceSeed): Marketplace {
   return {
     id: seed.id,
     name: seed.name,
     source: seed.source,
     trust: seed.trust,
-    autoUpdate: marketplaceAutoUpdate.get(seed.id) ?? seed.autoUpdate,
-    lastUpdated: seed.lastUpdated,
-    installedCount: installedCountOf(seed.id),
     plugins: seed.plugins.map((plugin) => ({
       id: plugin.id,
       marketplaceId: seed.id,
@@ -518,6 +557,17 @@ function marketplaceOf(seed: MarketplaceSeed): Marketplace {
       icon: plugin.icon,
       components: [...plugin.components],
     })),
+  }
+}
+
+// 某个作用域的市场注册:策略与安装计数来自该作用域,目录本身共享。
+function bindingOf(scope: InstallScope, ownerId: string, seed: MarketplaceSeed): MarketplaceBinding {
+  const state = marketplaceBindings.get(scopeKey(scope, ownerId))?.get(seed.id)
+  return {
+    marketplace: marketplaceOf(seed),
+    autoUpdate: state?.autoUpdate ?? seed.defaultAutoUpdate,
+    lastUpdated: seed.lastUpdated,
+    installedCount: installedCountOf(scope, ownerId, seed.id),
   }
 }
 
@@ -559,8 +609,17 @@ function isValidOwner(scope: InstallScope, ownerId: string): boolean {
   return scope === 'agent' ? mockAgentExists(ownerId) : true
 }
 
-export function mockMarketplaces(): Marketplace[] {
-  return marketplaceStore.map(marketplaceOf)
+// 某个 Agent / 项目注册的市场。目录共享,绑定与策略按作用域隔离。
+export function mockMarketplaceBindings(scope: InstallScope, ownerId: string): MarketplaceBinding[] | null {
+  if (!isValidOwner(scope, ownerId)) return null
+  const bindings = marketplaceBindings.get(scopeKey(scope, ownerId))
+  if (bindings === undefined) return []
+  const result: MarketplaceBinding[] = []
+  for (const marketplaceId of bindings.keys()) {
+    const seed = marketplaceSeedOf(marketplaceId)
+    if (seed !== undefined) result.push(bindingOf(scope, ownerId, seed))
+  }
+  return result
 }
 
 export function mockInstalledPlugins(scope: InstallScope, ownerId: string): InstalledPlugin[] | null {
@@ -643,14 +702,16 @@ export function mockSavePluginConfig(
   return { status: 'ok', installed: installedPluginOf(scope, ownerId, marketplaceId, plugin) }
 }
 
-// 自动更新是市场级策略:改一次,该市场下所有已装插件的更新方式一起变。
-export function mockSetMarketplaceAutoUpdate(marketplaceId: string, autoUpdate: boolean): Marketplace | null {
+// 自动更新属于**这次注册**,不是目录级策略:只影响当前 Agent / 项目的已装插件。
+export function mockSetMarketplaceAutoUpdate(scope: InstallScope, ownerId: string, marketplaceId: string, autoUpdate: boolean): MarketplaceBinding | null {
+  if (!isValidOwner(scope, ownerId)) return null
   const seed = marketplaceSeedOf(marketplaceId)
-  if (seed === undefined) return null
-  marketplaceAutoUpdate.set(marketplaceId, autoUpdate)
+  const state = marketplaceBindings.get(scopeKey(scope, ownerId))?.get(marketplaceId)
+  if (seed === undefined || state === undefined) return null
+  state.autoUpdate = autoUpdate
   // 打开自动更新时立刻把在途更新补上(与后台刷新的结果一致)。
-  if (autoUpdate) applyInstalledVersions(marketplaceId)
-  return marketplaceOf(seed)
+  if (autoUpdate) applyInstalledVersions(scope, ownerId, marketplaceId)
+  return bindingOf(scope, ownerId, seed)
 }
 
 // 单个插件的手动更新:只把这一份安装带到市场当前版本。
@@ -662,7 +723,7 @@ export function mockUpdateInstalledPlugin(scope: InstallScope, ownerId: string, 
   return installedPluginOf(scope, ownerId, marketplaceId, plugin)
 }
 
-// 手动更新:刷新市场时间戳,并把该市场的插件补丁版本 +1。
+// 手动更新:刷新共享目录的插件补丁版本,并把**当前作用域**的副本带到新版本。
 function bumpPatch(version: string): string {
   const parts = version.split('.')
   const patch = Number(parts[2] ?? Number.NaN)
@@ -670,75 +731,84 @@ function bumpPatch(version: string): string {
   return `${parts[0]}.${parts[1]}.${patch + 1}`
 }
 
-export function mockUpdateMarketplace(marketplaceId: string): Marketplace | null {
+export function mockUpdateMarketplace(scope: InstallScope, ownerId: string, marketplaceId: string): MarketplaceBinding | null {
+  if (!isValidOwner(scope, ownerId)) return null
   const seed = marketplaceSeedOf(marketplaceId)
   if (seed === undefined) return null
+  if (marketplaceBindings.get(scopeKey(scope, ownerId))?.has(marketplaceId) !== true) return null
   for (const plugin of seed.plugins) plugin.version = bumpPatch(plugin.version)
-  // 刷新市场时把已安装副本带到市场当前版本(与「更新市场」这一动作的语义一致)。
-  applyInstalledVersions(marketplaceId)
+  // 更新目录后把当前作用域的已装副本对齐(其它 Agent / 项目仍保留旧版本,直到它们自己更新)。
+  applyInstalledVersions(scope, ownerId, marketplaceId)
   seed.lastUpdated = new Date().toISOString()
-  return marketplaceOf(seed)
+  return bindingOf(scope, ownerId, seed)
 }
 
-// 把某个市场下所有已安装副本的版本对齐到市场当前版本。
-function applyInstalledVersions(marketplaceId: string): void {
+// 把某个作用域中从该市场安装的副本对齐到目录当前版本。
+function applyInstalledVersions(scope: InstallScope, ownerId: string, marketplaceId: string): void {
   const seed = marketplaceSeedOf(marketplaceId)
-  if (seed === undefined) return
+  const states = pluginStates.get(scopeKey(scope, ownerId))
+  if (seed === undefined || states === undefined) return
   const suffix = `@${marketplaceId}`
-  for (const states of pluginStates.values()) {
-    for (const [key, state] of states) {
-      if (!key.endsWith(suffix)) continue
-      const pluginId = key.slice(0, key.lastIndexOf('@'))
-      const plugin = seed.plugins.find((item) => item.id === pluginId)
-      if (plugin !== undefined) state.installedVersion = plugin.version
-    }
+  for (const [key, state] of states) {
+    if (!key.endsWith(suffix)) continue
+    const pluginId = key.slice(0, key.lastIndexOf('@'))
+    const plugin = seed.plugins.find((item) => item.id === pluginId)
+    if (plugin !== undefined) state.installedVersion = plugin.version
   }
 }
 
-// 添加市场(全局):已知 source 带上它的插件目录,未知 source 先得到空市场。
-export function mockAddMarketplace(config: MarketplaceConfig): Marketplace | null {
+// 给某个 Agent / 项目添加市场:同一 source 复用共享目录,绑定状态互相独立。
+export function mockAddMarketplace(scope: InstallScope, ownerId: string, config: MarketplaceConfig): MarketplaceBinding | null {
+  if (!isValidOwner(scope, ownerId)) return null
   const name = config.name.trim()
   const source = config.source.trim()
   if (name === '' || source === '') return null
-  if (marketplaceStore.some((item) => item.name === name || item.source === source)) return null
-  marketplaceSequence += 1
-  const known = [...marketplaceCatalog, ...extraMarketplaceCatalog].find((item) => item.source === source)
-  const seed: MarketplaceSeed = known === undefined
-    ? {
-        id: `marketplace-${marketplaceSequence}`,
-        name,
-        source,
-        trust: 'community',
-        autoUpdate: config.autoUpdate,
-        lastUpdated: new Date().toISOString(),
-        plugins: [],
-      }
-    : {
-        ...cloneMarketplaceSeed(known),
-        id: `marketplace-${marketplaceSequence}`,
-        name,
-        autoUpdate: config.autoUpdate,
-        lastUpdated: new Date().toISOString(),
-      }
-  marketplaceStore.push(seed)
-  return marketplaceOf(seed)
+  const bindings = bindingMap(scope, ownerId)
+  if ([...bindings.keys()].some((id) => {
+    const existing = marketplaceSeedOf(id)
+    return existing !== undefined && (existing.name === name || existing.source === source)
+  })) return null
+  let seed = marketplaceStore.find((item) => item.source === source)
+  if (seed === undefined) {
+    marketplaceSequence += 1
+    const known = [...marketplaceCatalog, ...extraMarketplaceCatalog].find((item) => item.source === source)
+    seed = known === undefined
+      ? {
+          id: `marketplace-${marketplaceSequence}`,
+          name,
+          source,
+          trust: 'community',
+          defaultAutoUpdate: config.autoUpdate,
+          lastUpdated: new Date().toISOString(),
+          plugins: [],
+        }
+      : {
+          ...cloneMarketplaceSeed(known),
+          id: `marketplace-${marketplaceSequence}`,
+          name,
+          lastUpdated: new Date().toISOString(),
+        }
+    marketplaceStore.push(seed)
+  }
+  bindings.set(seed.id, { autoUpdate: config.autoUpdate })
+  return bindingOf(scope, ownerId, seed)
 }
 
-// 移除市场:从所有 Agent / 项目的安装态与配置里清掉它名下的插件。
-export function mockRemoveMarketplace(marketplaceId: string): boolean {
-  const index = marketplaceStore.findIndex((item) => item.id === marketplaceId)
-  if (index < 0) return false
-  const removed = marketplaceStore[index]
-  if (removed === undefined) return false
-  marketplaceStore.splice(index, 1)
-  marketplaceAutoUpdate.delete(marketplaceId)
-  const suffix = `@${marketplaceId}`
-  for (const states of pluginStates.values()) {
+// 移除某个作用域注册的市场:只卸载该作用域中它名下的插件,共享目录留给其它 Agent / 项目。
+export function mockRemoveMarketplace(scope: InstallScope, ownerId: string, marketplaceId: string): boolean {
+  if (!isValidOwner(scope, ownerId)) return false
+  const bindings = marketplaceBindings.get(scopeKey(scope, ownerId))
+  if (bindings === undefined || !bindings.delete(marketplaceId)) return false
+  const states = pluginStates.get(scopeKey(scope, ownerId))
+  if (states !== undefined) {
+    const suffix = `@${marketplaceId}`
     for (const key of [...states.keys()]) {
       if (key.endsWith(suffix)) states.delete(key)
     }
   }
-  for (const configs of pluginConfigValues.values()) {
+  const configs = pluginConfigValues.get(scopeKey(scope, ownerId))
+  if (configs !== undefined) {
+    const suffix = `@${marketplaceId}`
     for (const key of [...configs.keys()]) {
       if (key.endsWith(suffix)) configs.delete(key)
     }

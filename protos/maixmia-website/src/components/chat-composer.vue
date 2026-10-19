@@ -13,7 +13,10 @@
 //
 // **归属项目**不是运行时遥测,而是「这份内容属于谁」的身份 —— 故它不混进底行,单独落在卡片
 // **外部左上角**成为一枚挂耳标签,用一条引线勾回卡片(见模板里 .composer-project-row 的说明)。
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import type { Skill } from '../contracts/generated/skill'
+import { filterSkills, skillOptionId } from '../data/skills'
+import SkillMenu from './skill-menu.vue'
 import type { ChatRuntime } from '../data/chat-runtime'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { WindowRect } from '../contracts/generated/workspace-window'
@@ -31,6 +34,8 @@ const props = defineProps<{
   // 会话标题:输入框的可访问名据此生成(读屏要能分辨「在给哪段对话打字」)。
   title: string
   runtime: ChatRuntime
+  skills: readonly Skill[]
+  skillsStatus: 'loading' | 'ready' | 'error'
   // 生成 / 保存中(输入框只读,不给改草稿的错觉)。
   disabled: boolean
   canSend: boolean
@@ -52,6 +57,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [text: string]
   stop: []
+  'retry-skills': []
   'update:draft': [value: string]
   // 附件增删与模型切换都写回**本会话**的运行态(页面负责 patchRuntime)。
   'add-attachments': [attachments: Attachment[]]
@@ -97,14 +103,124 @@ function openReassign(event: MouseEvent): void {
   emit('reassign', viewportRectOf(event.currentTarget instanceof Element ? event.currentTarget : null))
 }
 
-function onInput(event: Event): void {
-  const target = event.target
-  if (target instanceof HTMLTextAreaElement) emit('update:draft', target.value)
+const isSlashOpen = ref(false)
+const activeIndex = ref(0)
+const lastEmitted = ref(props.runtime.draft)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+// 前导 `/` 是**指令前缀**,不是普通字符:只要草稿以它开头,就由键帽图标渲染;
+// 菜单关闭(选定 Skill / 侧栏插入 / Esc)后图标仍保持,直到用户把前缀删掉。
+const hasSlashPrefix = computed(() => props.runtime.draft.startsWith('/'))
+const slashQuery = computed(() => hasSlashPrefix.value ? props.runtime.draft.slice(1) : props.runtime.draft)
+const visibleDraft = computed(() => hasSlashPrefix.value ? slashQuery.value : props.runtime.draft)
+// 菜单打开时是过滤 query;命令已选定(菜单关闭)时是参数输入。
+const placeholder = computed(() => isSlashOpen.value
+  ? t.value.workspace.skills.searchPlaceholder
+  : hasSlashPrefix.value ? t.value.workspace.skills.commandPlaceholder : t.value.workspace.placeholder)
+const skillListId = computed(() => `${composerId.value}-skills`)
+const filteredSkills = computed(() => filterSkills(props.skills, slashQuery.value))
+const activeSkillId = computed(() => isSlashOpen.value && props.skillsStatus === 'ready' && filteredSkills.value[activeIndex.value] !== undefined
+  ? skillOptionId(skillListId.value, activeIndex.value) : undefined)
+
+function emitDraft(value: string): void {
+  lastEmitted.value = value
+  emit('update:draft', value)
 }
 
-// Enter 发送、Shift+Enter 换行;组字中(IME)不发送。
+async function focusDraftEnd(): Promise<void> {
+  await nextTick()
+  const textarea = textareaRef.value
+  if (textarea === null) return
+  textarea.focus()
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+}
+
+function selectSkill(skill: Skill): void {
+  if (isReadOnly.value) return
+  isSlashOpen.value = false
+  emitDraft(`/${skill.command} `)
+  emit('announce', t.value.workspace.skills.selected.replace('{command}', skill.command))
+  void focusDraftEnd()
+}
+
+function onInput(event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLTextAreaElement) || isReadOnly.value) return
+  const visible = target.value
+  // 图标占掉了前导 `/`;用户看到的文本永远不含它。粘贴了带 `/` 的整条命令时归一成单前缀。
+  const value = hasSlashPrefix.value ? `/${visible.replace(/^\/+/u, '')}` : visible
+  if (!isSlashOpen.value) { emitDraft(value); return }
+  if (/\s/u.test(visible)) {
+    isSlashOpen.value = false
+    emitDraft(value)
+    void focusDraftEnd()
+    return
+  }
+  activeIndex.value = 0
+  emitDraft(value)
+}
+
+// slash 模式仅改变可见值;草稿始终保留前导 /,外部改写会退出菜单。
+watch(() => props.runtime.draft, (value) => {
+  if (isSlashOpen.value && value !== lastEmitted.value) isSlashOpen.value = false
+})
+watch(isReadOnly, (value) => { if (value) isSlashOpen.value = false })
+watch(filteredSkills, (skills) => { activeIndex.value = Math.max(0, Math.min(activeIndex.value, skills.length - 1)) })
+
+function onFormFocusOut(event: FocusEvent): void {
+  if (event.relatedTarget instanceof Node && formRef.value?.contains(event.relatedTarget) === true) return
+  isSlashOpen.value = false
+}
+
+// Enter 发送、Shift+Enter 换行;IME 组字与快捷键不触发 slash 入口。
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  if (event.isComposing || isReadOnly.value) return
+  const textarea = textareaRef.value
+  // 前导 `/` 由图标表示;在可见文本开头按 Backspace = 撤掉整个前缀(之后可继续当普通文本编辑)。
+  if (event.key === 'Backspace' && hasSlashPrefix.value && textarea !== null
+    && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
+    event.preventDefault()
+    isSlashOpen.value = false
+    emitDraft(visibleDraft.value)
+    return
+  }
+  if (!isSlashOpen.value && event.key === '/' && props.runtime.draft.trim() === ''
+    && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat) {
+    event.preventDefault()
+    isSlashOpen.value = true
+    activeIndex.value = 0
+    emitDraft('/')
+    return
+  }
+  if (isSlashOpen.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      isSlashOpen.value = false
+      void focusDraftEnd()
+      return
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const count = props.skillsStatus === 'ready' ? filteredSkills.value.length : 0
+      if (count > 0) activeIndex.value = (activeIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count
+      return
+    }
+    // 错误态没有可选项;Enter 直接重试,给键盘用户一条与菜单内「重试」按钮等价的通路。
+    if (event.key === 'Enter' && !event.shiftKey && props.skillsStatus === 'error') {
+      event.preventDefault()
+      emit('retry-skills')
+      return
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+      event.preventDefault()
+      const selected = props.skillsStatus === 'ready' ? filteredSkills.value[activeIndex.value] : undefined
+      if (selected !== undefined) selectSkill(selected)
+      else if (event.key === 'Enter') { isSlashOpen.value = false; void focusDraftEnd() }
+      return
+    }
+    return
+  }
+  if (event.key !== 'Enter' || event.shiftKey) return
   event.preventDefault()
   if (props.canSend) emit('send', props.runtime.draft)
 }
@@ -442,8 +558,16 @@ function formatElapsed(seconds: number): string {
       <form
         ref="formRef" class="composer-form" :class="{ 'is-drop-target': dropActive }"
         :title="t.workspace.inputHint" @submit.prevent="submit"
-        @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"
+        @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop" @focusout="onFormFocusOut"
       >
+        <Transition name="skill-menu-pop">
+          <SkillMenu
+            v-if="isSlashOpen" :list-id="skillListId" :project-name="projectName"
+            :skills="filteredSkills" :total-count="skills.length" :query="slashQuery"
+            :status="skillsStatus" :active-index="activeIndex"
+            @select="selectSkill" @activate="activeIndex = $event" @retry="emit('retry-skills')"
+          />
+        </Transition>
         <!-- 附件区:有附件才渲染;在 textarea 之上、仍在卡片内。每枚芯片带一枚原生删除按钮。 -->
         <ul v-if="attachments.length" class="composer-attachments" :aria-label="t.workspace.composer.attachments">
           <li v-for="attachment in attachments" :key="attachment.id" class="attachment-chip" :data-kind="attachment.kind">
@@ -466,10 +590,14 @@ function formatElapsed(seconds: number): string {
         <p v-if="dropActive" class="composer-drop-hint">{{ t.workspace.composer.dropHint }}</p>
         <p v-if="attachmentError" class="composer-attachment-error" role="alert">{{ attachmentError }}</p>
         <div class="composer-input-row">
-          <div class="textarea-sizer" :data-value="(runtime.draft || t.workspace.placeholder) + ' '">
+          <div class="textarea-sizer" :class="{ 'is-slash': hasSlashPrefix }" :data-value="(visibleDraft || placeholder) + ' '">
+            <span v-if="hasSlashPrefix" class="composer-slash" aria-hidden="true"><DliIcon name="slash" size="sm" /></span>
+            <!-- ARIA 1.1 的 textbox + listbox 模式:保留原生 textbox,不改为 combobox。 -->
             <textarea
-              :id="composerId" :name="composerId" class="composer-textarea" :value="runtime.draft" rows="1"
-              :aria-label="ariaLabel" :aria-describedby="describedBy" :placeholder="t.workspace.placeholder" :readonly="isReadOnly"
+              ref="textareaRef" :id="composerId" :name="composerId" class="composer-textarea" :value="visibleDraft" rows="1"
+              :aria-label="ariaLabel" :aria-describedby="describedBy" :placeholder="placeholder" :readonly="isReadOnly"
+              aria-haspopup="listbox" :aria-expanded="isSlashOpen" :aria-controls="isSlashOpen ? skillListId : undefined"
+              :aria-activedescendant="activeSkillId" aria-autocomplete="list"
               @input="onInput" @keydown="onKeydown" @paste="onPaste"
             />
           </div>
@@ -652,11 +780,19 @@ function formatElapsed(seconds: number): string {
 /* 输入框卡片:自身仍抬起(elevated 底 + 发丝描边 + md 阴影 + lg 圆角);它是 .composer-inner
    的流内首个子块(定宽居中由 .composer-inner 给出,这里保留同值约束以防单独复用)。多行时向下
    长高、把坞顶推高。内部**纵向三段**:附件区 / 输入行 / 底行。 */
-.composer-form { container: composer / inline-size; margin-inline: auto; max-width: var(--workspace-column-max); display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
+.composer-form { position: relative; container: composer / inline-size; margin-inline: auto; max-width: var(--workspace-column-max); display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
 /* 侧栏文件拖到卡片上:整体描边 + 焦点环同款强调(只动 border-color / box-shadow,不触发布局)。 */
 .composer-form.is-drop-target { border-color: var(--dl-accent); box-shadow: var(--dl-shadow-md), var(--dl-focus-ring); }
 .composer-input-row { display: flex; align-items: flex-end; gap: var(--dl-space-2); min-width: 0; }
-.textarea-sizer { display: grid; flex: 1; min-width: 0; max-height: calc(5 * var(--dl-font-size-md) * var(--dl-line-body) + 2 * var(--dl-space-2)); overflow: hidden; }
+.textarea-sizer { position: relative; display: grid; flex: 1; min-width: 0; max-height: calc(5 * var(--dl-font-size-md) * var(--dl-line-body) + 2 * var(--dl-space-2)); overflow: hidden; }
+.composer-slash { position: absolute; inset-block-start: calc(var(--dl-space-2) + (var(--dl-font-size-md) * var(--dl-line-body) - var(--dl-icon-md)) / 2); inset-inline-start: var(--dl-space-2); z-index: var(--dl-z-base); display: grid; place-items: center; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); background: var(--dl-bg-sunken); color: var(--dl-accent); pointer-events: none; }
+.textarea-sizer.is-slash textarea, .textarea-sizer.is-slash::after { padding-inline-start: calc(var(--dl-space-2) + var(--dl-icon-md) + var(--dl-space-1)); }
+.skill-menu-pop-enter-active, .skill-menu-pop-leave-active { transition: opacity var(--dl-duration-fast) var(--dl-ease-standard), transform var(--dl-duration-fast) var(--dl-ease-standard); }
+.skill-menu-pop-enter-from, .skill-menu-pop-leave-to { opacity: 0; transform: translateY(var(--dl-space-1)); }
+@media (prefers-reduced-motion: reduce) {
+  .skill-menu-pop-enter-active, .skill-menu-pop-leave-active { transition: none; }
+  .skill-menu-pop-enter-from, .skill-menu-pop-leave-to { transform: none; }
+}
 .textarea-sizer::after { content: attr(data-value); visibility: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .textarea-sizer::after, textarea { grid-area: 1 / 1; font: inherit; line-height: var(--dl-line-body); padding: var(--dl-space-2); min-height: var(--dl-target-size); min-width: 0; border: 0; }
 textarea { width: 100%; height: 100%; max-height: inherit; resize: none; color: var(--dl-text-primary); background: transparent; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--dl-radius-sm); }

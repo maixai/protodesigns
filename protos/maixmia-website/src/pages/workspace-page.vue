@@ -9,6 +9,9 @@ import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
 import type { Project } from '../contracts/generated/project'
+import type { Skill } from '../contracts/generated/skill'
+import { insertSkillIntoDraft } from '../data/skills'
+import ProjectSkills from '../components/project-skills.vue'
 import type { ProjectEntry, ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
 import type { AppRoute } from '../contracts/generated/app-route'
@@ -26,7 +29,7 @@ import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
 import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
-import { closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listAgents, listProjects, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
+import { closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
@@ -36,6 +39,7 @@ import AgentContextSwitcher from '../components/agent-context-switcher.vue'
 import AgentEditorDialog from '../components/agent-editor-dialog.vue'
 import ProjectSettingsDialog from '../components/project-settings-dialog.vue'
 import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
+import type { SidebarViewOption } from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
 import ChatPanel from '../components/chat-panel.vue'
 import ChatSessionView from '../components/chat-session-view.vue'
@@ -121,6 +125,12 @@ const expandedProjects = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
 const projectTrees = ref<Record<string, ProjectEntry[]>>({})
 const treeStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
+const projectSkills = ref<Record<string, Skill[]>>({})
+const skillStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
+const skillVersions = new Map<string, number>()
+// 项目内容栏:文件 / Skills。默认文件(最高频),每项目各记一份,切换只在本次页面生命周期内保留。
+type ProjectContentTab = 'files' | 'skills'
+const projectContentTabs = ref<Record<string, ProjectContentTab>>({})
 const isPickerOpen = ref(false)
 // 项目选择浮层的**请求**:null = 没开。两种用途共用一个浮层 —— 新建对话时选归属、
 // 空对话时改归属(浮层本身只管「选一个项目」,标题与选中后的动作由这里给)。
@@ -531,6 +541,61 @@ async function ensureProjectTree(projectId: string, force = false): Promise<void
   projectTrees.value = { ...projectTrees.value, [projectId]: result.value }
   treeStatus.value = { ...treeStatus.value, [projectId]: 'ready' }
 }
+// Skills 与文件树分开加载;请求版本防止重试或切域后的旧结果覆盖新清单。
+async function ensureProjectSkills(projectId: string, force = false): Promise<void> {
+  if (!force && (projectSkills.value[projectId] !== undefined || skillStatus.value[projectId] === 'loading')) return
+  const version = (skillVersions.get(projectId) ?? 0) + 1
+  const agentId = selectedAgent.value
+  const demoState = currentRoute.value.demoState
+  skillVersions.set(projectId, version)
+  skillStatus.value = { ...skillStatus.value, [projectId]: 'loading' }
+  const result = await listProjectSkills(projectId)
+  if (!isAlive.value || skillVersions.get(projectId) !== version || selectedAgent.value !== agentId
+    || currentRoute.value.demoState !== demoState || !projects.value.some((project) => project.id === projectId)) return
+  skillStatus.value = { ...skillStatus.value, [projectId]: result.ok ? 'ready' : 'error' }
+  if (result.ok) projectSkills.value = { ...projectSkills.value, [projectId]: result.value }
+}
+function retryProjectSkills(projectId: string): void {
+  void ensureProjectSkills(projectId, true)
+}
+function skillsOf(projectId: string): readonly Skill[] {
+  return projectSkills.value[projectId] ?? []
+}
+function skillStatusOf(projectId: string): 'loading' | 'ready' | 'error' {
+  return skillStatus.value[projectId] ?? 'loading'
+}
+// 项目内容 tab:复用侧栏顶层的低矮文字 tab(细下划线 + 等宽计数),两个层级同一套语言。
+function projectContentTabOf(projectId: string): ProjectContentTab {
+  return projectContentTabs.value[projectId] ?? 'files'
+}
+function setProjectContentTab(projectId: string, tab: string): void {
+  projectContentTabs.value = { ...projectContentTabs.value, [projectId]: tab === 'skills' ? 'skills' : 'files' }
+}
+function projectContentOptions(project: Project): SidebarViewOption[] {
+  return [
+    { id: 'files', label: t.value.workspace.projectContent.files, count: project.entryCount, icon: 'fileText' },
+    // 加载 / 失败时不报一个假的 0:计数槽留空,状态由面板自身说明。
+    { id: 'skills', label: t.value.workspace.skills.title, count: skillStatusOf(project.id) === 'ready' ? skillsOf(project.id).length : undefined, icon: 'sparkles' },
+  ]
+}
+async function insertSkill(projectId: string, skill: Skill): Promise<void> {
+  const candidates = sessions.value.filter((item) => item.projectId === projectId && visibleChatIds.value.includes(item.id))
+  const target = candidates.find((item) => item.id === liveSessionId.value) ?? candidates[0]
+  if (target === undefined) {
+    announcePlacement(t.value.workspace.skills.needConversation.replace('{name}', projectNameOf(projectId)))
+    return
+  }
+  updateDraft(target.id, insertSkillIntoDraft(runtimeFor(target.id).draft, skill.command))
+  announcePlacement(t.value.workspace.skills.inserted.replace('{command}', skill.command))
+  // 抽屉开启时内容区 inert;先退出抽屉,再聚焦同一项目的输入框。
+  if (isDrawerOpen.value) await closeDrawer()
+  await nextTick()
+  const textarea = document.getElementById(`workspace-composer-${target.id}`)
+  if (!(textarea instanceof HTMLTextAreaElement)) return
+  textarea.focus()
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+}
+
 // ---- 文件内容 ----
 // 缓存键 = **复合窗体 id**(项目 + 路径):同名文件在不同项目是不同内容、也是不同窗体。
 async function loadFileContent(content: FileTab): Promise<void> {
@@ -1471,6 +1536,10 @@ async function reloadWorkspace(pickFirstSession: boolean, autoExpand = false, fo
   projectsStatus.value = projects.value.length ? 'ready' : 'empty'
   // 多项目同时展开:自动展开时**只补首个项目**,不收起用户已经展开的其它项目(单展开已废除)。
   const openIds = projects.value.map((project) => project.id)
+  projectSkills.value = Object.fromEntries(Object.entries(projectSkills.value).filter(([id]) => openIds.includes(id)))
+  skillStatus.value = Object.fromEntries(Object.entries(skillStatus.value).filter(([id]) => openIds.includes(id)))
+  projectContentTabs.value = Object.fromEntries(Object.entries(projectContentTabs.value).filter(([id]) => openIds.includes(id)))
+  for (const id of openIds) void ensureProjectSkills(id)
   const expanded = new Set([...expandedProjects.value].filter((id) => openIds.includes(id)))
   if (autoExpand && expanded.size === 0) {
     const first = openIds[0]
@@ -2067,6 +2136,9 @@ async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''):
   showConversation()
   // 清掉旧域列表，避免 domain watcher 把旧 Agent 的成员补进新域。
   sessions.value = []
+  projectSkills.value = {}
+  skillStatus.value = {}
+  projectContentTabs.value = {}
   selectedAgent.value = agent
   // 插件列表属于上一个 Agent,不能带进新 Agent 的侧栏。
   // 项目设置属于上一个 Agent 的项目列表;切域后关闭。
@@ -2276,7 +2348,13 @@ watch(() => visibleChatIds.value.slice().sort().join('\n'), () => {
 watch(sessions, () => {
   for (const id of visibleChatIds.value) void ensureTelemetry(id)
 })
+// Agent 设置可能改变已启用插件;关闭后刷新派生清单,不改动插件管理本身。
+watch(isAgentEditorOpen, (isOpen) => {
+  if (!isOpen) for (const project of projects.value) void ensureProjectSkills(project.id, true)
+})
 watch(() => currentRoute.value.demoState, (demo) => {
+  projectSkills.value = {}
+  skillStatus.value = {}
   applyDemoState(demo)
   if (!isBusy.value) resetGenerations()
   void reloadWorkspace(false, true)
@@ -2431,47 +2509,77 @@ onBeforeUnmount(() => {
                   <ProjectMenu :project-name="project.name" @close="onCloseProject(project)" @settings="openProjectSettings(project)" />
                 </div>
                 <div v-show="expandedProjects.has(project.id)" :id="`project-tree-${project.id}`" class="project-tree">
-                  <span class="project-ridge" aria-hidden="true" />
-                  <p v-if="(treeStatus[project.id] ?? 'loading') === 'loading'" class="tree-hint" :aria-label="t.workspace.treeLoading">{{ t.workspace.treeLoading }}</p>
-                  <p v-else-if="treeStatus[project.id] === 'error'" class="tree-hint tree-hint--error">{{ t.workspace.treeError }}</p>
-                  <p v-else-if="(projectRows[project.id] ?? []).length === 0" class="tree-hint">{{ t.workspace.treeEmpty }}</p>
-                  <ul v-else class="entry-list">
-                    <li
-                      v-for="row in projectRows[project.id] ?? []" :key="row.id" class="entry-row"
-                      :data-kind="row.kind" :style="{ '--workspace-tree-level': row.level }"
-                    >
-                      <button
-                        v-if="row.expandable" type="button" class="entry-row__button"
-                        :aria-expanded="isDirectoryExpanded(project.id, row.path)"
-                        @click="toggleDirectory(project.id, row.path)"
+                  <!-- 项目内容栏:文件 / Skills。默认文件(最高频);Skills 计数常驻可见,
+                       从没用过 `/` 的用户也能发现。tab 条吸顶在项目行下方,长树滚动时不丢切换入口。 -->
+                  <div class="project-content-tabs">
+                    <SidebarViewTabs
+                      :id-prefix="`project-content-${project.id}`"
+                      :model-value="projectContentTabOf(project.id)"
+                      :options="projectContentOptions(project)"
+                      :label="t.workspace.projectContent.label"
+                      variant="rail"
+                      @update:model-value="setProjectContentTab(project.id, $event)"
+                    />
+                  </div>
+                  <div
+                    v-show="projectContentTabOf(project.id) === 'files'"
+                    :id="`project-content-${project.id}-panel-files`" role="tabpanel"
+                    :aria-labelledby="`project-content-${project.id}-tab-files`"
+                    class="project-content-panel"
+                  >
+                    <span class="project-ridge" aria-hidden="true" />
+                    <p v-if="(treeStatus[project.id] ?? 'loading') === 'loading'" class="tree-hint" :aria-label="t.workspace.treeLoading">{{ t.workspace.treeLoading }}</p>
+                    <p v-else-if="treeStatus[project.id] === 'error'" class="tree-hint tree-hint--error">{{ t.workspace.treeError }}</p>
+                    <p v-else-if="(projectRows[project.id] ?? []).length === 0" class="tree-hint">{{ t.workspace.treeEmpty }}</p>
+                    <ul v-else class="entry-list">
+                      <li
+                        v-for="row in projectRows[project.id] ?? []" :key="row.id" class="entry-row"
+                        :data-kind="row.kind" :style="{ '--workspace-tree-level': row.level }"
                       >
-                        <svg class="tree-caret" :class="{ 'is-open': isDirectoryExpanded(project.id, row.path) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-                        <span class="entry-name">{{ row.name }}</span>
-                        <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
-                      </button>
-                      <button
-                        v-else type="button" class="entry-row__button entry-row__button--file"
-                        :title="row.path" draggable="true"
-                        @click="onFileRowClick(project.id, row, $event)"
-                        @dblclick="onFileRowDblClick(project.id, row)"
-                        @keydown="onFileRowKey(project.id, $event, row)"
-                        @dragstart="onFileRowDragStart(row, $event)"
-                      >
-                        <span class="entry-name">{{ row.name }}</span>
-                        <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
-                      </button>
-                      <!-- 拖拽之外的非拖拽通路(WCAG 2.5.7):把该文件加入焦点区域的活动对话。
-                           它与文件行那枚按钮是**兄弟**而非嵌套 —— 嵌套 button 是非法 HTML。 -->
-                      <button
-                        v-if="!row.expandable" type="button" class="entry-row__add"
-                        :aria-label="t.workspace.addFileToConversation.replace('{name}', row.name)"
-                        @click="onAddFileToConversation(row)"
-                      >
-                        <span aria-hidden="true">＋</span>
-                      </button>
-                      <span class="entry-guides" aria-hidden="true"><span v-for="guide in row.level - 1" :key="guide" class="entry-guide" /></span>
-                    </li>
-                  </ul>
+                        <button
+                          v-if="row.expandable" type="button" class="entry-row__button"
+                          :aria-expanded="isDirectoryExpanded(project.id, row.path)"
+                          @click="toggleDirectory(project.id, row.path)"
+                        >
+                          <svg class="tree-caret" :class="{ 'is-open': isDirectoryExpanded(project.id, row.path) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                          <span class="entry-name">{{ row.name }}</span>
+                          <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
+                        </button>
+                        <button
+                          v-else type="button" class="entry-row__button entry-row__button--file"
+                          :title="row.path" draggable="true"
+                          @click="onFileRowClick(project.id, row, $event)"
+                          @dblclick="onFileRowDblClick(project.id, row)"
+                          @keydown="onFileRowKey(project.id, $event, row)"
+                          @dragstart="onFileRowDragStart(row, $event)"
+                        >
+                          <span class="entry-name">{{ row.name }}</span>
+                          <span v-if="chipLabel(entryState(row))" class="entry-state" :data-state="entryState(row)">{{ chipLabel(entryState(row)) }}</span>
+                        </button>
+                        <!-- 拖拽之外的非拖拽通路(WCAG 2.5.7):把该文件加入焦点区域的活动对话。
+                             它与文件行那枚按钮是**兄弟**而非嵌套 —— 嵌套 button 是非法 HTML。 -->
+                        <button
+                          v-if="!row.expandable" type="button" class="entry-row__add"
+                          :aria-label="t.workspace.addFileToConversation.replace('{name}', row.name)"
+                          @click="onAddFileToConversation(row)"
+                        >
+                          <span aria-hidden="true">＋</span>
+                        </button>
+                        <span class="entry-guides" aria-hidden="true"><span v-for="guide in row.level - 1" :key="guide" class="entry-guide" /></span>
+                      </li>
+                    </ul>
+                  </div>
+                  <div
+                    v-show="projectContentTabOf(project.id) === 'skills'"
+                    :id="`project-content-${project.id}-panel-skills`" role="tabpanel"
+                    :aria-labelledby="`project-content-${project.id}-tab-skills`"
+                    class="project-content-panel"
+                  >
+                    <ProjectSkills
+                      :project-name="project.name" :skills="skillsOf(project.id)" :status="skillStatusOf(project.id)"
+                      @insert="insertSkill(project.id, $event)" @retry="retryProjectSkills(project.id)"
+                    />
+                  </div>
                 </div>
               </li>
             </ul>
@@ -2625,6 +2733,8 @@ onBeforeUnmount(() => {
                   :session-id="activeChatOf(surfaceId)"
                   :title="sessionTitleOf(activeChatOf(surfaceId))"
                   :runtime="runtimeFor(activeChatOf(surfaceId))"
+                  :skills="skillsOf(activeChatProjectOf(surfaceId))" :skills-status="skillStatusOf(activeChatProjectOf(surfaceId))"
+                  @retry-skills="retryProjectSkills(activeChatProjectOf(surfaceId))"
                   :user-name="userName"
                   :assistant-name="assistantNameOf(activeChatOf(surfaceId))"
                   :is-live="activeChatOf(surfaceId) === liveSessionId"
@@ -2718,6 +2828,8 @@ onBeforeUnmount(() => {
           :reassign-picker-open="reassignPickerOpenFor(chatSessionIdOf(win))"
           :title="windowLabel(win.id)"
           :runtime="runtimeFor(chatSessionIdOf(win))"
+          :skills="skillsOf(win.content.projectId)" :skills-status="skillStatusOf(win.content.projectId)"
+          @retry-skills="retryProjectSkills(win.content.projectId)"
           :user-name="userName"
           :assistant-name="assistantNameOf(chatSessionIdOf(win))"
           :is-focused="win.id === focusedWindowId"
@@ -2886,6 +2998,12 @@ onBeforeUnmount(() => {
 .project-row .project-menu { position: absolute; inset-block-start: 50%; inset-inline-end: calc(var(--dl-space-2) + var(--dl-icon-sm) + var(--dl-space-1)); transform: translateY(-50%); z-index: var(--dl-z-overlay); }
 .project-row:hover .project-menu, .project-row:focus-within .project-menu { opacity: 1; }
 .project-tree { position: relative; display: flex; flex-direction: column; padding-block: var(--dl-space-1); }
+/* 项目内容 tab:吸顶在项目行(44px)下方。层序比项目行低一档 —— 项目行的 ⋯ 菜单被粘性行
+   限制在它自己的层叠上下文里(overlay 200 出不去),tab 条若同档会截住菜单点击。
+   不透明底是必需的:长文件树滚动时会从背后透出来。 */
+.project-content-tabs { position: sticky; inset-block-start: var(--dl-target-size); z-index: calc(var(--dl-z-sticky) - 1); padding-inline: var(--workspace-tree-step); background: var(--dl-bg-elevated); }
+/* 两个面板共用同一块内容区;v-show 保留各自的展开 / 滚动状态。 */
+.project-content-panel { position: relative; display: flex; flex-direction: column; min-inline-size: 0; }
 .project-ridge { position: absolute; inset-block: 0; inset-inline-start: var(--workspace-tree-step); width: var(--dl-border-width); background: var(--workspace-tree-guide); pointer-events: none; }
 .tree-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); padding: var(--dl-space-1) var(--dl-space-2); }
 .tree-hint--error { color: var(--dl-error); }

@@ -50,10 +50,13 @@ async function login(page: Page): Promise<void> {
 }
 
 // 输入坞 + 遥测落定:转录就绪、底行的 Context 项在(它只在遥测取回后渲染)。
+// 同时显式等转录 ready:后台重装会短暂把转录置回 loading,此时输入框是只读的;
+// 粘贴 / 发送类断言必须等装载真正落定,否则会与后台重装赛跑(冷启动 dev server 下更明显)。
 async function waitForComposer(page: Page, title = WEEKLY_TITLE): Promise<void> {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
   await expect(page.locator('.composer-form')).toBeVisible()
   await expect(page.locator('.telemetry__item--context')).toBeVisible()
+  await expect(page.locator('.transcript')).toHaveAttribute('data-state', 'ready')
 }
 
 // ---- 项目挂耳标签与底行的构图 ----

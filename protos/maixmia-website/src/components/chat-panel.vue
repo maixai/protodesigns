@@ -10,6 +10,7 @@
 // 于是「输入坞属于对话窗体」由结构保证:拖出 / 停靠换的只是外壳与几何,内容本体不变。
 import { computed } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
+import type { Skill } from '../contracts/generated/skill'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { Project } from '../contracts/generated/project'
 import type { WindowRect } from '../contracts/generated/workspace-window'
@@ -38,6 +39,8 @@ const props = defineProps<{
   reassignPickerOpen: boolean
   // 该会话的运行态(草稿 / 转录 / 生成 / 遥测 / 待确认 / 粘底 —— 随会话存活,不随容器)。
   runtime: ChatRuntime
+  skills: readonly Skill[]
+  skillsStatus: 'loading' | 'ready' | 'error'
   userName: string
   assistantName: string
   isFocused: boolean
@@ -74,6 +77,7 @@ const emit = defineEmits<{
   // 透传内容本体的事件(输入坞 / 转录 / 确认卡)。
   send: [text: string]
   stop: []
+  'retry-skills': []
   regenerate: []
   retry: []
   resolve: [allowed: boolean]
@@ -166,6 +170,7 @@ const projectPath = computed(() => badge.value?.path ?? '')
         :session-id="sessionId"
         :title="title"
         :runtime="runtime"
+        :skills="skills" :skills-status="skillsStatus"
         :user-name="userName"
         :assistant-name="assistantName"
         :is-live="isLive"
@@ -177,6 +182,7 @@ const projectPath = computed(() => badge.value?.path ?? '')
         :reassign-picker-open="reassignPickerOpen"
         @send="emit('send', $event)"
         @stop="emit('stop')"
+        @retry-skills="emit('retry-skills')"
         @regenerate="emit('regenerate')"
         @retry="emit('retry')"
         @resolve="emit('resolve', $event)"

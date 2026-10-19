@@ -7,6 +7,8 @@
 //
 // 语义用 tablist / tab:它切换的是同一块侧栏里的两个面板,不是一组筛选值。
 import { computed } from 'vue'
+import type { IconName } from '../data/icons'
+import DliIcon from './dl-icon.vue'
 
 export interface SidebarViewOption {
   id: string
@@ -14,21 +16,34 @@ export interface SidebarViewOption {
   // 可选的小计数(项目数 / 已装插件数)。它用等宽数字,承担「精确读数」的科技感,
   // 不参与点击目标之外的信息层级。
   count?: number | undefined
+  // 可选的前置图标:只给「同一项目内的内容栏」这类需要一眼分辨用途的二级 tab 用。
+  icon?: IconName
 }
 
-const props = defineProps<{
+// 两种形态共用同一套 tablist 语义与键盘:
+//   underline —— 侧栏顶层视图切换(低矮文字 + 一条细下划线);
+//   rail      —— 项目内内容切换(26px 发丝轨道 + 滑动块 + 等宽计数)。二级控件比顶层更「内嵌」,
+//                两者因此不会读成同一层导航。
+const props = withDefaults(defineProps<{
   label: string
   options: readonly SidebarViewOption[]
   modelValue: string
   // 同一页面可能有多个实例;面板的 id 由它拼出,父级据此给 tabpanel 命名。
   idPrefix: string
-}>()
+  variant?: 'underline' | 'rail'
+}>(), { variant: 'underline' })
 
 const emit = defineEmits<{
   'update:modelValue': [id: string]
 }>()
 
 const currentIndex = computed(() => props.options.findIndex((option) => option.id === props.modelValue))
+
+// rail 的滑动块只靠两个自定义属性驱动:序号决定位移,数量决定块宽。
+const railStyle = computed<Record<string, string>>(() => ({
+  '--view-tab-index': String(Math.max(0, currentIndex.value)),
+  '--view-tab-count': String(Math.max(1, props.options.length)),
+}))
 
 function tabId(id: string): string {
   return `${props.idPrefix}-tab-${id}`
@@ -60,7 +75,13 @@ function onKeydown(event: KeyboardEvent): void {
 </script>
 
 <template>
-  <div class="view-tabs" role="tablist" :aria-label="label" @keydown="onKeydown">
+  <div
+    class="view-tabs" :class="{ 'view-tabs--rail': variant === 'rail' }" role="tablist" :aria-label="label"
+    :style="variant === 'rail' ? railStyle : undefined" @keydown="onKeydown"
+  >
+    <!-- rail 的滑动块:纯装饰,tab 自身仍承担 aria-selected / 焦点。
+         位移只动 transform(动效白名单),序号变化时块在两条轨道间滑过去。 -->
+    <span v-if="variant === 'rail'" class="view-tabs__thumb" aria-hidden="true" />
     <button
       v-for="option in options" :id="tabId(option.id)" :key="option.id"
       type="button" role="tab" class="view-tabs__tab" :data-id="option.id"
@@ -68,6 +89,7 @@ function onKeydown(event: KeyboardEvent): void {
       :tabindex="modelValue === option.id ? 0 : -1"
       @click="select(option.id, false)"
     >
+      <DliIcon v-if="option.icon" :name="option.icon" size="sm" class="view-tabs__icon" />
       <span class="view-tabs__label">{{ option.label }}</span>
       <span class="view-tabs__count" :data-empty="option.count === undefined ? 'true' : undefined">{{ option.count ?? '' }}</span>
     </button>
@@ -89,7 +111,59 @@ function onKeydown(event: KeyboardEvent): void {
 .view-tabs__tab[aria-selected='true'] { color: var(--dl-text-primary); font-weight: 500; }
 .view-tabs__tab[aria-selected='true']::after { transform: scaleX(1); }
 .view-tabs__tab:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+
+/* ---- rail:项目内的内容切换(二级控件) ----
+   26px 发丝轨道 + 滑动块 + 等宽计数。比顶层的下划线 tab 更「内嵌」,两级不会读成同一层导航;
+   轨道底与块面之间只差一档明度,强调色只落在块的底缘(1px)与选中图标上。 */
+.view-tabs--rail {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  gap: 0;
+  inline-size: 100%;
+  padding: var(--dl-border-width);
+  border-block-end: 0;
+  border-radius: var(--dl-radius-md);
+  background: var(--dl-bg-sunken);
+  box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-border-base);
+}
+
+/* 滑动块:宽 = 内容宽 / tab 数;位移按自身宽度 × 序号(两个 tab 时正好半宽)。
+   只动 transform,属于动效白名单。 */
+.view-tabs__thumb {
+  position: absolute;
+  inset-block: var(--dl-border-width);
+  inset-inline-start: var(--dl-border-width);
+  inline-size: calc((100% - 2 * var(--dl-border-width)) / var(--view-tab-count));
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-block-end-color: var(--dl-accent);
+  border-radius: var(--dl-radius-sm);
+  background: var(--dl-bg-elevated);
+  transform: translateX(calc(var(--view-tab-index) * 100%));
+  transition: transform var(--dl-duration-base) var(--dl-ease-standard);
+  pointer-events: none;
+}
+
+.view-tabs--rail .view-tabs__tab {
+  position: relative;
+  z-index: 1;
+  justify-content: center;
+  min-block-size: var(--dl-space-6);
+  padding-inline: var(--dl-space-2);
+  border-radius: var(--dl-radius-sm);
+  letter-spacing: var(--dl-tracking-normal);
+  transition: color var(--dl-duration-fast) var(--dl-ease-standard), background-color var(--dl-duration-fast) var(--dl-ease-standard);
+}
+
+.view-tabs--rail .view-tabs__tab::after { display: none; }
+.view-tabs--rail .view-tabs__tab:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.view-tabs--rail .view-tabs__tab[aria-selected='true'] { font-weight: 500; }
+.view-tabs__icon { flex: none; color: var(--dl-text-tertiary); }
+.view-tabs--rail .view-tabs__tab[aria-selected='true'] .view-tabs__icon { color: var(--dl-accent); }
+
 @media (prefers-reduced-motion: reduce) {
-  .view-tabs__tab, .view-tabs__tab::after { transition: none; }
+  .view-tabs__tab, .view-tabs__tab::after, .view-tabs__thumb { transition: none; }
 }
 </style>

@@ -14,6 +14,7 @@ import type { Attachment } from '../contracts/generated/attachment'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
 import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { Project } from '../contracts/generated/project'
+import type { Skill } from '../contracts/generated/skill'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
@@ -138,6 +139,7 @@ interface PluginSeed {
   version: string
   icon: string
   components: PluginComponentId[]
+  skills?: Pick<Skill, 'name' | 'description'>[]
   config: ConfigFieldSeed[]
 }
 
@@ -170,6 +172,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '1.4.2',
         icon: 'code',
         components: ['skill', 'command'],
+        skills: [{ name: 'review-diff', description: '检查改动中的正确性、安全问题与回归风险' }],
         config: [
           { key: 'githubToken', label: 'GitHub token', description: 'Used to read pull requests and post review comments.', type: 'secret', required: false, defaultValue: '' },
         ],
@@ -194,6 +197,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '1.2.0',
         icon: 'database',
         components: ['skill', 'mcp'],
+        skills: [{ name: 'profile-dataset', description: '检查数据字段、缺失值与异常分布' }],
         config: [
           { key: 'workspaceDir', label: 'Workspace directory', description: 'Where analysis notebooks are written.', type: 'text', required: false, defaultValue: '~/work' },
         ],
@@ -206,6 +210,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '1.0.5',
         icon: 'fileText',
         components: ['skill', 'agent'],
+        skills: [{ name: 'revise-doc', description: '按产品文风修订文档并核对术语' }],
         config: [
           { key: 'styleGuide', label: 'Style guide path', description: 'Optional path to the documentation style guide.', type: 'text', required: false, defaultValue: '' },
         ],
@@ -254,6 +259,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '0.6.4',
         icon: 'badge',
         components: ['skill', 'agent', 'hook'],
+        skills: [{ name: 'scan-dependencies', description: '扫描依赖漏洞并整理可执行的升级建议' }],
         config: [
           { key: 'severityThreshold', label: 'Severity threshold', description: 'Lowest severity that fails the check.', type: 'text', required: false, defaultValue: 'high' },
         ],
@@ -304,6 +310,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '1.0.1',
         icon: 'fileText',
         components: ['skill', 'command'],
+        skills: [{ name: 'draft-release', description: '按目标读者整理本次发布的重点' }],
         config: [],
       },
       {
@@ -326,6 +333,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '1.2.0',
         icon: 'fileText',
         components: ['skill', 'command'],
+        skills: [{ name: 'build-entry', description: '把合并记录归类为变更日志条目' }],
         config: [],
       },
       {
@@ -356,6 +364,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '1.0.4',
         icon: 'fileText',
         components: ['skill', 'agent'],
+        skills: [{ name: 'review-copy', description: '检查界面文案的语气、清晰度与一致性' }],
         config: [],
       },
       {
@@ -383,7 +392,12 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
 ]
 
 function clonePluginSeed(plugin: PluginSeed): PluginSeed {
-  return { ...plugin, components: [...plugin.components], config: plugin.config.map((field) => ({ ...field })) }
+  return {
+    ...plugin,
+    components: [...plugin.components],
+    config: plugin.config.map((field) => ({ ...field })),
+    ...(plugin.skills === undefined ? {} : { skills: plugin.skills.map((skill) => ({ ...skill })) }),
+  }
 }
 
 function cloneMarketplaceSeed(seed: MarketplaceSeed): MarketplaceSeed {
@@ -1125,6 +1139,62 @@ const projectStore = new Map<AgentId, ProjectSeed[]>([
     },
   ]],
 ])
+
+// 项目级 Skill 来自项目 .claude/skills;新打开的目录没有预置项目 Skill。
+const PROJECT_SKILL_SEEDS: Record<string, Pick<Skill, 'command' | 'description'>[]> = {
+  'weekly-report': [
+    { command: 'weekly-status', description: '汇总本周进展、阻塞项与下一步负责人' },
+    { command: 'release-check', description: '核对发布前的验证、通知与回退准备' },
+    { command: 'incident-review', description: '按时间线梳理故障影响与改进项' },
+  ],
+  'knowledge-base': [
+    { command: 'kb-ingest', description: '整理新文档的来源、负责人和知识库索引' },
+    { command: 'doc-lint', description: '检查文档链接、标题结构与过期内容' },
+  ],
+  'user-research': [
+    { command: 'interview-synthesis', description: '从访谈原话归纳观察、假设与反例' },
+    { command: 'segment-analysis', description: '对比用户分群的任务与需求差异' },
+  ],
+  benchmarks: [
+    { command: 'bench-run', description: '执行基准套件并记录环境与结果' },
+    { command: 'perf-triage', description: '定位性能回退并整理复测路径' },
+  ],
+  'product-docs': [
+    { command: 'release-notes', description: '按模块整理发布说明与验证方式' },
+    { command: 'voice-check', description: '核对产品术语、语气与表达一致性' },
+  ],
+  changelog: [
+    { command: 'changelog-entry', description: '把本次改动整理为分类变更条目' },
+    { command: 'version-bump', description: '检查版本号、变更范围与发布记录' },
+  ],
+}
+
+export function mockProjectSkills(projectId: string): Skill[] {
+  const owner = [...projectStore.entries()].find(([, projects]) => projects.some((project) => project.id === projectId))
+  if (owner === undefined) return []
+  const projectSkills: Skill[] = (PROJECT_SKILL_SEEDS[projectId] ?? []).map((seed) => ({
+    ...seed, id: `${projectId}:${seed.command}`, name: seed.command, scope: 'project', sourceName: '',
+  }))
+  // 插件在 Agent 层装载且 Skill 带命名空间;刻意不采用 project-scope plugin 安装记录。
+  const states = pluginStates.get(scopeKey('agent', owner[0]))
+  const pluginSkills = new Map<string, Skill>()
+  for (const marketplace of marketplaceStore) {
+    for (const plugin of marketplace.plugins) {
+      if (states?.get(pluginKey(marketplace.id, plugin.id))?.enabled !== true) continue
+      for (const seed of plugin.skills ?? []) {
+        const command = `${plugin.id}:${seed.name}`
+        if (pluginSkills.has(command)) continue
+        pluginSkills.set(command, {
+          ...seed, id: `agent:${owner[0]}:${command}`, command, scope: 'agentPlugin', sourceName: plugin.name,
+        })
+      }
+    }
+  }
+  return [
+    ...projectSkills.sort((a, b) => a.command.localeCompare(b.command)),
+    ...[...pluginSkills.values()].sort((a, b) => a.command.localeCompare(b.command)),
+  ]
+}
 
 // 关闭会移除 projectStore 的条目,故另留独立种子快照供重新打开同目录时恢复。
 const projectSeeds = [...projectStore.values()].flat().map((project) => ({

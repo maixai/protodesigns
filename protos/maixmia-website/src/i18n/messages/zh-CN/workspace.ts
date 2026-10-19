@@ -2,6 +2,33 @@
 export const workspace = {
   title: '工作台',
   newChat: '新建对话',
+  // 每个展开项目下的内容栏:文件 / Skills。默认文件;Skills 的计数常驻在 tab 上。
+  projectContent: {
+    label: '项目内容视图',
+    files: '文件',
+  },
+  skills: {
+    title: 'Skills',
+    loading: '正在加载 Skills…',
+    error: 'Skills 加载失败',
+    retry: '重试 Skills',
+    empty: '暂无可用 Skill',
+    sourceProject: '项目',
+    sourcePlugin: '插件',
+    projectScopeHint: '.claude/skills',
+    agentPluginScope: 'Agent 插件，对该 Agent 的所有项目生效',
+    insertLabel: '把 Skill「{command}」插入当前对话',
+    inserted: '已插入 /{command}',
+    needConversation: '请先打开「{name}」的对话',
+    menuLabel: '选择 Skill',
+    searchPlaceholder: '搜索 Skill…',
+    commandPlaceholder: '输入命令或参数…',
+    hint: '↑↓ 选择 · Tab / Enter 确认 · Esc 退出 · 空查询 Backspace 清空 · 空白结束命令',
+    noMatch: '没有匹配的 Skill',
+    loadingMenu: '正在读取可用 Skills…',
+    errorMenu: '无法读取 Skills，请重试',
+    selected: '已选择 /{command}',
+  },
 
   // 会话栏下拉里的分类过滤(两个 aria-pressed 切换钮;不是 tab —— 它们只过滤同一个列表)。
   switcher: {

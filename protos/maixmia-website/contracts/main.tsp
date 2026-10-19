@@ -332,6 +332,25 @@ model Project {
   entries: ProjectEntry[];
 }
 
+// Skill 只有项目目录 .claude/skills 与 Agent 级插件两类来源,不读取个人目录。
+// 插件在 Agent / 会话层装载,其 Skill 使用 <plugin-id>:<skill-name> 命名空间;
+// 本清单不从项目作用域的插件安装记录派生 Skill。
+enum SkillScopeId {
+  project,
+  agentPlugin,
+}
+
+@summary("Skill")
+@jsonSchema
+model Skill {
+  id: string;
+  command: string;      // 不含前导 /;插件命令带插件 id 命名空间。
+  name: string;
+  description: string;
+  scope: SkillScopeId;
+  sourceName: string;   // 项目为空串;Agent 插件为插件展示名。
+}
+
 // 「打开项目」对话框里的一项:Agent Host 上检测到的候选目录。
 // path 是唯一标识(同 name 的目录可能存在于不同父目录下),勾选与去重都按 path。
 @summary("ProjectCandidate")

@@ -8,6 +8,7 @@
 // 与 VS Code 把 zoom / 滚动位置放在 editor instance 而非 document 同一分层)。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatRuntime } from '../data/chat-runtime'
+import type { Skill } from '../contracts/generated/skill'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { WindowRect } from '../contracts/generated/workspace-window'
 import { useI18n } from '../i18n'
@@ -18,6 +19,8 @@ const props = defineProps<{
   sessionId: string
   title: string
   runtime: ChatRuntime
+  skills: readonly Skill[]
+  skillsStatus: 'loading' | 'ready' | 'error'
   userName: string
   assistantName: string
   // 是否承担**全页唯一**的 live region(见 workspace-page 的 liveSlot 判据)。
@@ -36,6 +39,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [text: string]
   stop: []
+  'retry-skills': []
   regenerate: []
   retry: []
   resolve: [allowed: boolean]
@@ -181,6 +185,7 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
       :session-id="sessionId"
       :title="title"
       :runtime="runtime"
+      :skills="skills" :skills-status="skillsStatus"
       :disabled="disabled"
       :can-send="canSend"
       :is-generating="isGenerating"
@@ -191,6 +196,7 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
       :reassign-picker-open="reassignPickerOpen"
       @send="emit('send', $event)"
       @stop="emit('stop')"
+      @retry-skills="emit('retry-skills')"
       @update:draft="emit('update:draft', $event)"
       @add-attachments="emit('add-attachments', $event)"
       @remove-attachment="emit('remove-attachment', $event)"

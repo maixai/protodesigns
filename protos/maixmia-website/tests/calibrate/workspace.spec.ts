@@ -199,10 +199,12 @@ async function horizontalOverflow(page: Page): Promise<number> {
 }
 
 async function tabTo(page: Page, target: Locator): Promise<void> {
-  for (const attempt of Array.from({ length: 25 }, (_, index) => index)) {
+  // 上限从 25 放宽到 40:侧栏新增的 Skills 控件把输入框后移到约第 30 位;
+  // 40 仍足以识别键盘陷阱(超限即断言失败),不改变「输入框必须键盘可达」的原意。
+  for (const attempt of Array.from({ length: 40 }, (_, index) => index)) {
     if (await target.evaluate((element) => element === document.activeElement)) return
     await page.keyboard.press('Tab')
-    if (attempt === 24) await expect(target).toBeFocused()
+    if (attempt === 39) await expect(target).toBeFocused()
   }
 }
 
@@ -287,7 +289,10 @@ for (const width of WIDTHS) {
     //      **卡片外**的项目挂耳标签属独立控件档(44),不适用本档;本用例的语料(weekly 已有消息 →
     //      标签为只读纯文本 span,不是 button)不渲染那个按钮,故无需排除,它的 44×44 命中区
     //      在「空对话可改归属」用例里核对。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
+    //   ⑨ **项目内容 tab 与 Skill 行**——tab 是横向密集行(.view-tabs__tab,与侧栏顶层 tab 同档,
+    //      任何宽度都保持 28);Skill 行是纵向密集行(桌面 36 / 抽屉 44)。两者都整行可点,
+    //      相邻中心距 > 24。判据在 skills.spec.ts 的「项目内容 tab 与 Skills 行」用例逐条核对。
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.project-skills__row):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -1578,7 +1583,8 @@ test('侧栏切换 Agent:项目列表随之更换', async ({ page }) => {
   // 侧栏顶部是视图 tab(目前只有「项目」)+ 项目列表(每个 Agent 两个项目)。
   await expect(page.getByRole('button', { name: '关闭侧栏' })).toHaveCount(0)
   await expect(projects.getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
-  await expect(projects.getByRole('tab')).toHaveCount(1)
+  // 只数**顶层**视图 tab;项目内容 tab(文件 / Skills)在项目树里,是另一层。
+  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(1)
   await expect(projects.locator('.project-item')).toHaveCount(2)
   await selectAgent(page, AGENT_NAMES['zh-CN'].research)
   await expect(projects).toContainText(PROJECT_NAMES.research[0])
@@ -3094,8 +3100,9 @@ test('项目专属前导记号:色点 10px、aria-hidden;树里图标数为 0', 
   if (box === null) return
   expect(Math.abs(box.width - 10), '色点宽 10(--dl-identity-dot-size)').toBeLessThanOrEqual(1)
   expect(Math.abs(box.height - 10), '色点高 10').toBeLessThanOrEqual(1)
-  // 树里没有任何图标元素(dl-icon)—— 项目行只靠色点 + 名称区分。
-  await expect(page.locator('.project-tree .dl-icon')).toHaveCount(0)
+  // 文件树**行**里没有任何图标元素(dl-icon)—— 项目行只靠色点 + 名称区分。
+  // Skills 分组自己的图标住在 .project-skills 内、不在 .entry-list 里,不属于这条断言。
+  await expect(page.locator('.project-tree .entry-list .dl-icon')).toHaveCount(0)
 })
 
 test('展开脊线:与 level-1 caret 列左缘同一竖线;折叠时消失', async ({ page }) => {
@@ -3131,9 +3138,11 @@ test('项目行留白:上方 ≥ 下方 × 1.4(USWDS 标题归属规则)', async
     const first = items[0]?.getBoundingClientRect()
     const second = items[1]?.getBoundingClientRect()
     const row = items[1]?.querySelector('.project-row')?.getBoundingClientRect()
-    const firstRow = items[1]?.querySelector('.entry-row')?.getBoundingClientRect()
-    if (!first || !second || !row || !firstRow) return null
-    return { above: second.top - first.bottom, below: firstRow.top - row.bottom }
+    // 「项目行下方的第一个内容块」现在是项目内容 tab 条(文件 / Skills);
+    // 取它,保持原断言「项目行下方留白」的语义不变。
+    const firstContent = items[1]?.querySelector('.project-tree .view-tabs')?.getBoundingClientRect()
+    if (!first || !second || !row || !firstContent) return null
+    return { above: second.top - first.bottom, below: firstContent.top - row.bottom }
   })
   expect(spacing, '量到项目行上下留白').not.toBeNull()
   if (spacing === null) return
@@ -6010,7 +6019,19 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   const covering = await panelRectOf(page, README)
   console.log(`[multi window] 两层测定时的窗体几何 ${JSON.stringify(covering)}`)
   const tabsHit = await pointHit('.conversation-tabs')
-  const sidebarHit = await pointHit('.project-list')
+  // Skills 分组改变了项目列表高度,「列表中心」不再落在窗体矩形内。
+  // 改为取**侧栏与窗体交叠区**的中心:它仍验证同一件事 —— 窗体(第 2 层)盖住侧栏(第 1 层)。
+  const sidebarHit = await page.evaluate(() => {
+    const sidebar = document.querySelector('.workspace-sidebar')?.getBoundingClientRect()
+    const panel = document.querySelector('.file-panel')?.getBoundingClientRect()
+    if (!sidebar || !panel) return 'missing'
+    const x = (Math.max(sidebar.left, panel.left) + Math.min(sidebar.right, panel.right)) / 2
+    const y = (Math.max(sidebar.top, panel.top) + Math.min(sidebar.bottom, panel.bottom)) / 2
+    const hit = document.elementFromPoint(x, y)
+    if (hit?.closest('.file-panel')) return 'file-panel'
+    if (hit?.closest('.workspace-sidebar')) return 'sidebar'
+    return hit?.tagName ?? 'none'
+  })
   const zValues = await page.evaluate(() => {
     const z = (selector: string): string => {
       const element = document.querySelector(selector)
@@ -6022,7 +6043,7 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   console.log(`[multi window] z 窗体 ${zValues.zPanel} / 输入坞 ${zValues.zDock} / 顶部行 ${zValues.zHeading} / 侧栏 ${zValues.zSidebar}`)
   // 窗体(第 2 层)盖住外壳(第 1 层):标签条与侧栏都被它压住。
   expect(tabsHit, '标签条中心命中的是文件窗体').toBe('file-panel')
-  expect(sidebarHit, '侧栏行中心命中的是文件窗体').toBe('file-panel')
+  expect(sidebarHit, '侧栏与窗体交叠处命中的是文件窗体').toBe('file-panel')
   expect(Number(zValues.zPanel), '窗体层序高于外壳').toBeGreaterThan(Number(zValues.zHeading === 'auto' ? 0 : zValues.zHeading))
   // 输入坞已并入第 1 层:不再设 z-index(不再是压在窗体之上的浮层)。
   expect(zValues.zDock, '输入坞已回到第 1 层(不设 z-index)').toBe('auto')

@@ -10,6 +10,7 @@ import type { PluginConfigValue } from '../contracts/generated/plugin-config-val
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { Project } from '../contracts/generated/project'
+import type { Skill } from '../contracts/generated/skill'
 import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
@@ -49,6 +50,7 @@ import {
   mockProjectCandidates,
   mockProjectIdsOf,
   mockProjectTree,
+  mockProjectSkills,
   mockProjects,
   mockSaveResponse,
   mockSearchHits,
@@ -276,6 +278,15 @@ export async function getProjectTree(projectId: string): Promise<Result<ProjectE
   const tree = mockProjectTree(projectId)
   if (tree === null) return { ok: false, error: new Error(t.value.workspace.invalidProject) }
   return { ok: true, value: tree }
+}
+
+// 可用 Skill = 项目目录 + 当前 Agent 已启用插件,演示失败仍走 Result。
+export async function listProjectSkills(projectId: string): Promise<Result<Skill[]>> {
+  const demoState = currentRoute.value.demoState
+  await delay()
+  if (demoState === 'error') return { ok: false, error: new Error(t.value.workspace.skills.error) }
+  if (mockProjectTree(projectId) === null) return { ok: false, error: new Error(t.value.workspace.invalidProject) }
+  return { ok: true, value: mockProjectSkills(projectId) }
 }
 
 // 列出 Agent Host 上检测到的候选目录(供「打开项目」选择)。演示不区分 Agent,同一份列表。

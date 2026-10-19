@@ -75,6 +75,8 @@ export const ICONS = {
     paths: ['M9 3v5', 'M15 3v5', 'M6 8h12v4a6 6 0 0 1-12 0V8z', 'M12 18v3'],
     circles: [],
   },
+  // slash 命令的键帽与行首记号。
+  slash: { paths: ['M14.5 4L9.5 20'], circles: [] },
   // Skill:星芒
   sparkles: {
     paths: [

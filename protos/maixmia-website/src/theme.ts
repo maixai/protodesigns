@@ -113,6 +113,52 @@ export const darkOverrides: GlobalThemeOverrides = {
     heightMedium: '36px',
     heightLarge: '44px',
   },
+  // 插件侧栏的输入框:Naive 的浅色默认底不随 common.cardColor 变化,须显式映射。
+  Input: {
+    // --dl-bg-elevated / --dl-bg-sunken
+    color: '#1c1916',
+    colorHover: '#1c1916',
+    colorFocus: '#1c1916',
+    colorDisabled: '#26221d',
+    // --dl-text-primary / --dl-text-tertiary / --dl-text-disabled
+    textColor: '#f5f1ea',
+    placeholderColor: '#8f867a',
+    textColorDisabled: '#6b6358',
+    placeholderColorDisabled: '#6b6358',
+    // --dl-border-base / --dl-border-strong / --dl-accent
+    border: '1px solid #38332c',
+    borderHover: '1px solid #4a443b',
+    borderFocus: '1px solid #8cc7b9',
+    borderDisabled: '1px solid #38332c',
+    // --dl-focus-ring / --dl-radius-md / --dl-font-size-sm / --dl-line-body
+    boxShadowFocus: '0 0 0 3px color-mix(in oklab, #8cc7b9 45%, transparent)',
+    borderRadius: '8px',
+    fontSizeMedium: '13px',
+    lineHeight: '1.7',
+    // --dl-target-size / --dl-space-3
+    heightMedium: '44px',
+    paddingMedium: '0 12px',
+  },
+  Switch: {
+    // --dl-text-tertiary / --dl-accent / --dl-text-primary
+    railColor: '#8f867a',
+    railColorActive: '#8cc7b9',
+    buttonColor: '#f5f1ea',
+    buttonBoxShadow: 'none',
+    boxShadowFocus: '0 0 0 3px color-mix(in oklab, #8cc7b9 45%, transparent)',
+    // --dl-space-8 / --dl-icon-sm / --dl-space-3;按压不改变宽度。
+    railWidthSmall: '32px',
+    railHeightSmall: '16px',
+    buttonWidthSmall: '12px',
+    buttonHeightSmall: '12px',
+    buttonWidthPressedSmall: '12px',
+    // --dl-target-size / --dl-space-6 / --dl-icon-md
+    railWidthMedium: '44px',
+    railHeightMedium: '24px',
+    buttonWidthMedium: '20px',
+    buttonHeightMedium: '20px',
+    buttonWidthPressedMedium: '20px',
+  },
   // 登录轻提示等浮层:整页深色,故浮层也走深色映射(根部 provider 已改挂本映射)。
   // 背景与文字取自 Naive 的 popoverColor / textColor2(深色下即 #26221d / #d6cfc4),
   // 无需另设;此处只把尺寸与阴影对齐到设计 token。

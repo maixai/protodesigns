@@ -35,7 +35,8 @@ import { useFlightGhost } from '../composables/use-flight-ghost'
 import type { FlightRect } from '../composables/use-flight-ghost'
 import AgentContextSwitcher from '../components/agent-context-switcher.vue'
 import AgentEditorDialog from '../components/agent-editor-dialog.vue'
-import ProjectSettingsDialog from '../components/project-settings-dialog.vue'
+import AgentPlugins from '../components/agent-plugins.vue'
+import type { SidebarViewOption } from '../components/sidebar-view-tabs.vue'
 import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
 import ChatPanel from '../components/chat-panel.vue'
@@ -102,16 +103,17 @@ let searchVersion = 0
 // 平权之后**没有「当前项目」**:多个项目可以同时展开,tab 区与悬浮层也混装不同项目的窗口。
 const projects = ref<Project[]>([])
 const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
-// 侧栏视图:目前只有「项目」;tab 结构保留给后续视图(终端 / 远程桌面等)。
+// 侧栏顶层视图:项目文件与当前 Agent 的插件平级。
 const sidebarView = ref('projects')
-const sidebarViewOptions = computed(() => [{
+const agentPluginCount = ref<number | undefined>(undefined)
+const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
   id: 'projects',
   label: t.value.workspace.sidebarViews.projects,
   // 只在列表已就绪时给读数;加载中不先报一个假的 0。
   count: projectsStatus.value === 'ready' ? projects.value.length : undefined,
+}, {
+  id: 'plugins', label: t.value.workspace.plugins.pluginsTitle, count: agentPluginCount.value,
 }])
-// 两个设置入口:全局插件市场、项目设置。
-const projectSettingsProject = ref<Project | null>(null)
 // Agent 设置 / 新建共用同一个对话框;模式决定多显示模板选择还是删除区。
 const isAgentEditorOpen = ref(false)
 const agentEditorMode = ref<'create' | 'edit'>('edit')
@@ -1555,7 +1557,6 @@ async function toggleProjectRow(project: Project): Promise<void> {
 // 目标是不留下「侧栏里没有入口、却还占着 tab」的孤儿窗口 —— 那正是 layoutViolations ⑨ 要拦的状态。
 async function onCloseProject(project: Project): Promise<void> {
   if (isBusy.value) return
-  if (projectSettingsProject.value?.id === project.id) projectSettingsProject.value = null
   openMenuSurfaceId.value = ''
   const result = await closeProjectRequest(project.id)
   if (!isAlive.value || !result.ok) return
@@ -1607,13 +1608,6 @@ async function loadAgents(): Promise<void> {
 }
 function retryAgents(): void {
   void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false, true) })
-}
-
-function openProjectSettings(project: Project): void {
-  projectSettingsProject.value = project
-}
-function closeProjectSettings(): void {
-  projectSettingsProject.value = null
 }
 
 function openAgentSettings(): void {
@@ -1687,6 +1681,12 @@ async function openDrawer(): Promise<void> {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   }
 }
+function drawerFocusables(): HTMLElement[] {
+  // 两个顶层面板用 v-show 保留状态:隐藏控件不能成为焦点边界,配置页输入框也必须圈在抽屉里。
+  const elements = Array.from(drawer.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]') ?? [])
+  return elements.filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0
+    && getComputedStyle(element).visibility !== 'hidden' && element.closest('[inert]') === null)
+}
 function drawerKeyboard(event: KeyboardEvent): void {
   if (!isDrawerOpen.value) return
   // 有原生 dialog 打开时,Esc 与焦点陷阱归最上层 dialog:抽屉不能抢走这次 Escape,
@@ -1694,9 +1694,9 @@ function drawerKeyboard(event: KeyboardEvent): void {
   if (document.querySelector('dialog[open]') !== null) return
   if (event.key === 'Escape') { event.preventDefault(); void closeDrawer(); return }
   if (event.key !== 'Tab') return
-  const buttons = Array.from(drawer.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])
-  const first = buttons[0]
-  const last = buttons.at(-1)
+  const controls = drawerFocusables()
+  const first = controls[0]
+  const last = controls.at(-1)
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
 }
@@ -2101,9 +2101,8 @@ async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''):
   projectSkills.value = {}
   skillStatus.value = {}
   selectedAgent.value = agent
-  // 插件列表属于上一个 Agent,不能带进新 Agent 的侧栏。
-  // 项目设置属于上一个 Agent 的项目列表;切域后关闭。
-  projectSettingsProject.value = null
+  // 顶层插件面板按 Agent 重建,加载完成前不沿用上一位的计数。
+  agentPluginCount.value = undefined
   if (targetSessionId !== '') landingSessionId.value = targetSessionId
   await reloadWorkspace(targetSessionId === '', true, true)
 }
@@ -2443,7 +2442,7 @@ onBeforeUnmount(() => {
             :options="sidebarViewOptions" :label="t.workspace.sidebarViews.label"
           />
           <div
-            id="sidebar-view-panel-projects"
+            v-show="sidebarView === 'projects'" id="sidebar-view-panel-projects"
             role="tabpanel" aria-labelledby="sidebar-view-tab-projects" class="sidebar-view-panel"
           >
           <div class="project-scroll">
@@ -2467,7 +2466,7 @@ onBeforeUnmount(() => {
                     <span class="project-row__slot" aria-hidden="true" />
                     <svg class="tree-caret project-row__caret" :class="{ 'is-open': expandedProjects.has(project.id) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
-                  <ProjectMenu :project-name="project.name" @close="onCloseProject(project)" @settings="openProjectSettings(project)" />
+                  <ProjectMenu :project-name="project.name" @close="onCloseProject(project)" />
                 </div>
                 <div v-show="expandedProjects.has(project.id)" :id="`project-tree-${project.id}`" class="project-tree">
                   <span class="project-ridge" aria-hidden="true" />
@@ -2518,6 +2517,18 @@ onBeforeUnmount(() => {
           <button class="workspace-button open-project" @click="isPickerOpen = true">
             <span aria-hidden="true">＋</span><span>{{ t.workspace.openProject }}</span>
           </button>
+          </div>
+          <div
+            v-show="sidebarView === 'plugins'" id="sidebar-view-panel-plugins"
+            role="tabpanel" aria-labelledby="sidebar-view-tab-plugins" class="sidebar-view-panel plugins-pane"
+          >
+            <div class="plugins-pane__scroll">
+              <AgentPlugins
+                v-if="selectedAgent !== ''" :key="selectedAgent"
+                :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
+                @count="agentPluginCount = $event" @announce="announcePlacement"
+              />
+            </div>
           </div>
         </section>
       </aside>
@@ -2806,10 +2817,6 @@ onBeforeUnmount(() => {
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
     />
-    <ProjectSettingsDialog
-      :open="projectSettingsProject !== null" :project="projectSettingsProject ?? undefined"
-      @cancel="closeProjectSettings"
-    />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
          以及空对话时改归属。它挂在页面级、position: fixed,锚点是触发元素交上来的视口矩形
          —— 触发点有三处(tab 条的 ＋、引导页主按钮、对话标题栏的归属钮),它自己不认触发点。 -->
@@ -2900,6 +2907,7 @@ onBeforeUnmount(() => {
 .sidebar-head { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
 .sidebar-close { flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); padding: 0; font-size: var(--dl-font-size-lg); }
 /* 侧栏视图面板:项目 / 插件共用一块可伸缩的区域。 */
+.plugins-pane__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
 .sidebar-view-panel { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
 /* Agent 列表加载中 / 失败时占据身份区的位置。 */
 .sidebar-agent-state { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }

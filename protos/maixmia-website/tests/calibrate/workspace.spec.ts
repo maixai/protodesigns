@@ -1360,7 +1360,8 @@ for (const width of [375, 768]) {
     const firstButton = dialog.locator(AGENT_TRIGGER)
     await expect(firstButton).toBeFocused()
     await page.keyboard.press('Shift+Tab')
-    await expect(dialog.locator('button:not(:disabled)').last()).toBeFocused()
+    // 插件面板用 v-show 常驻,DOM 末尾还有隐藏按钮;末个可见控件仍是「打开项目」。
+    await expect(dialog.getByRole('button', { name: '打开项目', exact: true })).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(firstButton).toBeFocused()
     expect(await contrastViolations(page)).toEqual([])
@@ -1580,11 +1581,12 @@ test('侧栏切换 Agent:项目列表随之更换', async ({ page }) => {
   await login(page)
   await waitForStable(page)
   const projects = page.locator('.workspace-projects')
-  // 侧栏顶部是视图 tab(目前只有「项目」)+ 项目列表(每个 Agent 两个项目)。
+  // 侧栏顶部是项目 / 插件两个平级视图 tab;默认项目列表中每个 Agent 有两个项目。
   await expect(page.getByRole('button', { name: '关闭侧栏' })).toHaveCount(0)
   await expect(projects.getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
-  // 只数**顶层**视图 tab;项目内容 tab(文件 / Skills)在项目树里,是另一层。
-  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(1)
+  // 只数顶层平级视图;项目内部始终只有文件树,没有内容 tab。
+  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(projects.locator('.project-item').getByRole('tab')).toHaveCount(0)
   await expect(projects.locator('.project-item')).toHaveCount(2)
   await selectAgent(page, AGENT_NAMES['zh-CN'].research)
   await expect(projects).toContainText(PROJECT_NAMES.research[0])
@@ -1680,381 +1682,6 @@ test('新建 Agent:模板 + 表单,创建后进入空工作台', async ({ page }
   await selectAgent(page, AGENT_NAMES['zh-CN'].planning)
   await expect(page.locator('.workspace-projects')).toContainText(PROJECT_NAMES.planning[0])
 })
-
-// ---- 插件:Agent / 项目两层 + 全局市场 ----
-
-async function openAgentPlugins(page: Page): Promise<Locator> {
-  await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  await expect(dialog).toBeVisible()
-  await dialog.getByRole('tab', { name: '插件', exact: true }).click()
-  return dialog
-}
-
-async function openProjectSettings(page: Page): Promise<Locator> {
-  const projects = page.locator('.project-item')
-  await projects.first().locator('.project-menu__trigger').click()
-  await page.getByRole('menuitem', { name: '项目设置' }).click()
-  const dialog = page.getByRole('dialog', { name: '项目设置' })
-  await expect(dialog).toBeVisible()
-  return dialog
-}
-
-test('Agent 设置插件:只列 Agent 作用域,安装 / 启停 / 卸载在层内生效', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-  const dialog = await openAgentPlugins(page)
-  const manager = dialog.locator('.plugin-manager')
-  // 页签已标明「插件」,内容区不再重复标题;保留「添加市场」入口。
-  await expect(manager.locator('.plugin-manager__title')).toHaveCount(0)
-  await expect(manager.getByRole('button', { name: '添加市场' })).toBeVisible()
-  // 插件按市场分组:市场名在父级卡片上,行内不再重复。
-  const anthropicGroup = manager.locator('.plugin-group[data-marketplace="anthropic"]')
-  await expect(anthropicGroup).toContainText('Anthropic Plugins')
-  const codeReview = anthropicGroup.locator('.plugin-row', { hasText: 'Code Review' })
-  await expect(codeReview.locator('.plugin-row__marketplace')).toHaveCount(0)
-  await expect(codeReview.locator('.plugin-row__version')).toHaveText('v1.4.2')
-  await expect(codeReview.locator('.plugin-row__update-badge')).toHaveCount(0)
-  await expect(manager).toContainText('Data Analysis')
-  // 项目级插件(weekly-report 的 Test Runner)不出现在 Agent 作用域。
-  await expect(manager.locator('.plugin-row', { hasText: 'Test Runner' })).toHaveCount(0)
-
-  // 从市场卡片进入安装子页:子页明确标注作用域,只列该市场未安装的插件。
-  await anthropicGroup.getByRole('button', { name: '安装插件' }).click()
-  const install = page.locator('.plugin-subpage')
-  await expect(install.locator('.subpage__title')).toHaveText('安装插件')
-  await expect(install).toContainText('规划助手')
-  await expect(install.locator('.pane__meta')).toContainText('Anthropic Plugins')
-  await expect(install.getByRole('button', { name: '安装「Test Runner」' })).toBeVisible()
-  await install.getByRole('button', { name: '安装「Test Runner」' }).click()
-  await expect(install.getByRole('button', { name: '安装「Test Runner」' })).toHaveCount(0)
-  await install.getByRole('button', { name: '返回插件' }).click()
-  await expect(manager.getByRole('switch', { name: '停用「Test Runner」' })).toBeVisible()
-
-  // 启停 / 卸载。
-  await manager.getByRole('switch', { name: '停用「Data Analysis」' }).click()
-  await expect(manager.getByRole('switch', { name: '启用「Data Analysis」' })).toHaveAttribute('aria-checked', 'false')
-  await manager.getByRole('button', { name: '插件操作「Test Runner」' }).click()
-  await page.getByRole('menuitem', { name: '卸载' }).click()
-  await expect(manager.getByRole('switch', { name: '停用「Test Runner」' })).toHaveCount(0)
-  await dialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('Agent 插件行:市场 / 版本 / 有更新,单插件更新', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-  await selectAgent(page, AGENT_NAMES['zh-CN'].research)
-  const dialog = await openAgentPlugins(page)
-  const manager = dialog.locator('.plugin-manager')
-  const communityGroup = manager.locator('.plugin-group[data-marketplace="community"]')
-  await expect(communityGroup).toContainText('Community Registry')
-  const browser = communityGroup.locator('.plugin-row', { hasText: 'Browser Tools' })
-  // 行内只保留:已安装版本 / 更新状态;市场名在父级卡片上,不再重复。
-  await expect(browser.locator('.plugin-row__marketplace')).toHaveCount(0)
-  await expect(browser.locator('.plugin-row__version')).toHaveText('v0.8.0')
-  await expect(browser.locator('.plugin-row__update-badge')).toHaveText('可更新至 v0.8.1')
-  await expect(browser).not.toContainText('Chromium Labs')
-  await expect(browser).not.toContainText('Skill · Command')
-
-  await manager.getByRole('button', { name: '插件操作「Browser Tools」' }).click()
-  await page.getByRole('menuitem', { name: '更新' }).click()
-  await expect(browser.locator('.plugin-row__version')).toHaveText('v0.8.1')
-  await expect(browser.locator('.plugin-row__update-badge')).toHaveCount(0)
-  await dialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('Agent 安装弹层:从所属市场进入;大目录分批加载', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-
-  const dialog = await openAgentPlugins(page)
-  const manager = dialog.locator('.plugin-manager')
-  // 市场属于当前 Agent:在插件页里添加,新增的市场作为父级卡片出现。
-  await manager.locator('.plugin-manager__add-market').click()
-  const add = page.locator('.plugin-subpage')
-  await expect(add.locator('.subpage__title')).toHaveText('添加市场')
-  await add.getByLabel('来源').fill('github.com/maixai/agent-plugins')
-  await add.getByLabel('名称').fill('Mia Labs')
-  await add.getByRole('button', { name: '添加市场' }).click()
-  await expect(add).toHaveCount(0)
-  const miaGroup = manager.locator('.plugin-group', { hasText: 'Mia Labs' })
-  await expect(miaGroup).toContainText('8 个插件')
-
-  // 安装入口挂在市场卡片上;子页只浏览这个市场,不再有市场切换 / 市场管理。
-  await miaGroup.getByRole('button', { name: '安装插件' }).click()
-  const install = page.locator('.plugin-subpage')
-  await expect(install.locator('.subpage__title')).toHaveText('安装插件')
-  await expect(install.locator('.pane__meta')).toContainText('Mia Labs')
-  await expect(install.getByRole('button', { name: '添加市场' })).toHaveCount(0)
-
-  // 搜索框聚焦时只保留容器一圈焦点指示:内层输入框不得再叠一层自己的焦点环(双层青瓷粗框)。
-  await install.locator('.pane__search-input').focus()
-  const focusShadows = await install.locator('.pane__search').evaluate((box) => {
-    const input = box.querySelector('input')
-    return {
-      box: getComputedStyle(box).boxShadow,
-      input: input instanceof HTMLElement ? getComputedStyle(input).boxShadow : 'missing',
-    }
-  })
-  expect(focusShadows.box).not.toBe('none')
-  expect(focusShadows.input).toBe('none')
-
-  // 8 个插件:首屏 6 个 + 加载更多(剩余 2)。
-  await expect(install.locator('.pane__list .pane__item')).toHaveCount(6)
-  await expect(install.locator('.pane__more')).toContainText('剩余 2')
-  await install.locator('.pane__more').click()
-  await expect(install.locator('.pane__list .pane__item')).toHaveCount(8)
-
-  await install.getByRole('button', { name: '返回插件' }).click()
-  await dialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('Agent 插件页无市场:空态与按 Agent 隔离', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-
-  // 市场属于当前 Agent:只在「规划助手」里移除,其它 Agent 不受影响。
-  const dialog = await openAgentPlugins(page)
-  const manager = dialog.locator('.plugin-manager')
-  for (const name of ['Anthropic Plugins', 'Community Registry']) {
-    const group = manager.locator('.plugin-group', { hasText: name })
-    await group.getByRole('button', { name: `市场操作「${name}」` }).click()
-    const menu = page.getByRole('menu', { name: `市场操作「${name}」` })
-    await expect(menu).toBeVisible()
-    await menu.getByRole('menuitem', { name: '移除市场' }).click()
-    const remove = page.locator('.plugin-subpage')
-    await expect(remove.locator('.subpage__title')).toHaveText(`移除「${name}」？`)
-    await remove.getByRole('button', { name: '移除市场' }).click()
-    await expect(remove).toHaveCount(0)
-    // 确认后回到列表;等市场卡片真正消失再进入下一个。
-    await expect(manager.locator('.plugin-group', { hasText: name })).toHaveCount(0)
-  }
-  await expect(manager.locator('.plugin-manager__empty')).toContainText('还没有添加插件市场')
-  // 空态仍保留「添加市场」入口。
-  await expect(manager.getByRole('button', { name: '添加市场' })).toBeVisible()
-
-  // 市场按 Agent 隔离:研究助手仍有自己的市场与安装。
-  await dialog.getByRole('button', { name: '完成' }).click()
-  await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: /研究助手/ }).click()
-  const researchDialog = await openAgentPlugins(page)
-  const researchManager = researchDialog.locator('.plugin-manager')
-  await expect(researchManager.locator('.plugin-group[data-marketplace="anthropic"]')).toHaveCount(1)
-  await expect(researchManager.locator('.plugin-group[data-marketplace="community"]')).toHaveCount(1)
-  await researchDialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('项目设置插件:项目作用域与 Agent 作用域互不冒充', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-  const dialog = await openProjectSettings(page)
-  const manager = dialog.locator('.plugin-manager')
-  const anthropicGroup = manager.locator('.plugin-group[data-marketplace="anthropic"]')
-  await expect(anthropicGroup).toContainText('Anthropic Plugins')
-  const testRunner = anthropicGroup.locator('.plugin-row', { hasText: 'Test Runner' })
-  await expect(testRunner.locator('.plugin-row__version')).toHaveText('v2.1.0')
-  await expect(testRunner.locator('.plugin-row__update-badge')).toHaveCount(0)
-  // Agent 作用域的 Code Review / Data Analysis 不应出现在项目列表里。
-  await expect(manager.locator('.plugin-row', { hasText: 'Code Review' })).toHaveCount(0)
-  await expect(manager.locator('.plugin-row', { hasText: 'Data Analysis' })).toHaveCount(0)
-
-  // 项目市场与 Agent 市场分开:这个项目只注册了 Anthropic,没有写作助手的 Studio Nine。
-  await expect(manager.locator('.plugin-group', { hasText: 'Studio Nine' })).toHaveCount(0)
-
-  // 从项目自己的 Anthropic 市场装 Docs Writer;关闭后仍在,但不会出现在 Agent 设置里。
-  await anthropicGroup.getByRole('button', { name: '安装插件' }).click()
-  const install = page.locator('.plugin-subpage')
-  await expect(install.locator('.subpage__title')).toHaveText('安装插件')
-  await expect(install).toContainText('项目')
-  await expect(install.locator('.pane__meta')).toContainText('Anthropic Plugins')
-  await install.getByRole('button', { name: '安装「Docs Writer」' }).click()
-  await install.getByRole('button', { name: '返回插件' }).click()
-  await expect(anthropicGroup).toContainText('Docs Writer')
-  await dialog.getByRole('button', { name: '完成' }).click()
-
-  const agentDialog = await openAgentPlugins(page)
-  const agentManager = agentDialog.locator('.plugin-manager')
-  await expect(agentManager).toContainText('Code Review')
-  await expect(agentManager.locator('.plugin-row', { hasText: 'Docs Writer' })).toHaveCount(0)
-  await expect(agentManager.locator('.plugin-row', { hasText: 'Test Runner' })).toHaveCount(0)
-  await agentDialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('插件配置:必填校验、密钥不回显(作用域内独立)', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-  await selectAgent(page, AGENT_NAMES['zh-CN'].research)
-  const dialog = await openAgentPlugins(page)
-  const manager = dialog.locator('.plugin-manager')
-  const notion = manager.locator('.plugin-row', { hasText: 'Notion Sync' })
-  await expect(notion.locator('.plugin-row__config-badge')).toHaveText('需配置')
-
-  // 「需配置」徽标本身就是入口。
-  await notion.getByRole('button', { name: '配置「Notion Sync」' }).click()
-  const config = page.locator('.plugin-subpage')
-  await expect(config.locator('.subpage__title')).toHaveText('配置「Notion Sync」')
-  await expect(config.locator('.pane__scope')).toHaveText('AGENT')
-  const token = config.getByLabel(/Integration token/)
-  await expect(token).toHaveAttribute('type', 'password')
-  await config.getByRole('button', { name: '保存' }).click()
-  await expect(config.getByRole('alert')).toContainText('请填写必填配置项')
-  await token.fill('secret_demo_token')
-  await config.getByRole('button', { name: '保存' }).click()
-  await expect(config).toHaveCount(0)
-  await expect(notion.locator('.plugin-row__config-badge')).toHaveCount(0)
-
-  // 重新打开:密钥不回显。
-  await notion.getByRole('button', { name: '插件操作「Notion Sync」' }).click()
-  await page.getByRole('menuitem', { name: '配置' }).click()
-  const reopened = page.locator('.plugin-subpage')
-  await expect(reopened.locator('.subpage__title')).toHaveText('配置「Notion Sync」')
-  await expect(reopened.getByLabel(/Integration token/)).toHaveValue('')
-  await expect(reopened.getByLabel(/Integration token/)).toHaveAttribute('placeholder', '已保存，留空则保持不变')
-  await reopened.getByRole('button', { name: '取消' }).click()
-  await expect(reopened).toHaveCount(0)
-
-  // 布尔配置项往返。
-  await manager.getByRole('button', { name: '插件操作「Browser Tools」' }).click()
-  await page.getByRole('menuitem', { name: '配置' }).click()
-  const browserConfig = page.locator('.plugin-subpage')
-  await expect(browserConfig.locator('.subpage__title')).toHaveText('配置「Browser Tools」')
-  const headless = browserConfig.getByRole('checkbox', { name: /Headless mode/ })
-  await expect(headless).toBeChecked()
-  await headless.uncheck()
-  await browserConfig.getByRole('button', { name: '保存' }).click()
-  await expect(browserConfig).toHaveCount(0)
-  await manager.getByRole('button', { name: '插件操作「Browser Tools」' }).click()
-  await page.getByRole('menuitem', { name: '配置' }).click()
-  const browserReopened = page.locator('.plugin-subpage')
-  await expect(browserReopened.locator('.subpage__title')).toHaveText('配置「Browser Tools」')
-  await expect(browserReopened.getByRole('checkbox', { name: /Headless mode/ })).not.toBeChecked()
-  await browserReopened.getByRole('button', { name: '取消' }).click()
-  await expect(browserReopened).toHaveCount(0)
-  await dialog.getByRole('button', { name: '完成' }).click()
-})
-
-test('Agent 插件页:市场策略与按市场分组', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
-  await login(page)
-  await waitForStable(page)
-  const agentDialog = await openAgentPlugins(page)
-  const manager = agentDialog.locator('.plugin-manager')
-  const anthropic = manager.locator('.plugin-group[data-marketplace="anthropic"]')
-  // 计数压在 Header 与列表之间的分割线上;安装与更新 / 自动更新分居名称行与来源行右侧。
-  const groupOrder = await anthropic.evaluate((group) => Array.from(group.children).map((child) => child.className))
-  expect(groupOrder[0]).toContain('plugin-group__head')
-  expect(groupOrder[1]).toContain('plugin-group__divider')
-  expect(groupOrder[2]).toContain('plugin-group__list')
-  await expect(anthropic.locator('.plugin-group__bar')).toHaveCount(0)
-  await expect(anthropic.locator('.plugin-group__divider')).toContainText('4 个插件')
-  // 安装紧挨 ⋯ 左侧;自动更新与更新落在来源行右侧。
-  const titleRow = anthropic.locator('.plugin-group__title-row')
-  const titleOrder = await titleRow.evaluate((element) => Array.from(element.children).map((child) => child.className))
-  expect(titleOrder[0]).toContain('plugin-group__name')
-  expect(titleOrder[1]).toContain('plugin-group__add')
-  expect(titleOrder[2]).toContain('plugin-group__menu')
-  const sourceRow = anthropic.locator('.plugin-group__source-row')
-  const sourceOrder = await sourceRow.evaluate((element) => Array.from(element.children).map((child) => child.className))
-  expect(sourceOrder[0]).toContain('plugin-group__source')
-  expect(sourceOrder[1]).toContain('plugin-group__auto-toggle')
-  expect(sourceOrder[2]).toContain('plugin-group__update')
-  const update = anthropic.getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })
-  await expect(sourceRow.getByRole('button', { name: '更新「Anthropic Plugins」', exact: true })).toHaveCount(1)
-  const auto = anthropic.locator('.plugin-group__auto-toggle')
-  await expect(auto).toHaveAttribute('aria-pressed', 'true')
-  await expect(auto.locator('.plugin-group__auto-dot')).toHaveAttribute('data-on', 'true')
-  // 自动更新开着时,手动更新仍然可用。
-  await expect(update).toBeVisible()
-  await update.click()
-  await expect(manager.locator('.plugin-manager__live')).toHaveText('已更新「Anthropic Plugins」')
-  // 分组页原地刷新:同一市场卡片里的已装版本随之前进(只影响当前 Agent)。
-  await expect(anthropic.locator('.plugin-row', { hasText: 'Code Review' }).locator('.plugin-row__version')).toHaveText('v1.4.3')
-  // 关闭自动更新后,圆点熄灭,手动更新入口仍在。
-  await auto.click()
-  await expect(auto).toHaveAttribute('aria-pressed', 'false')
-  await expect(auto.locator('.plugin-group__auto-dot')).toHaveAttribute('data-on', 'false')
-  await expect(update).toBeVisible()
-
-  // 添加已知来源的市场;同一 Agent 内去重。
-  await manager.locator('.plugin-manager__add-market').click()
-  const add = page.locator('.plugin-subpage')
-  await expect(add.locator('.subpage__title')).toHaveText('添加市场')
-  await add.getByLabel('来源').fill('github.com/maixai/agent-plugins')
-  await add.getByLabel('名称').fill('Mia Labs')
-  await add.getByRole('button', { name: '添加市场' }).click()
-  await expect(add).toHaveCount(0)
-  const mia = manager.locator('.plugin-group', { hasText: 'Mia Labs' })
-  await expect(mia).toContainText('8 个插件')
-  await manager.locator('.plugin-manager__add-market').click()
-  const duplicate = page.locator('.plugin-subpage')
-  await expect(duplicate.locator('.subpage__title')).toHaveText('添加市场')
-  await duplicate.getByLabel('来源').fill('github.com/maixai/agent-plugins')
-  await duplicate.getByLabel('名称').fill('Mia Labs')
-  await duplicate.getByRole('button', { name: '添加市场' }).click()
-  await expect(duplicate.getByRole('alert')).toContainText('这个市场已经添加过了')
-  await duplicate.getByRole('button', { name: '取消' }).click()
-  await expect(duplicate).toHaveCount(0)
-
-  // 安装入口在市场卡片上;装好后插件出现在同一张卡片内。
-  await mia.getByRole('button', { name: '安装插件' }).click()
-  const install = page.locator('.plugin-subpage')
-  await expect(install.locator('.pane__meta')).toContainText('Mia Labs')
-  await install.getByRole('button', { name: '安装「Release Notes」' }).click()
-  await expect(install.getByRole('button', { name: '安装「Release Notes」' })).toHaveCount(0)
-  await install.getByRole('button', { name: '返回插件' }).click()
-  await expect(mia.locator('.plugin-row', { hasText: 'Release Notes' })).toBeVisible()
-
-  // 从市场卡片移除市场 → 只卸载当前 Agent 中它的插件。
-  await mia.getByRole('button', { name: '市场操作「Mia Labs」' }).click()
-  await page.getByRole('menuitem', { name: '移除市场' }).click()
-  const remove = page.locator('.plugin-subpage')
-  await expect(remove.locator('.subpage__title')).toHaveText('移除「Mia Labs」？')
-  await expect(remove).toContainText('从该市场安装的 1 个插件')
-  await expect(remove).toContainText('规划助手')
-  await remove.getByRole('button', { name: '移除市场' }).click()
-  await expect(remove).toHaveCount(0)
-  await expect(manager.locator('.plugin-group', { hasText: 'Mia Labs' })).toHaveCount(0)
-  await expect(manager.locator('.plugin-row', { hasText: 'Release Notes' })).toHaveCount(0)
-  await agentDialog.getByRole('button', { name: '完成' }).click()
-
-  // 市场按 Agent 隔离:研究助手没有刚加入的 Mia Labs,自动更新也保持自己的设置。
-  await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: /研究助手/ }).click()
-  const researchDialog = await openAgentPlugins(page)
-  const researchManager = researchDialog.locator('.plugin-manager')
-  await expect(researchManager.locator('.plugin-group', { hasText: 'Mia Labs' })).toHaveCount(0)
-  const researchAnthropic = researchManager.locator('.plugin-group[data-marketplace="anthropic"]')
-  await expect(researchAnthropic).toHaveCount(1)
-  await expect(researchAnthropic.locator('.plugin-group__auto-toggle')).toHaveAttribute('aria-pressed', 'true')
-  await researchDialog.getByRole('button', { name: '完成' }).click()
-})
-
-// 窄屏:Agent 插件页(按市场分组)与安装弹层都不横向溢出。
-for (const width of [375, 768]) {
-  test(`插件设置:窄屏弹层不横向溢出 @${width}`, async ({ page }) => {
-    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
-    await login(page)
-    await waitForStable(page)
-    await page.getByRole('button', { name: '打开侧栏' }).click()
-    const dialog = await openAgentPlugins(page)
-    const anthropicGroup = dialog.locator('.plugin-group[data-marketplace="anthropic"]')
-    await expect(anthropicGroup.getByRole('button', { name: '安装插件' })).toBeVisible()
-    expect(await horizontalOverflow(page), 'Agent 插件页不溢出').toBeLessThanOrEqual(1)
-    await anthropicGroup.getByRole('button', { name: '安装插件' }).click()
-    const install = page.locator('.plugin-subpage')
-    await expect(install.locator('.subpage__title')).toHaveText('安装插件')
-    expect(await horizontalOverflow(page), '安装子页不溢出').toBeLessThanOrEqual(1)
-    await install.getByRole('button', { name: '返回插件' }).click()
-    await dialog.getByRole('button', { name: '完成' }).click()
-  })
-}
 
 // 对话切换器的键盘与焦点行为:Enter 开面板后焦点落到搜索框、Esc 归还焦点给触发钮、
 // 点击面板外关闭、↑/↓ 在搜索框与行之间移动。见下方「对话切换器」用例组。
@@ -3181,10 +2808,9 @@ test('候选目录文件数与已打开项目的条目数对齐', async ({ page 
   await expect(dialog.locator('.picker__item', { hasText: 'weekly-report' }).locator('.picker__meta')).toContainText('23 个文件')
 })
 
-// 侧栏视图 tab:28px 文字带 + 1px 青瓷下划线。当前只保留「项目」一项 ——
-// 插件的安装/启停已按归属移入 Agent 设置与项目设置;tab 结构留给后续视图。
+// 侧栏视图 tab:项目与 Agent 插件平级,共用 28px 文字带 + 1px 青瓷下划线。
 for (const width of [375, 1280]) {
-  test(`侧栏视图 tab:28px 文字带 + 1px 下划线(暂只有项目) @${width}`, async ({ page }) => {
+  test(`侧栏视图 tab:28px 文字带 + 1px 下划线(项目与插件) @${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
@@ -3192,9 +2818,9 @@ for (const width of [375, 1280]) {
     const tabs = page.getByRole('tablist', { name: '侧栏视图' })
     await expect(tabs).toBeVisible()
     const projects = tabs.getByRole('tab', { name: /^项目/ })
-    await expect(tabs.getByRole('tab')).toHaveCount(1)
+    await expect(tabs.getByRole('tab')).toHaveCount(2)
     await expect(projects).toHaveAttribute('aria-selected', 'true')
-    await expect(tabs.getByRole('tab', { name: /^插件/ })).toHaveCount(0)
+    await expect(tabs.getByRole('tab', { name: /^插件/ })).toHaveCount(1)
     const box = await projects.boundingBox()
     expect(box?.height ?? 0, '视图 tab 高度 = 28').toBeGreaterThanOrEqual(27)
     expect(box?.height ?? 0, '视图 tab 高度 = 28').toBeLessThanOrEqual(29)
@@ -3383,7 +3009,7 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(items).toHaveCount(2)
   const trigger = items.first().locator('.project-menu__trigger')
   await trigger.click()
-  await expect(page.locator('.project-menu__item')).toHaveText(['项目设置', '关闭项目'])
+  await expect(page.locator('.project-menu__item')).toHaveText(['关闭项目'])
   // Esc 关闭菜单并把焦点归还触发钮;项目列表不受影响。
   await page.keyboard.press('Escape')
   await expect(page.locator('.project-menu__item')).toHaveCount(0)

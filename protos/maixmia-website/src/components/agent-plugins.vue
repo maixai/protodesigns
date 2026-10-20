@@ -213,7 +213,7 @@ async function install(plugin: Plugin): Promise<void> {
 async function setUninstallConfirmation(isConfirming: boolean): Promise<void> {
   isConfirmingUninstall.value = isConfirming
   await nextTick()
-  rootRef.value?.querySelector<HTMLElement>(isConfirming ? '.plugin-danger-zone .plugin-confirm .plugin-action' : '.plugin-danger-zone > .plugin-action')?.focus({ preventScroll: true })
+  rootRef.value?.querySelector<HTMLElement>(isConfirming ? '.plugin-confirm .plugin-action' : '.plugin-actions--end .plugin-danger')?.focus({ preventScroll: true })
 }
 async function uninstall(): Promise<void> {
   const item = selected.value
@@ -336,7 +336,7 @@ onBeforeUnmount(() => { isAlive.value = false })
     <template v-else>
       <p v-if="error" class="plugin-error" role="alert">{{ error }}</p>
       <!-- 安装时只隐藏分组,保留折叠状态、详情草稿和市场添加表单。 -->
-      <div v-show="view !== 'install'" class="plugin-groups">
+      <div v-show="view === 'list'" class="plugin-groups">
         <section class="plugin-group" data-group="plugins">
           <div class="plugin-group-head">
             <button type="button" class="plugin-disclosure" :disabled="busy" :aria-expanded="isPluginsExpanded" :aria-controls="`${sectionPrefix}-installed`" @click="isPluginsExpanded = !isPluginsExpanded">
@@ -359,28 +359,6 @@ onBeforeUnmount(() => { isAlive.value = false })
                   <NSwitch class="plugin-switch" size="small" :value="item.enabled" :disabled="busy" :aria-label="switchLabel(item)" @update:value="(value: boolean) => toggle(item, value)" />
                 </li>
               </ul>
-            </div>
-            <div v-else-if="view === 'detail' && selected" class="plugin-pane plugin-detail">
-              <div class="plugin-subhead"><button type="button" class="plugin-back" :disabled="busy" :aria-label="t.workspace.plugins.backToPlugins" :title="t.workspace.plugins.backToPlugins" @click="back"><DliIcon name="chevronLeft" size="sm" /></button><h3>{{ selected.plugin.name }}</h3></div>
-              <p class="plugin-meta"><span class="plugin-mono">v{{ selected.installedVersion }}</span><span aria-hidden="true">·</span><span>{{ selected.marketplaceName }}</span><span aria-hidden="true">·</span><span>{{ agentName }}</span></p>
-              <p class="plugin-description">{{ selected.plugin.description }}</p>
-              <button v-if="hasUpdate(selected)" type="button" class="plugin-action" :disabled="busy" @click="updatePlugin">{{ busy ? t.workspace.plugins.updating : t.workspace.plugins.updateAvailable.replace('{version}', selected.plugin.version) }}</button>
-              <form v-if="selected.config.length > 0" class="plugin-config" @submit.prevent="saveConfig">
-                <h4 class="plugin-section-label">{{ t.workspace.plugins.configure }}</h4>
-                <p class="plugin-description">{{ t.workspace.plugins.configureHintAgent }}</p>
-                <div v-for="field in selected.config" :key="field.key" class="plugin-field" :data-type="field.type">
-                  <label :id="`${formPrefix}-${field.key}-label`" :for="`${formPrefix}-${field.key}`">{{ field.label }} <span v-if="field.required" class="plugin-required">{{ t.workspace.plugins.required }}</span></label>
-                  <p :id="`${formPrefix}-${field.key}-desc`">{{ field.description }}</p>
-                  <NSwitch v-if="field.type === 'boolean'" :id="`${formPrefix}-${field.key}`" class="plugin-switch" :value="configDrafts[field.key] === 'true'" :disabled="busy" :aria-labelledby="`${formPrefix}-${field.key}-label`" :aria-describedby="`${formPrefix}-${field.key}-desc`" @update:value="(value: boolean) => configDrafts[field.key] = String(value)" />
-                  <NInput v-else :value="configDrafts[field.key] ?? ''" @update:value="(value: string) => configDrafts[field.key] = value" :type="field.type === 'secret' ? 'password' : 'text'" :disabled="busy" :placeholder="field.type === 'secret' ? (field.isSet ? t.workspace.plugins.secretSetPlaceholder : t.workspace.plugins.secretPlaceholder) : ''" :input-props="{ id: `${formPrefix}-${field.key}`, 'aria-describedby': `${formPrefix}-${field.key}-desc`, 'aria-required': field.required, autocomplete: 'off', spellcheck: false }" />
-                </div>
-                <button type="submit" class="plugin-action" :disabled="busy">{{ busy ? t.workspace.plugins.saving : t.workspace.plugins.saveConfig }}</button>
-              </form>
-              <div class="plugin-danger-zone">
-                <h4 class="plugin-section-label">{{ t.workspace.plugins.dangerZone }}</h4>
-                <button v-if="!isConfirmingUninstall" type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
-                <div v-else class="plugin-confirm"><p>{{ t.workspace.plugins.uninstallConfirm.replace('{name}', selected.plugin.name) }}</p><div class="plugin-actions"><button type="button" class="plugin-action" :disabled="busy" @click="setUninstallConfirmation(false)">{{ t.workspace.plugins.cancel }}</button><button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="uninstall">{{ t.workspace.plugins.confirmUninstall }}</button></div></div>
-              </div>
             </div>
           </div>
         </section>
@@ -412,8 +390,64 @@ onBeforeUnmount(() => { isAlive.value = false })
           </div>
         </section>
       </div>
+      <!-- 详情是独立一页:分组与其计数让位,只保留返回、身份、配置和危险动作。 -->
+      <div v-if="view === 'detail' && selected" class="plugin-pane plugin-detail">
+        <div class="plugin-page-head">
+          <div class="plugin-page-nav">
+            <button type="button" class="plugin-back" :disabled="busy" :aria-label="t.workspace.plugins.backToPlugins" :title="t.workspace.plugins.backToPlugins" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.plugins.backToPlugins }}</span></button>
+          </div>
+          <div class="plugin-page-identity">
+            <h3 class="plugin-page-title">{{ selected.plugin.name }}</h3>
+            <p class="plugin-meta">
+              <span class="plugin-mono">v{{ selected.installedVersion }}</span>
+              <span aria-hidden="true">·</span>
+              <span>{{ selected.marketplaceName }}</span>
+            </p>
+          </div>
+        </div>
+        <p class="plugin-description">{{ selected.plugin.description }}</p>
+        <button v-if="hasUpdate(selected)" type="button" class="plugin-action plugin-update" :disabled="busy" @click="updatePlugin">{{ busy ? t.workspace.plugins.updating : t.workspace.plugins.updateAvailable.replace('{version}', selected.plugin.version) }}</button>
+        <form v-if="selected.config.length > 0" class="plugin-config" @submit.prevent="saveConfig">
+          <div class="plugin-config-head">
+            <h4 class="plugin-section-label">{{ t.workspace.plugins.configure }}</h4>
+            <span class="plugin-scope">{{ t.workspace.plugins.agentOnly }}</span>
+          </div>
+          <div v-for="field in selected.config" :key="field.key" class="plugin-field" :class="{ 'plugin-field--switch': field.type === 'boolean' }" :data-type="field.type">
+            <div class="plugin-field-copy">
+              <div class="plugin-field-head">
+                <label :id="`${formPrefix}-${field.key}-label`" :for="`${formPrefix}-${field.key}`">{{ field.label }}</label>
+                <span v-if="field.required" class="plugin-required">{{ t.workspace.plugins.required }}</span>
+              </div>
+              <p :id="`${formPrefix}-${field.key}-desc`">{{ field.description }}</p>
+            </div>
+            <NSwitch v-if="field.type === 'boolean'" :id="`${formPrefix}-${field.key}`" class="plugin-switch" :value="configDrafts[field.key] === 'true'" :disabled="busy" :aria-labelledby="`${formPrefix}-${field.key}-label`" :aria-describedby="`${formPrefix}-${field.key}-desc`" @update:value="(value: boolean) => configDrafts[field.key] = String(value)" />
+            <NInput v-else :value="configDrafts[field.key] ?? ''" @update:value="(value: string) => configDrafts[field.key] = value" :type="field.type === 'secret' ? 'password' : 'text'" :disabled="busy" :placeholder="field.type === 'secret' ? (field.isSet ? t.workspace.plugins.secretSetPlaceholder : t.workspace.plugins.secretPlaceholder) : ''" :input-props="{ id: `${formPrefix}-${field.key}`, 'aria-describedby': `${formPrefix}-${field.key}-desc`, 'aria-required': field.required, autocomplete: 'off', spellcheck: false }" />
+          </div>
+          <div v-if="!isConfirmingUninstall" class="plugin-actions plugin-actions--end">
+            <button type="submit" class="plugin-action" :disabled="busy">{{ busy ? t.workspace.plugins.saving : t.workspace.plugins.saveConfig }}</button>
+            <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
+          </div>
+        </form>
+        <div v-else-if="!isConfirmingUninstall" class="plugin-actions plugin-actions--end">
+          <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
+        </div>
+        <div v-if="isConfirmingUninstall" class="plugin-confirm">
+          <p>{{ t.workspace.plugins.uninstallConfirm.replace('{name}', selected.plugin.name) }}</p>
+          <div class="plugin-actions">
+            <button type="button" class="plugin-action" :disabled="busy" @click="setUninstallConfirmation(false)">{{ t.workspace.plugins.cancel }}</button>
+            <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="uninstall">{{ t.workspace.plugins.confirmUninstall }}</button>
+          </div>
+        </div>
+      </div>
       <div v-if="view === 'install'" class="plugin-pane plugin-install">
-        <div class="plugin-subhead"><button type="button" class="plugin-back" :disabled="busy" :aria-label="t.workspace.plugins.backToPlugins" :title="t.workspace.plugins.backToPlugins" @click="back"><DliIcon name="chevronLeft" size="sm" /></button><h3>{{ t.workspace.plugins.installTitle }}</h3></div>
+        <div class="plugin-page-head">
+          <div class="plugin-page-nav">
+            <button type="button" class="plugin-back" :disabled="busy" :aria-label="t.workspace.plugins.backToPlugins" :title="t.workspace.plugins.backToPlugins" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.plugins.backToPlugins }}</span></button>
+          </div>
+          <div class="plugin-page-identity">
+            <h3 class="plugin-page-title">{{ t.workspace.plugins.installTitle }}</h3>
+          </div>
+        </div>
         <p class="plugin-description">{{ t.workspace.plugins.installHintAgent.replace('{name}', agentName) }}</p>
         <NInput v-model:value="query" :placeholder="t.workspace.plugins.installSearch" :input-props="{ 'aria-label': t.workspace.plugins.installSearch, type: 'search' }" />
         <div v-if="bindings.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.installNoMarketplaces }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openAddMarket">{{ t.workspace.plugins.addMarketplace }}</button></div>
@@ -431,7 +465,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 <style scoped>
 .agent-plugins { min-inline-size: 0; padding: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .plugin-groups { display: grid; gap: var(--dl-space-3); }
-.plugin-group, .plugin-group-content, .plugin-list, .plugin-pane, .plugin-state, .plugin-config, .plugin-danger-zone { min-inline-size: 0; }
+.plugin-group, .plugin-group-content, .plugin-list, .plugin-pane, .plugin-state, .plugin-config { min-inline-size: 0; }
 .plugin-pane, .plugin-state, .plugin-config { display: grid; gap: var(--dl-space-2); }
 .plugin-group-head { display: flex; align-items: stretch; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
 .plugin-disclosure { flex: 1; display: flex; align-items: center; gap: var(--dl-space-1); min-inline-size: 0; min-block-size: var(--workspace-nav-control-size); font-size: var(--dl-font-size-xs); font-weight: 500; color: var(--dl-text-secondary); text-align: left; border-radius: var(--dl-radius-sm); }
@@ -457,24 +491,38 @@ onBeforeUnmount(() => { isAlive.value = false })
 .plugin-badges { display: flex; flex-wrap: wrap; gap: var(--dl-space-1); }
 .plugin-badge { color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
 .plugin-badge--warning, .plugin-required { color: var(--dl-warning); }
-.plugin-detail, .plugin-install { padding: var(--dl-space-2) var(--dl-space-1); }
-.plugin-subhead { display: flex; align-items: center; gap: var(--dl-space-1); }
-.plugin-subhead h3 { min-inline-size: 0; font-size: var(--dl-font-size-md); font-weight: 500; overflow-wrap: anywhere; }
-.plugin-back { flex: none; display: inline-grid; place-items: center; inline-size: var(--workspace-tree-row-height); min-block-size: var(--workspace-tree-row-height); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); }
-.plugin-meta { display: flex; flex-wrap: wrap; gap: var(--dl-space-1); color: var(--dl-text-tertiary); overflow-wrap: anywhere; }
+.plugin-detail, .plugin-install { display: grid; gap: var(--dl-space-3); padding: 0 0 var(--dl-space-4); }
+.plugin-page-head { display: grid; gap: var(--dl-space-2); }
+.plugin-page-nav { display: flex; align-items: stretch; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+.plugin-page-identity { display: grid; gap: var(--dl-space-1); }
+.plugin-page-title { min-inline-size: 0; font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-tight); overflow-wrap: anywhere; }
+.plugin-back { flex: 1; display: flex; align-items: center; gap: var(--dl-space-1); min-block-size: var(--workspace-nav-control-size); padding: 0; border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 500; line-height: var(--dl-line-snug); text-align: left; }
+.plugin-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-1); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
 .plugin-description { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
-.plugin-section-label { font-size: var(--dl-font-size-xs); font-weight: 500; color: var(--dl-text-secondary); }
-.plugin-config, .plugin-danger-zone { border-block-start: var(--dl-border-width) solid var(--dl-border-base); padding-block-start: var(--dl-space-2); }
+.plugin-detail > .plugin-description { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.plugin-update { justify-self: start; color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
+.plugin-config { display: grid; gap: var(--dl-space-4); margin-block-start: var(--dl-space-1); padding-block-start: var(--dl-space-3); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.plugin-config-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--dl-space-2); }
+.plugin-section-label { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-weight: 500; letter-spacing: var(--dl-tracking-label); }
+.plugin-scope { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
+.plugin-field { display: grid; gap: var(--dl-space-2); min-inline-size: 0; }
+.plugin-field-copy { display: grid; gap: var(--dl-space-1); min-inline-size: 0; }
+.plugin-field-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--dl-space-1); }
+.plugin-field-head label { color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); font-weight: 500; }
+.plugin-field p { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.plugin-field--switch { grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: var(--dl-space-3); }
+.plugin-field--switch .plugin-switch { justify-self: end; }
+.plugin-field :deep(.n-input) { min-inline-size: 0; }
+.plugin-config .plugin-field :deep(.n-input__input-el) { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+.plugin-pane :deep(.n-input__input-el) { min-block-size: var(--dl-target-size); }
 .plugin-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-1); }
+.plugin-actions--end { justify-content: flex-end; }
 .plugin-action { justify-self: start; display: inline-flex; align-items: center; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); color: var(--dl-accent); border-radius: var(--dl-radius-sm); text-align: left; }
 .plugin-danger, .plugin-error { color: var(--dl-error); }
-.plugin-error { margin-block: var(--dl-space-2); overflow-wrap: anywhere; }
-.plugin-confirm { display: grid; gap: var(--dl-space-1); padding-block: var(--dl-space-2); color: var(--dl-text-secondary); overflow-wrap: anywhere; }
-.plugin-field { display: grid; gap: var(--dl-space-1); min-inline-size: 0; }
-.plugin-field label { font-size: var(--dl-font-size-xs); font-weight: 500; }
-.plugin-field p { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.plugin-field :deep(.n-input) { min-inline-size: 0; }
-.plugin-pane :deep(.n-input__input-el) { min-block-size: var(--dl-target-size); }
+.plugin-error { margin-block: var(--dl-space-2); padding: var(--dl-space-2); border: var(--dl-border-width) solid color-mix(in srgb, var(--dl-error) 35%, transparent); border-radius: var(--dl-radius-md); background: color-mix(in srgb, var(--dl-error) 8%, transparent); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.plugin-confirm { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-3); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.plugin-confirm .plugin-actions { justify-content: flex-end; }
+.plugin-confirm .plugin-action { min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-2); }
 .install-row, .market-row { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-2) var(--dl-space-1); min-inline-size: 0; }
 .install-row + .install-row, .market-row + .market-row { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 .market-trust { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); margin-inline-start: auto; }
@@ -491,6 +539,7 @@ onBeforeUnmount(() => { isAlive.value = false })
   .plugin-add, .plugin-back, .plugin-action { min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); }
   .plugin-disclosure, .market-controls .plugin-action { min-block-size: var(--dl-target-size); }
   .plugin-switch { min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); }
+  .plugin-confirm .plugin-action { min-block-size: var(--dl-target-size); }
   .plugin-main { min-block-size: calc(var(--dl-target-size) + var(--dl-space-4)); padding-inline-end: calc(var(--dl-target-size) + var(--dl-space-6)); }
 }
 </style>

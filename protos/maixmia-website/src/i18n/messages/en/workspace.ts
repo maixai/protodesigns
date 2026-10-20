@@ -109,7 +109,7 @@ export const workspace = {
   plugins: {
     marketplacesTitle: 'Plugin marketplaces',
     saveConfig: 'Save settings',
-    dangerZone: 'Danger zone',
+    agentOnly: 'This agent only',
     confirmUninstall: 'Confirm uninstall',
     remove: 'Remove',
     autoUpdateLabel: 'Auto-update "{name}"',
@@ -143,7 +143,6 @@ export const workspace = {
     updateAvailable: 'Update to v{version}',
     updatedPlugin: 'Updated "{name}" to v{version}',
     configure: 'Configure',
-    configureHintAgent: 'These values belong to this agent only.',
     configureRequired: 'Setup needed',
     configureSaved: 'Saved settings for "{name}"',
     secretSetPlaceholder: 'Saved — leave blank to keep it',

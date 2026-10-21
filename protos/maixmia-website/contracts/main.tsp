@@ -362,16 +362,51 @@ model ProjectCandidate {
   isGitRepo: boolean;
 }
 
+// 一个档位的配置:模型 + 思考强度。modelId 空串 = 跟随内置默认模型;
+// effortLevel 取 low / medium / high / xhigh / max,默认 high。
+model ModelTierConfig {
+  modelId: string;
+  effortLevel: string;
+}
+
+// 四档与 Claude Code 别名一一对应:ANTHROPIC_DEFAULT_FABLE_MODEL /
+// ANTHROPIC_DEFAULT_OPUS_MODEL / ANTHROPIC_DEFAULT_SONNET_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL。
+model ModelTierMap {
+  fable: ModelTierConfig;
+  opus: ModelTierConfig;
+  sonnet: ModelTierConfig;
+  haiku: ModelTierConfig;
+}
+
+// effortLevel 的合法值:空串(默认)、low、medium、high、xhigh、max。
+// 主对话的默认值对应 SDK 的 effort;子 Agent / 档位值由 Mia 写入生成的 AgentDefinition.effort。
+@summary("AgentModelConfig")
+@jsonSchema
+model AgentModelConfig {
+  defaultModelId: string;         // 主对话模型,对应 SDK 的 model。
+  defaultEffortLevel: string;     // 主对话思考强度,对应 SDK 的 effort;空串 = 模型默认。
+  subagentModelId: string;        // 子 Agent 默认模型,对应 CLAUDE_CODE_SUBAGENT_MODEL;空串 = 跟随主模型。
+  subagentEffortLevel: string;    // 子 Agent 默认思考强度;空串 = 跟随对话。
+  tiers: ModelTierMap;            // Skill / Workflow 子 Agent 的档位映射。
+  // 回退模型链:数组顺序即优先级,对应 settings.json 的 fallbackModel。
+  // 空数组 = 不启用回退;最多 3 个,且不能包含 defaultModelId(TS SDK 会在启动时拒绝)。
+  fallbackModelIds: string[];
+  // 自动压缩窗口(tokens):0 = 跟随模型;非 0 映射 CLAUDE_CODE_AUTO_COMPACT_WINDOW。
+  autoCompactWindowTokens: int32;
+  // 固定思考预算(tokens):0 = 自动;非 0 映射 SDK 的 maxThinkingTokens。
+  maxThinkingTokens: int32;
+}
+
 // Agent 的身份摘要:侧栏切换器 / 设置对话框只需要这些字段,不必背着项目树。
-// role 是一句话职责(如「拆解任务与推进节奏」),modelId 是默认模型 id(载体按模型目录解析展示名)。
-// builtIn 表示内置 Agent:它们的名称 / 职责优先跟随界面语言;用户改名后置 false,改用这里的字面值。
+// note 是一句话备注;model 是该 Agent 的默认模型、四档映射与高级配置。
+// builtIn 表示内置 Agent:名称与备注优先跟随界面语言;用户修改后改用字面值。
 @summary("AgentSummary")
 @jsonSchema
 model AgentSummary {
   id: AgentId;
   name: string;
-  role: string;
-  modelId: string;
+  note: string;
+  `model`: AgentModelConfig;
   builtIn: boolean;
 }
 
@@ -380,8 +415,8 @@ model AgentSummary {
 @jsonSchema
 model AgentConfig {
   name: string;
-  role: string;
-  modelId: string;
+  note: string;
+  `model`: AgentModelConfig;
 }
 
 // ---- 插件与插件市场 ----

@@ -25,12 +25,12 @@ const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
-// 当前 Agent 从摘要里取(名称 / 角色是数据,不再按 id 查词条 —— Agent 可以新建和改名)。
+// 当前 Agent 从摘要里取(名称 / 备注是数据,不再按 id 查词条 —— Agent 可以新建和改名)。
 const current = computed<AgentSummary | undefined>(() => props.agents.find((agent) => agent.id === props.value) ?? props.agents[0])
-// 触发钮的可访问名 = 控件用途 + 当前 Agent + 它的角色(视觉上角色是第二行,读屏也要读到)。
+// 触发钮的可访问名 = 控件用途 + 当前 Agent + 它的备注(视觉上备注是第二行,读屏也要读到)。
 const triggerLabel = computed(() => current.value === undefined
   ? t.value.workspace.agentSwitcher.label
-  : `${t.value.workspace.agentSwitcher.label} · ${current.value.name} · ${current.value.role}`)
+  : `${t.value.workspace.agentSwitcher.label} · ${current.value.name} · ${current.value.note}`)
 // 首字标记:窄屏只留它 + chevron 时,用户仍能认出当前 Agent(名称在 aria-label 里保留)。
 function initialOf(name: string): string {
   return name.slice(0, 1)
@@ -94,7 +94,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
       <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}</span>
       <span class="agent-context-switcher__body">
         <span class="agent-context-switcher__name">{{ current?.name ?? '' }}</span>
-        <span class="agent-context-switcher__role">{{ current?.role ?? '' }}</span>
+        <span class="agent-context-switcher__note">{{ current?.note ?? '' }}</span>
       </span>
       <svg class="agent-context-switcher__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
@@ -105,7 +105,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
           <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}</span>
           <span class="agent-context-switcher__option-body">
             <span class="agent-context-switcher__option-name">{{ agent.name }}</span>
-            <span class="agent-context-switcher__option-role">{{ agent.role }}</span>
+            <span class="agent-context-switcher__option-note">{{ agent.note }}</span>
           </span>
           <svg v-if="agent.id === value" class="agent-context-switcher__check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 9-9" /></svg>
         </button>
@@ -132,7 +132,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .agent-context-switcher__mark { display: inline-grid; flex: none; place-items: center; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); border-radius: var(--dl-radius-sm); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 500; }
 .agent-context-switcher__body { display: grid; gap: 1px; min-width: 0; }
 .agent-context-switcher__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-context-switcher__role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+.agent-context-switcher__note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .agent-context-switcher__chevron { flex: none; inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); color: var(--dl-text-tertiary); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .agent-context-switcher__chevron path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .agent-context-switcher__trigger[aria-expanded='true'] .agent-context-switcher__chevron { transform: rotate(180deg); }
@@ -144,7 +144,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .agent-context-switcher__option-mark { display: inline-grid; place-items: center; inline-size: var(--dl-control-height); block-size: var(--dl-control-height); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); font-weight: 500; }
 .agent-context-switcher__option-body { display: grid; gap: 2px; min-width: 0; }
 .agent-context-switcher__option-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.agent-context-switcher__option-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+.agent-context-switcher__option-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .agent-context-switcher__check { flex: none; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); color: var(--dl-accent); }
 .agent-context-switcher__check path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .agent-context-switcher__option[aria-current='true'] { background: var(--dl-accent-soft); }
@@ -165,7 +165,7 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
 /* 窄屏(侧栏已收成抽屉)只留首字标记 + chevron:底栏要给最小化条目与状态簇让位。
    名称不截断,而是整体让位;可访问名仍在 aria-label 里。 */
 /* ---- 侧栏顶部宿主:整行控件,向下展开 ---- */
-/* 侧栏头部是**身份区**而不是一个输入框:去掉描边与填色,让「标记 + 名称 + 角色」自己成为
+/* 侧栏头部是**身份区**而不是一个输入框:去掉描边与填色,让「标记 + 名称 + 备注」自己成为
    层级;悬停才出现一档浅底,提示它是可展开的。这也是 Notion / Linear / shadcn 侧栏
    workspace switcher 的既有做法 —— 触发器读起来像一条安静的导航行,而不是一张卡片。 */
 .agent-context-switcher[data-variant='sidebar'] {
@@ -222,8 +222,8 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
   transform: translateY(calc(-1 * var(--dl-space-1)));
 }
 
-/* 底栏宿主保持 32px 单行:角色说明只属于侧栏身份区,不在紧凑工具行里占第二行。 */
-.agent-context-switcher[data-variant='dock'] .agent-context-switcher__role { display: none; }
+/* 底栏宿主保持 32px 单行:备注说明只属于侧栏身份区,不在紧凑工具行里占第二行。 */
+.agent-context-switcher[data-variant='dock'] .agent-context-switcher__note { display: none; }
 
 @media (max-width: 1023px) {
   .agent-context-switcher[data-variant='dock'] .agent-context-switcher__name { display: none; }

@@ -168,6 +168,11 @@ export const ICONS = {
     paths: ['M9 6l6 6-6 6'],
     circles: [],
   },
+  // 下拉选择:向下的尖角(自定义 select 的箭头)
+  chevronDown: {
+    paths: ['M6 9l6 6 6-6'],
+    circles: [],
+  },
   // 回到底部:向下的箭头(竖杆 + 箭头头),不复用旋转的 chevron / 下载图标 ——
   // 「回到底部」是跳转语义,与「展开」「下载」都不是一回事。
   arrowDown: {
@@ -215,6 +220,7 @@ export function toIconName(icon: string): IconName {
     case 'search':
     case 'chevronLeft':
     case 'chevronRight':
+    case 'chevronDown':
       return icon
     default:
       return 'grid'

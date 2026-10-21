@@ -33,6 +33,7 @@ const props = defineProps<{
   sessionId: string
   // 会话标题:输入框的可访问名据此生成(读屏要能分辨「在给哪段对话打字」)。
   title: string
+  defaultModelId: string
   runtime: ChatRuntime
   skills: readonly Skill[]
   skillsStatus: 'loading' | 'ready' | 'error'
@@ -441,7 +442,9 @@ const statusDetail = computed(() => {
 })
 // 当前模型:来自**本会话**选中的模型(窗口大小由它决定,单一来源在 data/models.ts)。
 // 展示名由 ModelMenu 自己按同一目录解析,这里只用它算 context 窗口。
-const model = computed(() => modelById(props.runtime.modelId))
+// 会话显式选择优先;未选择时响应式继承 Agent 默认模型,无需重新装载转录。
+const effectiveModelId = computed(() => props.runtime.modelId !== '' ? props.runtime.modelId : props.defaultModelId)
+const model = computed(() => modelById(effectiveModelId.value))
 // Context 用量:分母取**本会话选中模型**的窗口(切换模型即按新窗口重算),分子取遥测的已用量。
 // 分级配色 <75% info、75–89% warning、≥90% error(状态色表达结果)。
 const contextPercent = computed(() => {
@@ -620,7 +623,7 @@ function formatElapsed(seconds: number): string {
             </div>
             <span v-if="runtime.telemetry" class="telemetry__item telemetry__item--model">
               <span v-if="hasRunTelemetry" class="telemetry__sep" aria-hidden="true">│</span>
-              <ModelMenu :model-id="runtime.modelId" @select="onModelSelect" />
+              <ModelMenu :model-id="effectiveModelId" @select="onModelSelect" />
             </span>
             <span v-if="hasRunTelemetry" class="telemetry__item telemetry__item--context">
               <span class="telemetry__sep" aria-hidden="true">│</span>

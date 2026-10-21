@@ -1593,7 +1593,7 @@ function retryProjects(): void {
 }
 
 // ---- Agent 身份与插件 ----
-// Agent 列表是工作台身份的单一来源:切换器、设置对话框与通知分组都从它取名称 / 角色。
+// Agent 列表是工作台身份的单一来源:切换器、设置对话框与通知分组都从它取名称 / 备注。
 async function loadAgents(): Promise<void> {
   agentsStatus.value = 'loading'
   const result = await listAgents()
@@ -2275,7 +2275,7 @@ function applyDemoState(demo: AppRoute['demoState']): void {
 
 
 watch(locale, () => {
-  // 项目 / 条目的名称与路径都是技术标识,不随语言变化;但内置 Agent 的名称与角色会变,
+  // 项目 / 条目的名称与路径都是技术标识,不随语言变化;但内置 Agent 的名称与备注会变,
   // 故先重取 Agent 列表,再重取会话(标题本地化)、转录与遥测。
   void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false) })
 })
@@ -2421,7 +2421,7 @@ onBeforeUnmount(() => {
         :inert="isNarrow && !isDrawerOpen" :role="isNarrow && isDrawerOpen ? 'dialog' : undefined"
         :aria-modal="isNarrow && isDrawerOpen ? true : undefined" :aria-label="t.workspace.workspacePanel"
       >
-        <!-- 侧栏顶部 = Agent 身份区(标记 + 名称 + 角色)、它的设置齿轮与抽屉关闭钮。
+        <!-- 侧栏顶部 = Agent 身份区(标记 + 名称 + 备注)、它的设置齿轮与抽屉关闭钮。
              新建 Agent 的入口在身份菜单底部 —— 与「切换身份」同处一个动作组,不额外占一行。 -->
         <div class="sidebar-head">
           <AgentContextSwitcher
@@ -2674,6 +2674,7 @@ onBeforeUnmount(() => {
                   :key="`chat:${activeChatOf(surfaceId)}`"
                   :session-id="activeChatOf(surfaceId)"
                   :title="sessionTitleOf(activeChatOf(surfaceId))"
+                  :default-model-id="currentAgent?.model.defaultModelId ?? ''"
                   :runtime="runtimeFor(activeChatOf(surfaceId))"
                   :skills="skillsOf(activeChatProjectOf(surfaceId))" :skills-status="skillStatusOf(activeChatProjectOf(surfaceId))"
                   @retry-skills="retryProjectSkills(activeChatProjectOf(surfaceId))"
@@ -2769,6 +2770,7 @@ onBeforeUnmount(() => {
           :can-reassign="canReassignProject(chatSessionIdOf(win))"
           :reassign-picker-open="reassignPickerOpenFor(chatSessionIdOf(win))"
           :title="windowLabel(win.id)"
+          :default-model-id="currentAgent?.model.defaultModelId ?? ''"
           :runtime="runtimeFor(chatSessionIdOf(win))"
           :skills="skillsOf(win.content.projectId)" :skills-status="skillStatusOf(win.content.projectId)"
           @retry-skills="retryProjectSkills(win.content.projectId)"

@@ -1,32 +1,60 @@
-// 可选模型目录:输入坞底行的「模型 ▾」下拉据此渲染,会话的模型选择据此解析。
-//
-// 依据:Claude 把模型选择器放进 composer 内右侧,并主张「模型与消耗必须在发送前可见」;
-// ChatGPT 放在消息框内右下角 —— 本仓的底行右侧与之一致。目录只描述「有哪些模型、各自多大窗口」,
-// 展示名与一句话说明走 i18n 词条(名称是品牌名,两种语言同值),故这里不 hardcode 展示文案。
+// 唯一模型目录:设置按能力排序,会话菜单单独保留既有选项的顺序。
+// 展示名是品牌专有名词,两种语言同值;窗口大小用于输入坞的上下文计算。
 import type { Messages } from '../i18n'
+
+export type ModelTierId = 'fable' | 'opus' | 'sonnet' | 'haiku'
+// 全局模型库里的渠道。名称是产品名,两种语言同值。
+export type ModelProvider = 'Anthropic' | 'Bedrock' | 'Vertex'
+export const PROVIDER_ORDER: readonly ModelProvider[] = ['Anthropic', 'Bedrock', 'Vertex']
+// SDK 的 effort 取值;空串不在其中,表示「不写 effort」。
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export interface ModelOption {
   id: string
-  // 展示名的 i18n 键(modelNameKey);品牌名两种语言同值,但仍走词条以免散落。
   nameKey: keyof Messages['workspace']['models']
-  // Context 窗口(两处口径须知:遥测只报「用了多少」,窗口大小由**本会话选中的模型**决定)。
+  provider: ModelProvider
   contextWindowTokens: number
   descriptionKey: keyof Messages['workspace']['modelDescriptions']
+  tier: ModelTierId
+  // 该模型是否接受 SDK 的 effort 参数;不支持时 UI 禁用思考列。
+  supportsEffort: boolean
 }
 
-// 模型目录。名称沿用 mock 里已有的同一族模型名(Claude Sonnet 4.5 / Claude Opus 4.1),
-// 不新造产品名;第三项是同一模型的长上下文配置(1M),它让「切换后 context 百分比按新窗口重算」
-// 这条可被机械验证 —— 若全部模型都是 200K,切换模型就看不出窗口差异。
-export const MODELS = [
-  { id: 'claude-sonnet-4-5', nameKey: 'sonnet45', contextWindowTokens: 200_000, descriptionKey: 'balanced' },
-  { id: 'claude-opus-4-1', nameKey: 'opus41', contextWindowTokens: 200_000, descriptionKey: 'deep' },
-  { id: 'claude-sonnet-4-5-1m', nameKey: 'sonnet45_1m', contextWindowTokens: 1_000_000, descriptionKey: 'longContext' },
-] as const satisfies readonly ModelOption[]
+export interface ModelGroup {
+  provider: ModelProvider
+  models: readonly ModelOption[]
+}
 
-// 默认模型:每段对话的初始选择。用户在**本会话**内切换后只影响这一段(作用域 = 本会话)。
-export const DEFAULT_MODEL: ModelOption = MODELS[0]
+const FABLE_MODEL = { id: 'claude-fable-5-1', nameKey: 'fable51', provider: 'Anthropic', contextWindowTokens: 200_000, descriptionKey: 'frontier', tier: 'fable', supportsEffort: true } satisfies ModelOption
+const OPUS_MODEL = { id: 'claude-opus-5-5', nameKey: 'opus55', provider: 'Bedrock', contextWindowTokens: 200_000, descriptionKey: 'deep', tier: 'opus', supportsEffort: true } satisfies ModelOption
+const SONNET_MODEL = { id: 'claude-sonnet-5-5', nameKey: 'sonnet55', provider: 'Anthropic', contextWindowTokens: 200_000, descriptionKey: 'balanced', tier: 'sonnet', supportsEffort: true } satisfies ModelOption
+const SONNET_LONG_MODEL = { id: 'claude-sonnet-5-5-1m', nameKey: 'sonnet55_1m', provider: 'Vertex', contextWindowTokens: 1_000_000, descriptionKey: 'longContext', tier: 'sonnet', supportsEffort: true } satisfies ModelOption
+const HAIKU_MODEL = { id: 'claude-haiku-5-5', nameKey: 'haiku55', provider: 'Bedrock', contextWindowTokens: 200_000, descriptionKey: 'fast', tier: 'haiku', supportsEffort: true } satisfies ModelOption
 
-// 按 id 取模型;未知 id(含空串 —— 「本会话尚未选择」)回落到默认模型。
+export const MODELS: readonly ModelOption[] = [FABLE_MODEL, OPUS_MODEL, SONNET_MODEL, SONNET_LONG_MODEL, HAIKU_MODEL]
+export const SESSION_MODELS: readonly ModelOption[] = [SONNET_MODEL, OPUS_MODEL, SONNET_LONG_MODEL, HAIKU_MODEL, FABLE_MODEL]
+export const DEFAULT_MODEL: ModelOption = SONNET_MODEL
+
+// 按渠道分组,用于 select 的 optgroup:全局模型库先按渠道组织,再看具体模型。
+export function groupModelsByProvider(models: readonly ModelOption[]): ModelGroup[] {
+  return PROVIDER_ORDER
+    .map((provider) => ({ provider, models: models.filter((model) => model.provider === provider) }))
+    .filter((group) => group.models.length > 0)
+}
+
+export const TIER_DEFAULTS: Record<ModelTierId, string> = {
+  fable: FABLE_MODEL.id,
+  opus: OPUS_MODEL.id,
+  sonnet: SONNET_MODEL.id,
+  haiku: HAIKU_MODEL.id,
+}
+
+// 添加回退模型时的推荐顺序:便宜 / 快在前,能力更强的在后;默认模型与已选模型会被跳过。
+// 回退链本身不限制档位,用户仍可把任意模型放进任意位置。
+export const FALLBACK_PRIORITY: readonly ModelOption[] = [SONNET_MODEL, HAIKU_MODEL, OPUS_MODEL, FABLE_MODEL, SONNET_LONG_MODEL]
+
+// 未知 id(含空串)仍回落到全局默认;调用方先处理 Agent 继承语义。
 export function modelById(id: string): ModelOption {
   return MODELS.find((model) => model.id === id) ?? DEFAULT_MODEL
 }

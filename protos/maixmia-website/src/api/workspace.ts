@@ -22,6 +22,7 @@ import type { FileContent } from '../contracts/generated/file-content'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import { delay } from '../mocks/delay'
+import { EFFORT_LEVELS } from '../data/models'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentNotifications,
@@ -64,24 +65,64 @@ const { t } = useI18n()
 
 // ---- Agent 身份 ----
 
-// 全部 Agent 的摘要(名称 / 角色 / 模型 / 是否内置)。内置 Agent 的名称与角色随语言变化,
+// 全部 Agent 的摘要(名称 / 备注 / 模型 / 是否内置)。内置 Agent 的名称与备注随语言变化,
 // 故调用方在切语言后重新取一次。
 export async function listAgents(): Promise<Result<AgentSummary[]>> {
   await delay()
   return { ok: true, value: mockAgentSummaries() }
 }
 
+// 回退链约束与 Claude Code / TS SDK 对齐:最多 3 个、不可重复、不能包含主模型。
+function invalidFallback(config: AgentConfig): boolean {
+  const fallback = config.model.fallbackModelIds
+  return fallback.length > 3
+    || new Set(fallback).size !== fallback.length
+    || fallback.includes(config.model.defaultModelId)
+}
+
+const EFFORT_VALUES = new Set<string>(['', ...EFFORT_LEVELS])
+
+// 思考强度:主对话、子 Agent 默认、每个档位都必须是 SDK 接受的值或空串。
+function invalidEffort(config: AgentConfig): boolean {
+  const levels = [
+    config.model.defaultEffortLevel,
+    config.model.subagentEffortLevel,
+    ...Object.values(config.model.tiers).map((tier) => tier.effortLevel),
+  ]
+  return levels.some((level) => !EFFORT_VALUES.has(level))
+}
+
+// 自动压缩窗口:0 = 跟随模型;否则官方范围是 100K–1M tokens。
+function invalidCompactWindow(tokens: number): boolean {
+  return tokens !== 0 && (tokens < 100_000 || tokens > 1_000_000)
+}
+
+// 思考预算:0 = 自动;固定值不得低于官方下限 1024 tokens。
+function invalidThinkingBudget(tokens: number): boolean {
+  return tokens !== 0 && tokens < 1024
+}
+
 export async function createAgent(config: AgentConfig): Promise<Result<AgentSummary>> {
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
-  if (!config.role.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.roleRequired) }
+  if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
+  if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
+  if (invalidFallback(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.fallbackInvalid) }
+  if (invalidEffort(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.effortInvalid) }
+  if (invalidCompactWindow(config.model.autoCompactWindowTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.compactWindowInvalid) }
+  if (invalidThinkingBudget(config.model.maxThinkingTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.thinkingBudgetInvalid) }
   return { ok: true, value: mockCreateAgent(config) }
 }
 
 export async function updateAgent(agentId: AgentId, config: AgentConfig): Promise<Result<AgentSummary>> {
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
-  if (!config.role.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.roleRequired) }
+  if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
+  if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
+  if (invalidFallback(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.fallbackInvalid) }
+  if (invalidEffort(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.effortInvalid) }
+  if (invalidCompactWindow(config.model.autoCompactWindowTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.compactWindowInvalid) }
+  if (invalidThinkingBudget(config.model.maxThinkingTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.thinkingBudgetInvalid) }
   const updated = mockUpdateAgent(agentId, config)
   if (updated === null) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
   return { ok: true, value: updated }

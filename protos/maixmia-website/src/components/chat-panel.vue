@@ -38,6 +38,7 @@ const props = defineProps<{
   // 项目选择浮层是否正由本窗体的归属钮打开(供 aria-expanded)。
   reassignPickerOpen: boolean
   // 该会话的运行态(草稿 / 转录 / 生成 / 遥测 / 待确认 / 粘底 —— 随会话存活,不随容器)。
+  defaultModelId: string
   runtime: ChatRuntime
   skills: readonly Skill[]
   skillsStatus: 'loading' | 'ready' | 'error'
@@ -169,6 +170,7 @@ const projectPath = computed(() => badge.value?.path ?? '')
       <ChatSessionView
         :session-id="sessionId"
         :title="title"
+        :default-model-id="defaultModelId"
         :runtime="runtime"
         :skills="skills" :skills-status="skillsStatus"
         :user-name="userName"

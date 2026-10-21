@@ -14,7 +14,7 @@
 // 「不可用」的错觉,而它其实随时可用。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ModelOption } from '../data/models'
-import { MODELS, modelById } from '../data/models'
+import { SESSION_MODELS, modelById } from '../data/models'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 
@@ -69,7 +69,7 @@ function close(restoreFocus: boolean): void {
 }
 
 function currentIndex(): number {
-  const index = MODELS.findIndex((model) => model.id === currentId.value)
+  const index = SESSION_MODELS.findIndex((model) => model.id === currentId.value)
   return index < 0 ? 0 : index
 }
 
@@ -158,7 +158,7 @@ defineExpose({ close })
         :aria-label="t.workspace.modelMenu.label"
       >
         <button
-          v-for="model in MODELS" :key="model.id" type="button" class="model-menu__option"
+          v-for="model in SESSION_MODELS" :key="model.id" type="button" class="model-menu__option"
           role="menuitemradio" :aria-checked="model.id === currentId ? 'true' : 'false'"
           @click="onSelect(model.id)"
         >
@@ -220,6 +220,9 @@ defineExpose({ close })
   gap: var(--dl-space-1);
   min-inline-size: 16rem;
   max-inline-size: 22rem;
+  max-block-size: min(60dvh, 24rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--dl-space-1);
   background: var(--dl-bg-elevated);
   border: var(--dl-border-width) solid var(--dl-border-base);

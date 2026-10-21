@@ -1595,12 +1595,12 @@ test('侧栏切换 Agent:项目列表随之更换', async ({ page }) => {
   await expect(projects.locator('.project-item')).toHaveCount(2)
 })
 
-// 身份区不再被设置钮挤占:名称与角色在 300px 侧栏里完整显示(不截断)。
-test('侧栏 Agent 身份:名称与角色不截断', async ({ page }) => {
+// 身份区不再被设置钮挤占:名称与备注在 300px 侧栏里完整显示(不截断)。
+test('侧栏 Agent 身份:名称与备注不截断', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  for (const selector of ['.agent-context-switcher__name', '.agent-context-switcher__role']) {
+  for (const selector of ['.agent-context-switcher__name', '.agent-context-switcher__note']) {
     const overflow = await page.locator(selector).evaluate((element) => element.scrollWidth - element.clientWidth)
     expect(overflow, `${selector} 不截断`).toBeLessThanOrEqual(1)
   }
@@ -1616,7 +1616,7 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await expect(dialog).toBeVisible()
   await dialog.getByRole('textbox', { name: '名称' }).fill('规划官')
-  await dialog.getByRole('textbox', { name: '角色' }).fill('拆解与推进')
+  await dialog.getByRole('textbox', { name: '备注' }).fill('拆解与推进')
   await dialog.getByRole('button', { name: '保存' }).click()
   await expect(dialog).toHaveCount(0)
   await expect(page.locator(AGENT_TRIGGER)).toContainText('规划官')
@@ -1633,6 +1633,147 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   // 删除当前 Agent 后落到剩余列表的第一个(研究助手),项目区随之更换。
   await expect(page.locator(AGENT_TRIGGER)).toContainText('研究助手')
   await expect(page.locator('.workspace-projects')).toContainText(PROJECT_NAMES.research[0])
+})
+
+test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回显', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
+  const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
+  await expect(dialog.getByRole('tab')).toHaveCount(2)
+  await expect(basicTab).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toBeFocused()
+  await expect(dialog.getByRole('textbox', { name: '备注', exact: true })).toBeVisible()
+  await basicTab.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(modelTab).toHaveAttribute('aria-selected', 'true')
+  await expect(modelTab).toBeFocused()
+  // 模型页内再分三区;默认分区选中,页面上只呈现外层模型面板 + 当前分区面板。
+  const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
+  const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
+  const tierTab = sectionTabs.getByRole('tab', { name: /^档位映射/ })
+  const advancedTab = sectionTabs.getByRole('tab', { name: /^高级/ })
+  await expect(sectionTabs.getByRole('tab')).toHaveCount(3)
+  await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('tabpanel')).toHaveCount(2)
+
+  // 首屏只显示默认模型分区;档位与高级面板不进入可访问树。
+  const conversationModel = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  const conversationEffort = dialog.getByRole('combobox', { name: '对话默认模型 · 思考', exact: true })
+  const subagentModel = dialog.getByRole('combobox', { name: '子 Agent 默认模型', exact: true })
+  const subagentEffort = dialog.getByRole('combobox', { name: '子 Agent 默认模型 · 思考', exact: true })
+  await expect(conversationModel).toHaveValue('claude-sonnet-5-5')
+  await expect(conversationEffort).toHaveValue('')
+  await expect(subagentModel).toHaveValue('')
+  await expect(subagentEffort).toHaveValue('')
+  await expect(subagentModel.locator('option').first()).toHaveText('跟随对话')
+  await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
+  await expect(dialog.getByRole('combobox', { name: 'Fable · 模型', exact: true })).toHaveCount(0)
+  await expect(advancedTab).toHaveAttribute('aria-label', '高级')
+  await expect(dialog.getByRole('button', { name: '添加回退模型', exact: true })).toHaveCount(0)
+  // 恢复默认只在配置非默认时出现。
+  await expect(dialog.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0)
+
+  // 改默认模型与思考强度。
+  await conversationModel.selectOption('claude-opus-5-5')
+  await conversationEffort.selectOption('xhigh')
+  await subagentModel.selectOption('claude-haiku-5-5')
+  await subagentEffort.selectOption('low')
+  await expect(dialog.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible()
+  await expect(defaultsTab).toHaveAttribute('aria-label', /2 项自定义/)
+
+  // 切到档位分区,改 Sonnet 档的模型与思考。
+  await tierTab.click()
+  await expect(tierTab).toHaveAttribute('aria-selected', 'true')
+  await expect(defaultsTab).toHaveAttribute('aria-selected', 'false')
+  for (const tier of ['Fable', 'Opus', 'Sonnet', 'Haiku']) {
+    await expect(dialog.getByRole('combobox', { name: `${tier} · 模型`, exact: true })).toBeVisible()
+    await expect(dialog.getByRole('combobox', { name: `${tier} · 模型`, exact: true })).toHaveValue('')
+    await expect(dialog.getByRole('combobox', { name: `${tier} · 思考`, exact: true })).toHaveValue('high')
+  }
+  await dialog.getByRole('combobox', { name: 'Sonnet · 模型', exact: true }).selectOption('claude-sonnet-5-5-1m')
+  await dialog.getByRole('combobox', { name: 'Sonnet · 思考', exact: true }).selectOption('xhigh')
+  await expect(tierTab).toHaveAttribute('aria-label', /1 项自定义/)
+
+  // 切到高级分区:回退链 + 上下文。
+  await advancedTab.click()
+  await expect(advancedTab).toHaveAttribute('aria-selected', 'true')
+  const addFallback = dialog.getByRole('button', { name: '添加回退模型', exact: true })
+  const fallback1 = dialog.getByRole('combobox', { name: '回退模型 1', exact: true })
+  const fallback2 = dialog.getByRole('combobox', { name: '回退模型 2', exact: true })
+  const fallback3 = dialog.getByRole('combobox', { name: '回退模型 3', exact: true })
+  await expect(dialog.getByText(/尚未配置回退模型/)).toBeVisible()
+  await addFallback.click()
+  await expect(fallback1).toHaveValue('claude-sonnet-5-5')
+  await addFallback.click()
+  await expect(fallback2).toHaveValue('claude-haiku-5-5')
+  await addFallback.click()
+  await expect(fallback3).toHaveValue('claude-fable-5-1')
+  await expect(addFallback).toBeDisabled()
+  await dialog.getByRole('button', { name: '移除回退模型 3', exact: true }).click()
+  await expect(fallback3).toHaveCount(0)
+  await dialog.getByRole('button', { name: '下移回退模型 1', exact: true }).click()
+  await expect(fallback1).toHaveValue('claude-haiku-5-5')
+  await expect(fallback2).toHaveValue('claude-sonnet-5-5')
+  await dialog.getByRole('combobox', { name: '自动压缩窗口', exact: true }).selectOption('500000')
+  await dialog.getByRole('combobox', { name: '对话思考预算', exact: true }).selectOption('16384')
+  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('.telemetry__model').first()).toHaveText('Claude Opus 5.5')
+
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await expect(basicTab).toHaveAttribute('aria-selected', 'true')
+  await modelTab.click()
+  await expect(conversationModel).toHaveValue('claude-opus-5-5')
+  await expect(conversationEffort).toHaveValue('xhigh')
+  await expect(subagentModel).toHaveValue('claude-haiku-5-5')
+  await expect(subagentEffort).toHaveValue('low')
+  // 重开后回到默认分区;角标反映保存时的自定义项数量。
+  await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
+  await expect(tierTab).toHaveAttribute('aria-label', /1 项自定义/)
+  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+  await tierTab.click()
+  await expect(dialog.getByRole('combobox', { name: 'Sonnet · 模型', exact: true })).toHaveValue('claude-sonnet-5-5-1m')
+  await expect(dialog.getByRole('combobox', { name: 'Sonnet · 思考', exact: true })).toHaveValue('xhigh')
+  await advancedTab.click()
+  await expect(fallback1).toHaveValue('claude-haiku-5-5')
+  await expect(fallback2).toHaveValue('claude-sonnet-5-5')
+  await expect(dialog.getByRole('combobox', { name: '自动压缩窗口', exact: true })).toHaveValue('500000')
+  await expect(dialog.getByRole('combobox', { name: '对话思考预算', exact: true })).toHaveValue('16384')
+  // 默认模型改回 Sonnet 时,链里的 Sonnet 自动剔除。
+  await defaultsTab.click()
+  await conversationModel.selectOption('claude-sonnet-5-5')
+  await advancedTab.click()
+  await expect(fallback1).toHaveValue('claude-haiku-5-5')
+  await expect(fallback2).toHaveCount(0)
+  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+  // 恢复默认:模型与上下文全部回到推荐值,按钮与角标随之清空。
+  await dialog.getByRole('button', { name: '恢复默认', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0)
+  await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
+  await expect(advancedTab).toHaveAttribute('aria-label', '高级')
+  await defaultsTab.click()
+  await expect(conversationModel).toHaveValue('claude-sonnet-5-5')
+  await expect(conversationEffort).toHaveValue('')
+  await expect(subagentModel).toHaveValue('')
+  await expect(subagentEffort).toHaveValue('')
+  await tierTab.click()
+  await expect(dialog.getByRole('combobox', { name: 'Sonnet · 模型', exact: true })).toHaveValue('')
+  await expect(dialog.getByRole('combobox', { name: 'Sonnet · 思考', exact: true })).toHaveValue('high')
+  await advancedTab.click()
+  await expect(dialog.getByRole('combobox', { name: '自动压缩窗口', exact: true })).toHaveValue('0')
+  await expect(dialog.getByRole('combobox', { name: '对话思考预算', exact: true })).toHaveValue('0')
+  await defaultsTab.click()
+  await page.screenshot({ path: testInfo.outputPath('agent-settings-model-1280.png') })
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.locator('.telemetry__model').first()).toHaveText('Claude Opus 5.5')
 })
 
 // 至少保留一个 Agent:连续删到只剩一个后,删除入口禁用并给出原因。
@@ -1670,7 +1811,7 @@ test('新建 Agent:模板 + 表单,创建后进入空工作台', async ({ page }
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: /^研究/ }).click()
   await expect(dialog.getByRole('textbox', { name: '名称' })).toHaveValue('研究助手')
-  await expect(dialog.getByRole('textbox', { name: '角色' })).toHaveValue('查资料与整理发现')
+  await expect(dialog.getByRole('textbox', { name: '备注' })).toHaveValue('查资料与整理发现')
   await dialog.getByRole('textbox', { name: '名称' }).fill('发布助手')
   await dialog.getByRole('button', { name: '创建 Agent' }).click()
   await expect(dialog).toHaveCount(0)
@@ -2187,7 +2328,7 @@ test('遥测条:五项齐备、状态项为唯一 live region、Context 文本�
   // 四项:状态 · 模型 · Context · 时长。**归属项目**已从底行移出(它挪到卡片外左上角的挂耳
   // 标签),故这里只核对它仍在页面上、且完整路径挂在 title 上(悬停可读)。
   await expect(status).toBeVisible()
-  await expect(page.locator('.telemetry__model')).toHaveText('Claude Sonnet 4.5')
+  await expect(page.locator('.telemetry__model')).toHaveText('Claude Sonnet 5.5')
   await expect(page.locator('.telemetry__context-text')).toHaveText('41% (82K/200K)')
   await expect(page.locator('.telemetry__elapsed')).toHaveText(/^\d+:\d{2}$/)
   await expect(page.locator(PROJECT_LABEL)).toContainText(PROJECT_NAMES.planning[0])
@@ -2219,7 +2360,7 @@ test('遥测条:空对话不显示运行态遥测(状态 / Context / 计时),只
   await expect(page.locator('.telemetry__status'), '空对话不报运行状态').toHaveCount(0)
   await expect(page.locator('.telemetry__context-text'), '空对话没有已用 context').toHaveCount(0)
   await expect(page.locator('.telemetry__elapsed'), '空对话没有计时').toHaveCount(0)
-  await expect(page.locator('.telemetry__model'), '模型选择仍在').toHaveText('Claude Sonnet 4.5')
+  await expect(page.locator('.telemetry__model'), '模型选择仍在').toHaveText('Claude Sonnet 5.5')
   // 底行此刻只剩两件:⊕ 与模型选择 —— 模型前也不该留一条悬空的分隔线。
   await expect(page.locator('.composer-bar .telemetry__sep'), '没有前导分隔线').toHaveCount(0)
 

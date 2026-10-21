@@ -362,7 +362,7 @@ test('加载失败重试及切换 Agent:骨架可见、计数留空、重试恢�
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
 })
 
-test('项目树文件-only、项目菜单仅关闭、Agent 设置仅身份表单', async ({ page }) => {
+test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型两页', async ({ page }) => {
   await login(page)
   const project = page.locator('.project-item').first()
   await expect(project.getByRole('tab')).toHaveCount(0)
@@ -372,7 +372,8 @@ test('项目树文件-only、项目菜单仅关闭、Agent 设置仅身份表单
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  await expect(dialog.getByRole('tab')).toHaveCount(0)
+  await expect(dialog.getByRole('tab')).toHaveCount(2)
+  await expect(dialog.getByRole('tab')).toHaveText(['基本', '模型'])
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible()
 })

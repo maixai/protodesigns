@@ -18,6 +18,7 @@ import TranscriptView from './transcript-view.vue'
 const props = defineProps<{
   sessionId: string
   title: string
+  defaultModelId: string
   runtime: ChatRuntime
   skills: readonly Skill[]
   skillsStatus: 'loading' | 'ready' | 'error'
@@ -184,6 +185,7 @@ const isGenerating = computed(() => props.runtime.generation === 'queued' || pro
     <ChatComposer
       :session-id="sessionId"
       :title="title"
+      :default-model-id="defaultModelId"
       :runtime="runtime"
       :skills="skills" :skills-status="skillsStatus"
       :disabled="disabled"

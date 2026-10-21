@@ -7,9 +7,9 @@ const VIEWPORT_HEIGHT = 900
 const WEEKLY_TITLE = '把项目周报整理成行动清单'
 const ROADMAP_TITLE = '梳理下季度路线图'
 // 模型名是品牌名(i18n 两种语言同值),测试读不到运行时词条,按同值写死。
-const MODEL_DEFAULT = 'Claude Sonnet 4.5'
-const MODEL_DEEP = 'Claude Opus 4.1'
-const MODEL_LONG = 'Claude Sonnet 4.5 (1M)'
+const MODEL_DEFAULT = 'Claude Sonnet 5.5'
+const MODEL_DEEP = 'Claude Opus 5.5'
+const MODEL_LONG = 'Claude Sonnet 5.5 (1M)'
 // 1×1 透明 PNG:最小合法图片,用于上传 / 粘贴的假图片(setInputFiles 与 DataTransfer 都吃字节)。
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 // 侧栏文件行拖拽用的自定义 MIME 类型(与 src/data/attachments.ts 的 FILE_DRAG_TYPE 同值)。
@@ -199,8 +199,8 @@ test('模型下拉:可开、可键盘选、Esc 还焦;切换按新窗口重算 c
   await expect(trigger).toHaveAttribute('aria-expanded', 'true')
   await expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
   const options = menu.getByRole('menuitemradio')
-  await expect(options).toHaveCount(3)
-  // 打开时焦点落在当前项;↓ 走一项、Enter 选中(第二项 = Opus 4.1),关闭并把焦点还给触发钮。
+  await expect(options).toHaveCount(5)
+  // 打开时焦点落在当前项;↓ 走一项、Enter 选中(第二项 = Opus 5.5),关闭并把焦点还给触发钮。
   await expect(options.nth(0)).toBeFocused()
   await expect(options.nth(0)).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('ArrowDown')
@@ -487,7 +487,7 @@ test('窄宽度下模型控件仍在:让位的是项目名与状态详情,且真
 
   // 可达不只是「看得见」:窄屏点一下仍能弹出并选中。
   await trigger.click()
-  await expect(page.locator('[role="menuitemradio"]')).toHaveCount(3)
+  await expect(page.locator('[role="menuitemradio"]')).toHaveCount(5)
   await page.keyboard.press('Escape')
 })
 

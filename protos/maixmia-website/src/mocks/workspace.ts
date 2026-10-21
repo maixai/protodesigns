@@ -2,6 +2,7 @@
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
+import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
 import type { PluginComponentId } from '../contracts/generated/plugin'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
 import type { Marketplace, PluginTrustId } from '../contracts/generated/marketplace'
@@ -23,29 +24,82 @@ import type { ConversationSearchHit } from '../contracts/generated/conversation-
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { Messages } from '../i18n'
 import { useI18n } from '../i18n'
-import { DEFAULT_AGENT_MODEL, modelLabelOf } from '../data/agents'
+import { DEFAULT_MODEL, modelById } from '../data/models'
 
 const { t } = useI18n()
 
 // ---- Agent 身份 ----
 //
 // Agent 可以在运行时新建 / 删除,故身份表是可变数组,而不是编译期常量。
-// 内置 Agent 的名称与角色按当前语言解析(切语言时由 API 重新取一次);用户创建或改过的
+// 内置 Agent 的名称与备注按当前语言解析(切语言时由 API 重新取一次);用户创建或改过的
 // Agent 存最终文案 —— 用户输入的内容不该被界面语言改写。
 interface AgentSeed {
   id: AgentId
   name?: string
-  role?: string
+  note?: string
   nameKey?: keyof Messages['workspace']['agents']
-  roleKey?: keyof Messages['workspace']['agentRoles']
-  modelId: string
+  noteKey?: keyof Messages['workspace']['agentNotes']
+  model: AgentModelConfig
   builtIn: boolean
 }
 
+function defaultAgentModelConfig(): AgentModelConfig {
+  return {
+    defaultModelId: DEFAULT_MODEL.id,
+    defaultEffortLevel: '',
+    subagentModelId: '',
+    subagentEffortLevel: '',
+    tiers: {
+      fable: { modelId: '', effortLevel: 'high' },
+      opus: { modelId: '', effortLevel: 'high' },
+      sonnet: { modelId: '', effortLevel: 'high' },
+      haiku: { modelId: '', effortLevel: 'high' },
+    },
+    fallbackModelIds: [],
+    autoCompactWindowTokens: 0,
+    maxThinkingTokens: 0,
+  }
+}
+
+// 档位是嵌套对象、回退是数组:读写都深拷贝,避免列表与对话框共享引用。
+function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
+  return {
+    ...config,
+    tiers: {
+      fable: { ...config.tiers.fable },
+      opus: { ...config.tiers.opus },
+      sonnet: { ...config.tiers.sonnet },
+      haiku: { ...config.tiers.haiku },
+    },
+    fallbackModelIds: [...config.fallbackModelIds],
+  }
+}
+
 const agentStore: AgentSeed[] = [
-  { id: 'planning', nameKey: 'planning', roleKey: 'planning', modelId: 'claude-sonnet-4-5', builtIn: true },
-  { id: 'research', nameKey: 'research', roleKey: 'research', modelId: 'claude-sonnet-4-5', builtIn: true },
-  { id: 'writing', nameKey: 'writing', roleKey: 'writing', modelId: 'claude-opus-4-1', builtIn: true },
+  { id: 'planning', nameKey: 'planning', noteKey: 'planning', model: defaultAgentModelConfig(), builtIn: true },
+  { id: 'research', nameKey: 'research', noteKey: 'research', model: defaultAgentModelConfig(), builtIn: true },
+  {
+    id: 'writing',
+    nameKey: 'writing',
+    noteKey: 'writing',
+    // 写作助手刻意给一组非默认值,让「档位映射 / 思考强度 / 回退 / 自动压缩」都有实物可看。
+    model: {
+      defaultModelId: 'claude-opus-5-5',
+      defaultEffortLevel: 'high',
+      subagentModelId: 'claude-sonnet-5-5',
+      subagentEffortLevel: 'medium',
+      tiers: {
+        fable: { modelId: '', effortLevel: 'high' },
+        opus: { modelId: '', effortLevel: 'high' },
+        sonnet: { modelId: 'claude-sonnet-5-5-1m', effortLevel: 'high' },
+        haiku: { modelId: '', effortLevel: 'low' },
+      },
+      fallbackModelIds: ['claude-sonnet-5-5', 'claude-haiku-5-5'],
+      autoCompactWindowTokens: 500_000,
+      maxThinkingTokens: 0,
+    },
+    builtIn: true,
+  },
 ]
 let agentSequence = 0
 
@@ -53,8 +107,8 @@ function summaryOf(seed: AgentSeed): AgentSummary {
   return {
     id: seed.id,
     name: seed.nameKey !== undefined ? t.value.workspace.agents[seed.nameKey] : (seed.name ?? ''),
-    role: seed.roleKey !== undefined ? t.value.workspace.agentRoles[seed.roleKey] : (seed.role ?? ''),
-    modelId: seed.modelId,
+    note: seed.noteKey !== undefined ? t.value.workspace.agentNotes[seed.noteKey] : (seed.note ?? ''),
+    model: cloneModelConfig(seed.model),
     builtIn: seed.builtIn,
   }
 }
@@ -76,8 +130,8 @@ export function mockCreateAgent(config: AgentConfig): AgentSummary {
   const seed: AgentSeed = {
     id: `agent-${agentSequence}`,
     name: config.name.trim(),
-    role: config.role.trim(),
-    modelId: config.modelId !== '' ? config.modelId : DEFAULT_AGENT_MODEL,
+    note: config.note.trim(),
+    model: cloneModelConfig(config.model),
     builtIn: false,
   }
   agentStore.push(seed)
@@ -90,11 +144,11 @@ export function mockUpdateAgent(agentId: AgentId, config: AgentConfig): AgentSum
   const seed = agentStore.find((item) => item.id === agentId)
   if (seed === undefined) return null
   seed.name = config.name.trim()
-  seed.role = config.role.trim()
-  seed.modelId = config.modelId
+  seed.note = config.note.trim()
+  seed.model = cloneModelConfig(config.model)
   // 用户改过之后就是自定义文案,不再跟随界面语言。
   delete seed.nameKey
-  delete seed.roleKey
+  delete seed.noteKey
   return summaryOf(seed)
 }
 
@@ -1330,12 +1384,12 @@ type RuntimeSeed = Omit<AgentRuntime, 'agentId' | 'statusDetail' | 'projectName'
 // context 用量刻意取 41% / 78% / 93% 三档:它们分别落在遥测条用量条的三级配色
 // (info / warning / error)上,让「分级配色」可被机械断言。
 const runtimeSeeds: Record<AgentId, RuntimeSeed> = {
-  planning: { status: 'thinking', statusDetail: 'summarizing', modelName: 'Claude Sonnet 4.5', contextUsedTokens: 82000, contextWindowTokens: 200000, elapsedSeconds: 42 },
-  research: { status: 'streaming', statusDetail: 'draftingOutline', modelName: 'Claude Sonnet 4.5', contextUsedTokens: 156000, contextWindowTokens: 200000, elapsedSeconds: 65 },
-  writing: { status: 'streaming', statusDetail: 'revisingRelease', modelName: 'Claude Opus 4.1', contextUsedTokens: 186000, contextWindowTokens: 200000, elapsedSeconds: 88 },
+  planning: { status: 'thinking', statusDetail: 'summarizing', modelName: 'Claude Sonnet 5.5', contextUsedTokens: 82000, contextWindowTokens: 200000, elapsedSeconds: 42 },
+  research: { status: 'streaming', statusDetail: 'draftingOutline', modelName: 'Claude Sonnet 5.5', contextUsedTokens: 156000, contextWindowTokens: 200000, elapsedSeconds: 65 },
+  writing: { status: 'streaming', statusDetail: 'revisingRelease', modelName: 'Claude Opus 5.5', contextUsedTokens: 186000, contextWindowTokens: 200000, elapsedSeconds: 88 },
 }
 // 自定义 Agent 没有专属遥测种子时用这一份:状态与用量从零开始,不像内置 Agent 那样预设进度。
-const DEFAULT_RUNTIME: Omit<AgentRuntime, 'agentId' | 'projectName' | 'projectPath'> = { status: 'idle', statusDetail: '', modelName: modelLabelOf(DEFAULT_AGENT_MODEL), contextUsedTokens: 0, contextWindowTokens: 200000, elapsedSeconds: 0 }
+const DEFAULT_RUNTIME: Omit<AgentRuntime, 'agentId' | 'projectName' | 'projectPath'> = { status: 'idle', statusDetail: '', modelName: t.value.workspace.models[DEFAULT_MODEL.nameKey], contextUsedTokens: 0, contextWindowTokens: 200000, elapsedSeconds: 0 }
 
 // 「等待交互」的单一事实源:演示态为 waiting(与 ?s=empty / ?s=error 同一套开关)时,
 // 这两个写作用户会话在等你拍板。会话列表的 status、确认请求、AgentRuntime 的 waiting 状态、
@@ -1375,7 +1429,7 @@ export function mockAgentRuntime(agentId: AgentId, projectId: string, demoState:
     agentId,
     ...seed,
     // 模型名取该 Agent 的当前配置:在设置里改模型后,遥测条随之变化,而不是各说各的。
-    modelName: agent !== undefined ? modelLabelOf(agent.modelId) : seed.modelName,
+    modelName: t.value.workspace.models[modelById(agent?.model.defaultModelId ?? DEFAULT_MODEL.id).nameKey],
     projectName: project?.name ?? '',
     projectPath: project?.path ?? '',
   }

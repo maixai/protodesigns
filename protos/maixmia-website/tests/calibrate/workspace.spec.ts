@@ -147,6 +147,16 @@ async function login(page: Page, loginLabel = '登录'): Promise<void> {
   await expect(page).toHaveURL(/#\/workspace$/)
 }
 
+// 工作台的语言入口在底栏全局设置里;顶栏不再提供语言切换。
+async function switchLanguageViaSettings(page: Page, language: 'English' | '中文'): Promise<void> {
+  await page.locator('.workspace-dock__settings-trigger').click()
+  const panel = page.locator('#workspace-settings-panel')
+  await expect(panel).toBeVisible()
+  await panel.getByRole('button', { name: language, exact: true }).click()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.workspace-dock__settings-trigger')).toBeFocused()
+}
+
 async function waitForStable(page: Page, state = 'ready', heading: string = zhHeadingFor(state)): Promise<void> {
   await expect(page.getByRole('log')).toHaveAttribute('data-state', state)
   // 视觉隐藏的 h1 文字 = 当前会话标题(Agent 副标题已下线,故这就是纯标题)。
@@ -292,7 +302,7 @@ for (const width of WIDTHS) {
     //      **卡片外**的项目挂耳标签属独立控件档(44),不适用本档;本用例的语料(weekly 已有消息 →
     //      标签为只读纯文本 span,不是 button)不渲染那个按钮,故无需排除,它的 44×44 命中区
     //      在「空对话可改归属」用例里核对。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.workspace-dock__notification-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
@@ -1472,8 +1482,7 @@ test('空态发送回到正常路由，切语言保留新对话', async ({ page 
   // 现在只有指针主动上拖才解除粘底(程序化改内容不算),故这条路径确定性地贴底。
   await expect.poll(() => page.getByRole('log').evaluate((element) => Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop))).toBeLessThanOrEqual(1)
   await expect(page.getByRole('button', { name: '回到底部' })).toHaveCount(0)
-  await page.getByRole('button', { name: '语言', exact: true }).click()
-  await page.getByRole('button', { name: /English/ }).click()
+  await switchLanguageViaSettings(page, 'English')
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.getByRole('log')).toContainText('帮我把团队知识库整理工作')
   await expect(page.getByRole('log')).toContainText('Let’s turn the goal into a draft')
@@ -1506,8 +1515,7 @@ test('切换语言重取历史，生成中延后刷新，不丢用户输入', as
   await input.fill('保留我输入的中文。')
   await input.press('Enter')
   await expect(page.locator('.stream-cursor')).toBeVisible()
-  await page.getByRole('button', { name: '语言', exact: true }).click()
-  await page.getByRole('button', { name: /English/ }).click()
+  await switchLanguageViaSettings(page, 'English')
   await expect(page.locator('.stream-cursor')).toBeVisible()
   await expect(page.locator('.telemetry__word')).toHaveText('Complete', { timeout: 15_000 })
   await expect(page.getByRole('log')).toContainText('Let’s turn the goal into a draft')
@@ -1525,8 +1533,7 @@ test('切语言不丢草稿:输入框内容按会话独立保存', async ({ page
   await waitForStable(page)
   const input = page.getByRole('textbox', { name: /与「.+」对话/ })
   await input.fill('这段草稿必须活过切语言。')
-  await page.getByRole('button', { name: '语言', exact: true }).click()
-  await page.getByRole('button', { name: /English/ }).click()
+  await switchLanguageViaSettings(page, 'English')
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   // 切语言只重取会话列表 / 转录 / 遥测;运行态(草稿)一个字段都不动。
   await expect(page.getByRole('textbox', { name: /Message to ".+"/ })).toHaveValue('这段草稿必须活过切语言。')
@@ -1923,7 +1930,7 @@ test('Agent 选择器键盘:当前项唯一、方向键、Home/End、Enter/Space
 })
 
 for (const width of [375, 480, 600, 768, 1280, 1600]) {
-  test(`工作区底栏几何 @${width}:最小化区在左、全局设置在右、面板向上`, async ({ page }) => {
+  test(`工作区底栏几何 @${width}:设置最左、最小化区居中、通知最右、面板向上`, async ({ page }) => {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
@@ -1936,35 +1943,66 @@ for (const width of [375, 480, 600, 768, 1280, 1600]) {
     expect(box.height).toBe(50)
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
     await expect(dock.locator('.workspace-dock__empty')).toHaveText('没有最小化的页面')
-    // 底栏最左端直接是本域的最小化条目;Agent 选择已回到侧栏顶部。
     await expect(dock.locator('.agent-context-switcher'), '底栏不再承载 Agent 选择').toHaveCount(0)
-    const groupsBox = await dock.locator('.workspace-dock__groups').boundingBox()
-    expect(groupsBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(box.x + 16)
-    // 右侧固定「全局设置」:齿轮 32×32、右缘贴内容右缘;只有一条发丝竖线划出边界。
-    const settings = page.locator('.workspace-dock__settings-trigger')
+    // 左端是全局设置;Agent 选择已回到侧栏顶部。
+    const settings = dock.locator('.workspace-dock__settings-trigger')
     const settingsBox = await settings.boundingBox()
     expect(settingsBox?.height).toBe(32)
-    expect(settingsBox?.width).toBe(32)
-    expect(settingsBox?.x ?? 0).toBeGreaterThan(groupsBox?.x ?? 0)
-    expect((settingsBox?.x ?? 0) + (settingsBox?.width ?? 0)).toBeLessThanOrEqual(box.x + box.width)
-    expect(box.x + box.width - ((settingsBox?.x ?? 0) + (settingsBox?.width ?? 0))).toBeLessThanOrEqual(16)
-    await expect(dock.locator('.workspace-dock__divider')).toHaveCount(1)
-    await expect(dock.locator('.workspace-dock__global-status')).toHaveAttribute('aria-label', '全局设置')
+    expect(settingsBox?.width, '设置 icon-only').toBe(32)
+    expect(settingsBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(box.x + 16)
+    expect(settingsBox?.x ?? 0).toBeGreaterThanOrEqual(box.x)
+    await expect(settings).toHaveAttribute('aria-label', '全局设置')
+    // 图标按钮的 tooltip:悬停可见、离开隐藏,且不出视口。
+    const settingsTooltip = dock.locator('.workspace-dock__settings-tooltip')
+    await expect(settingsTooltip).toBeHidden()
+    await settings.hover()
+    await expect(settingsTooltip).toBeVisible()
+    await expect(settingsTooltip).toHaveText('全局设置')
+    const tooltipBox = await settingsTooltip.boundingBox()
+    expect(tooltipBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+    expect((tooltipBox?.x ?? 0) + (tooltipBox?.width ?? 0)).toBeLessThanOrEqual(width)
+    await page.mouse.move(0, 0)
+    await expect(settingsTooltip).toBeHidden()
+    // 中间是最小化条目,右端是通知铃铛;两条发丝线划出三段。
+    const groupsBox = await dock.locator('.workspace-dock__groups').boundingBox()
+    expect(groupsBox?.x ?? 0).toBeGreaterThan((settingsBox?.x ?? 0) + (settingsBox?.width ?? 0))
+    const bell = dock.locator('.workspace-dock__notification-trigger')
+    const bellBox = await bell.boundingBox()
+    expect(bellBox?.height).toBe(32)
+    expect(bellBox?.width).toBe(32)
+    expect(bellBox?.x ?? 0).toBeGreaterThan(groupsBox?.x ?? 0)
+    expect((bellBox?.x ?? 0) + (bellBox?.width ?? 0)).toBeLessThanOrEqual(box.x + box.width)
+    expect(box.x + box.width - ((bellBox?.x ?? 0) + (bellBox?.width ?? 0))).toBeLessThanOrEqual(16)
+    await expect(dock.locator('.workspace-dock__divider')).toHaveCount(2)
+    await expect(dock.locator('.workspace-dock__global-settings')).toHaveAttribute('aria-label', '全局设置')
     await expect(dock.locator('.workspace-dock__groups')).toHaveAttribute('aria-label', '当前 Agent 的页面')
     await expect(page.locator('.workspace-dock__status-cluster')).toHaveCount(0)
     await expect(page.locator('.workspace-dock__status-text')).toHaveCount(0)
-    // 设置面板向上展开(底栏贴视口底部),右缘对齐齿轮,且不出视口。
+    // 设置面板从左侧向上展开,只含全局设置;通知面板从右侧向上展开,只含通知。
     await settings.click()
     const settingsPanel = page.locator('#workspace-settings-panel')
     await expect(settingsPanel).toBeVisible()
     await expect(settingsPanel.getByRole('heading', { name: '全局设置', level: 2 })).toBeVisible()
     await expect(settingsPanel.locator('button[aria-pressed="true"]')).toHaveText('中文')
+    await expect(settingsPanel.getByRole('heading', { name: '通知中心' })).toHaveCount(0)
     const settingsPanelBox = await settingsPanel.boundingBox()
     expect(settingsPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0)
     expect((settingsPanelBox?.x ?? 0) + (settingsPanelBox?.width ?? 0)).toBeLessThanOrEqual(width)
     expect((settingsPanelBox?.y ?? 0) + (settingsPanelBox?.height ?? 0)).toBeLessThanOrEqual((settingsBox?.y ?? 0) + 1)
     await page.keyboard.press('Escape')
     await expect(settings).toBeFocused()
+
+    await bell.click()
+    const notificationsPanel = page.locator('#workspace-notifications-panel')
+    await expect(notificationsPanel).toBeVisible()
+    await expect(notificationsPanel.getByRole('heading', { name: '通知中心', level: 2 })).toBeVisible()
+    await expect(notificationsPanel.locator('button[aria-pressed]')).toHaveCount(0)
+    const notificationsPanelBox = await notificationsPanel.boundingBox()
+    expect(notificationsPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+    expect((notificationsPanelBox?.x ?? 0) + (notificationsPanelBox?.width ?? 0)).toBeLessThanOrEqual(width)
+    expect((notificationsPanelBox?.y ?? 0) + (notificationsPanelBox?.height ?? 0)).toBeLessThanOrEqual((bellBox?.y ?? 0) + 1)
+    await page.keyboard.press('Escape')
+    await expect(bell).toBeFocused()
 
     // Agent 选择器在侧栏**最上方**:宽屏常驻;窄屏打开抽屉后可见,面板向下展开。
     const trigger = page.locator(AGENT_TRIGGER)
@@ -2216,9 +2254,11 @@ test('通知中心:按 Agent 分组、等待优先、跨 Agent 打开会话并�
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await openWaiting(page)
   await expect(page.locator('.workspace-dock__status-cluster')).toHaveCount(0)
-  await page.locator('.workspace-dock__settings-trigger').click()
-  const panel = page.locator('#workspace-settings-panel')
+  await page.locator('.workspace-dock__notification-trigger').click()
+  const panel = page.locator('#workspace-notifications-panel')
   await expect(panel).toBeVisible()
+  // 设置与通知已经拆开:通知面板里不再有语言切换。
+  await expect(panel.getByRole('button', { name: '中文', exact: true })).toHaveCount(0)
   const writing = panel.locator('[data-agent="writing"]')
   await expect(writing).toContainText('写作助手')
   await expect(writing.locator('.workspace-dock__notice').first()).toHaveAttribute('data-status', 'awaiting')
@@ -2228,18 +2268,19 @@ test('通知中心:按 Agent 分组、等待优先、跨 Agent 打开会话并�
   await expect(agentTab(page, 'planning')).toHaveCount(1)
   await expect(page.locator('.workspace-dock__status-cluster')).toHaveCount(0)
   await expect(page.locator('.conversation-tab[aria-selected="true"]')).toHaveAttribute('data-tab-id', 'roadmap')
+  await expect(page.locator('.conversation-tab[data-tab-id="roadmap"]')).toBeFocused()
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
-  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('.workspace-dock__notification-trigger').click()
   await expect(panel.locator('[data-session-id="roadmap"]')).toHaveCount(0)
   await expect(panel.locator('[data-session-id="quarterly"]')).toHaveCount(1)
   await page.keyboard.press('Escape')
-  await expect(page.locator('.workspace-dock__settings-trigger')).toBeFocused()
+  await expect(page.locator('.workspace-dock__notification-trigger')).toBeFocused()
 })
 
 test('通知徽标:等待优先、看过逐条消除、完成信号仍在且底栏高度不变', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: VIEWPORT_HEIGHT })
   await openWaiting(page)
-  const bell = page.locator('.workspace-dock__settings-trigger')
+  const bell = page.locator('.workspace-dock__notification-trigger')
   const badge = page.locator('.workspace-dock__notification-badge')
   await expect(badge).toHaveText('1')
   await clickTab(page, QUARTERLY['zh-CN'])
@@ -2250,7 +2291,10 @@ test('通知徽标:等待优先、看过逐条消除、完成信号仍在且底�
   await bell.click()
   await page.locator('.workspace-dock__notice[data-session-id="release"]').click()
   await expect(badge).toHaveText('2')
-  await expect(bell).toHaveAttribute('aria-label', '全局设置 · 2 条已完成')
+  await expect(bell).toHaveAttribute('aria-label', '通知 · 2 条已完成')
+  // 设置入口不再承担通知数字。
+  await expect(page.locator('.workspace-dock__settings-trigger')).toHaveAttribute('aria-label', '全局设置')
+  await expect(page.locator('.workspace-dock__settings-trigger .workspace-dock__notification-badge')).toHaveCount(0)
   expect((await page.locator('.workspace-dock').boundingBox())?.height).toBe(50)
 })
 
@@ -2268,11 +2312,20 @@ test.describe('Agent 选择器与最小化栏英文窄屏', () => {
     await expect(page.locator('.workspace-dock__groups')).toHaveCSS('overflow-x', 'auto')
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
     await page.locator('.workspace-dock__settings-trigger').click()
-    const panel = page.locator('#workspace-settings-panel')
-    await expect(panel).toBeVisible()
-    const box = await panel.boundingBox()
-    expect(box?.x ?? -1).toBeGreaterThanOrEqual(0)
-    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(375)
+    const settingsPanel = page.locator('#workspace-settings-panel')
+    await expect(settingsPanel).toBeVisible()
+    const settingsPanelBox = await settingsPanel.boundingBox()
+    expect(settingsPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+    expect((settingsPanelBox?.x ?? 0) + (settingsPanelBox?.width ?? 0)).toBeLessThanOrEqual(375)
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.workspace-dock__settings-trigger')).toBeFocused()
+    await page.locator('.workspace-dock__notification-trigger').click()
+    const notificationsPanel = page.locator('#workspace-notifications-panel')
+    await expect(notificationsPanel).toBeVisible()
+    await expect(notificationsPanel.getByRole('heading', { name: 'Notification center', level: 2 })).toBeVisible()
+    const notificationsPanelBox = await notificationsPanel.boundingBox()
+    expect(notificationsPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+    expect((notificationsPanelBox?.x ?? 0) + (notificationsPanelBox?.width ?? 0)).toBeLessThanOrEqual(375)
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
   })
 })
@@ -6189,7 +6242,7 @@ test('整站 Header 可折叠(仅工作台页):两态高度、aria 翻转、无�
   // ---- 折叠态的 a11y ----
   // 顶栏内的链接 / 控件移出可达性树与 Tab 序。
   expect(await page.locator('.site-header__inner').evaluate((el) => el.hasAttribute('inert')), '折叠态顶栏内层 inert').toBe(true)
-  // 顶栏内的控件(品牌链接 / 语言 / 账号)逐个试聚焦:inert 让它们既离开可达性树、也离开 Tab 序。
+  // 顶栏内的控件(品牌链接 / 账号)逐个试聚焦:inert 让它们既离开可达性树、也离开 Tab 序。
   const innerControls = await page.locator('.site-header__inner').evaluate((el) => {
     const candidates = Array.from(el.querySelectorAll<HTMLElement>('a, button, [tabindex]'))
     const focusable = candidates.filter((candidate) => { candidate.focus(); return document.activeElement === candidate }).length
@@ -8602,8 +8655,9 @@ test('工作区底栏 @375:多项目条目区可滚动，计数、触达与相�
   const groups = page.locator('.workspace-dock__groups')
   expect(await groups.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
   expect(await horizontalOverflow(page)).toBe(0)
-  const bell = page.locator('.workspace-dock__settings-trigger')
+  const bell = page.locator('.workspace-dock__notification-trigger')
   await expect(bell).toBeInViewport()
+  await expect(page.locator('.workspace-dock__settings-trigger')).toBeInViewport()
   for (const chip of await page.locator('.workspace-dock__chip').all()) {
     const restore = await chip.locator('.workspace-dock__restore').boundingBox()
     const menu = await chip.locator('.workspace-dock__menu').boundingBox()
@@ -8622,7 +8676,7 @@ test('通知中心:看完全部通知后显示空态、聚合徽标消失', asyn
   await waitForStable(page)
   for (const sessionId of ['roadmap', 'launch', 'release']) {
     // 键盘打开会聚焦首项；异步移除上一条已读通知不能误关浮层。
-    await page.locator('.workspace-dock__settings-trigger').focus()
+    await page.locator('.workspace-dock__notification-trigger').focus()
     await page.keyboard.press('Enter')
     await page.locator(`.workspace-dock__notice[data-session-id="${sessionId}"]`).click()
     await expect(page.locator('.conversation-tab[aria-selected="true"]')).toHaveAttribute('data-tab-id', sessionId)
@@ -8630,8 +8684,8 @@ test('通知中心:看完全部通知后显示空态、聚合徽标消失', asyn
   }
   await expect(page.locator('.workspace-dock__notification-badge')).toHaveCount(0)
   await expect(page.locator('.agent-context-switcher__badge')).toHaveCount(0)
-  await page.locator('.workspace-dock__settings-trigger').click()
-  await expect(page.locator('#workspace-settings-panel')).toContainText('没有新通知')
+  await page.locator('.workspace-dock__notification-trigger').click()
+  await expect(page.locator('#workspace-notifications-panel')).toContainText('没有新通知')
 })
 
 test.describe('后台运行与最小化', () => {
@@ -8648,7 +8702,7 @@ test.describe('后台运行与最小化', () => {
     await selectAgent(page, AGENT_NAMES['zh-CN'].research)
     await expect(agentTab(page, 'research')).toHaveCount(1)
     await expect(page.locator('.workspace-projects')).toContainText('user-research')
-    await page.locator('.workspace-dock__settings-trigger').click()
+    await page.locator('.workspace-dock__notification-trigger').click()
     const notice = page.locator('.workspace-dock__notice[data-session-id="weekly"]')
     await expect(notice).toBeVisible({ timeout: 15000 })
     await notice.click()
@@ -8694,8 +8748,8 @@ test('通知中心:错误态可重试，重试后从 loading 回到通知列表'
   await waitForStable(page)
   await page.goto('/#/workspace?s=error')
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'error')
-  await page.locator('.workspace-dock__settings-trigger').click()
-  const panel = page.locator('#workspace-settings-panel')
+  await page.locator('.workspace-dock__notification-trigger').click()
+  const panel = page.locator('#workspace-notifications-panel')
   await expect(panel).toContainText('通知加载失败')
   await panel.getByRole('button', { name: '重试', exact: true }).click()
   await expect(panel.locator('.workspace-dock__notice')).toHaveCount(3)

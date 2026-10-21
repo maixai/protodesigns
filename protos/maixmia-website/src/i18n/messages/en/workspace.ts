@@ -242,9 +242,9 @@ export const workspace = {
     label: 'Notifications', title: 'Notification center', scope: 'All agents', globalRegion: 'Global notifications', empty: 'No new notifications', awaiting: 'Needs you', completed: 'Completed', badge: '{count} pending', badgeDone: '{count} completed', badgeTotal: '{count} total', open: 'Open "{title}"',
     loading: 'Loading notifications…', error: 'Unable to load notifications',
   },
-  // Global settings at the dock's right edge: the panel opened by the gear.
-  // Language is a real global setting; the notification center lives here too
-  // (notifications are global, not owned by an agent).
+  // Global settings sits at the dock's left edge; the panel only holds global
+  // configuration (currently language). Notifications live at the right edge
+  // behind the bell and are no longer mixed into the settings panel.
   settings: {
     label: 'Global settings',
     title: 'Global settings',

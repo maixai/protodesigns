@@ -245,8 +245,8 @@ export const workspace = {
     label: '通知', title: '通知中心', scope: '全部 Agent', globalRegion: '全局通知', empty: '没有新通知', awaiting: '等待你', completed: '已完成', badge: '{count} 条待处理', badgeDone: '{count} 条已完成', badgeTotal: '共 {count} 条', open: '打开「{title}」',
     loading: '正在加载通知…', error: '通知加载失败',
   },
-  // 底栏右端的全局设置:齿轮图标打开的面板。语言是真正影响全局的设置;
-  // 通知中心同置此处(通知是全局的,和设置一样不属于某个 Agent)。
+  // 底栏三段的左端是全局设置:齿轮打开的面板只放全局配置(当前是语言)。
+  // 通知中心独立在右端,由铃铛进入,不再和设置混在同一个面板里。
   settings: {
     label: '全局设置',
     title: '全局设置',

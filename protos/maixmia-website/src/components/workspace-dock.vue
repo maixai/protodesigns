@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 最小化条按 Agent 分域，通知中心跨 Agent 聚合；浮层放在滚动条目区之外，避免裁切焦点环。
+// 三段式底栏:左端全局设置、中间按 Agent 分域的最小化条目、右端状态 / 通知。
+// 设置与通知是两种不同语义的全局入口,不再合并到同一个按钮与面板里。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
@@ -37,6 +38,7 @@ const emit = defineEmits<{
 const { t, locale, setLocale } = useI18n()
 const root = ref<HTMLElement | null>(null)
 const settingsTrigger = ref<HTMLButtonElement | null>(null)
+const notificationTrigger = ref<HTMLButtonElement | null>(null)
 const activePanel = ref('')
 const panelRef = ref<HTMLElement | null>(null)
 const badges = computed(() => badgeMapOf(props.projects))
@@ -45,10 +47,10 @@ const validGroups = computed(() => props.groups.filter((group) => group.memberId
 const waitingCount = computed(() => props.notifications.filter((item) => item.status === 'awaiting').length)
 const completedCount = computed(() => props.notifications.filter((item) => item.status === 'completed').length)
 const notificationCount = computed(() => waitingCount.value || completedCount.value)
-// 全局设置钮的可见徽标与可访问名必须同源:徽标优先等待数,读屏也先报等待数,
+// 通知铃铛的可见徽标与可访问名必须同源:徽标优先等待数,读屏也先报等待数,
 // 总数不同时再补一句「共 N 条」—— 两处读到的数字不能各说各话。
-const settingsLabel = computed(() => {
-  const base = t.value.workspace.settings.label
+const notificationLabel = computed(() => {
+  const base = t.value.workspace.notifications.label
   const total = props.notifications.length
   if (total === 0) return base
   const primary = waitingCount.value > 0
@@ -88,6 +90,7 @@ function close(restoreFocus = false): void {
   activePanel.value = ''
   if (!restoreFocus) return
   if (previous === 'settings') settingsTrigger.value?.focus()
+  else if (previous === 'notifications') notificationTrigger.value?.focus()
   else root.value?.querySelector<HTMLButtonElement>(`[data-group-menu="${CSS.escape(previous)}"]`)?.focus()
 }
 async function toggle(id: string, event: MouseEvent): Promise<void> {
@@ -109,8 +112,8 @@ function openNotification(item: AgentNotification): void {
   emit('notification', item)
 }
 function retryNotifications(): void {
-  // 重试按钮会在加载态卸载，先把焦点移回仍在根容器内的设置钮，避免 focusout 误关浮层。
-  settingsTrigger.value?.focus()
+  // 重试按钮会在加载态卸载，先把焦点移回仍在根容器内的通知铃铛，避免 focusout 误关浮层。
+  notificationTrigger.value?.focus()
   emit('retry')
 }
 function onKeydown(event: KeyboardEvent): void {
@@ -137,12 +140,12 @@ function onOutside(event: PointerEvent): void {
   if (event.target instanceof Node && !root.value?.contains(event.target)) close()
 }
 watch(() => props.agentId, () => close())
-// 异步已读刷新可能移除键盘正在聚焦的条目；先移到设置钮，避免卸载引发的 focusout 误关面板。
+// 异步已读刷新可能移除键盘正在聚焦的条目；先移到通知铃铛，避免卸载引发的 focusout 误关面板。
 watch(() => props.notifications, () => {
-  if (activePanel.value !== 'settings') return
+  if (activePanel.value !== 'notifications') return
   const focused = document.activeElement
   const sessionId = focused instanceof HTMLElement ? focused.closest<HTMLElement>('[data-session-id]')?.dataset.sessionId : undefined
-  if (sessionId !== undefined && !props.notifications.some((item) => item.sessionId === sessionId)) settingsTrigger.value?.focus()
+  if (sessionId !== undefined && !props.notifications.some((item) => item.sessionId === sessionId)) notificationTrigger.value?.focus()
 })
 onMounted(() => document.addEventListener('pointerdown', onOutside))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
@@ -150,8 +153,20 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 
 <template>
   <div ref="root" class="workspace-dock" :aria-label="t.workspace.dock.label" role="region" @keydown="onKeydown" @focusout="onFocusOut">
-    <!-- 最左端直接是本域的最小化条目(Agent 选择已回到侧栏顶部);
-         底栏中央留给「收起了哪些页面」。 -->
+    <!-- 左端是全局设置 utility:与中间的最小化条目用发丝线隔开,不占通知语义。 -->
+    <div class="workspace-dock__global-settings" role="group" :aria-label="t.workspace.settings.label">
+      <button
+        ref="settingsTrigger" type="button" class="workspace-dock__settings-trigger"
+        :aria-label="t.workspace.settings.label"
+        :aria-expanded="activePanel === 'settings'" aria-controls="workspace-settings-panel"
+        @click="toggle('settings', $event)"
+      >
+        <DliIcon name="settings" size="md" />
+      </button>
+      <span class="workspace-dock__settings-tooltip" aria-hidden="true">{{ t.workspace.settings.label }}</span>
+    </div>
+    <span class="workspace-dock__divider" aria-hidden="true" />
+    <!-- 中间是本域的最小化条目(Agent 选择已回到侧栏顶部);底栏中央留给「收起了哪些页面」。 -->
     <div class="workspace-dock__groups" role="group" :aria-label="t.workspace.dock.minimizedRegion">
       <span v-if="validGroups.length === 0" class="workspace-dock__empty">{{ t.workspace.dock.empty }}</span>
       <div v-for="group in validGroups" :key="group.id" class="workspace-dock__chip" :class="badges.get(group.projectId)?.identityClass" :data-group-id="group.id" :data-pulsing="group.id === pulseKey ? 'true' : undefined">
@@ -161,12 +176,16 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         <button type="button" class="workspace-dock__menu" :data-group-menu="group.id" :aria-label="`${group.name} · ${t.workspace.dock.members}`" :aria-expanded="activePanel === group.id" aria-controls="dock-group-panel" @click="toggle(group.id, $event)">⋯</button>
       </div>
     </div>
-    <!-- 右侧固定「全局设置区」:齿轮不随中间条目滚动,前面用发丝竖线划出边界。
-         设置面板里同时承载通知中心(通知是全局的,和设置一样与内容条目分置两端)。 -->
+    <!-- 右端是状态 / 通知区:铃铛固定在极右;未来状态项加在铃铛左侧。 -->
     <span class="workspace-dock__divider" aria-hidden="true" />
-    <div class="workspace-dock__global-status" role="group" :aria-label="t.workspace.settings.label">
-      <button ref="settingsTrigger" type="button" class="workspace-dock__settings-trigger" :title="settingsLabel" :aria-label="settingsLabel" :aria-expanded="activePanel === 'settings'" aria-controls="workspace-settings-panel" @click="toggle('settings', $event)">
-        <DliIcon name="settings" size="md" />
+    <div class="workspace-dock__right-cluster">
+      <button
+        ref="notificationTrigger" type="button" class="workspace-dock__notification-trigger"
+        :title="notificationLabel" :aria-label="notificationLabel"
+        :aria-expanded="activePanel === 'notifications'" aria-controls="workspace-notifications-panel"
+        @click="toggle('notifications', $event)"
+      >
+        <DliIcon name="bell" size="md" />
         <span v-if="notificationCount" class="workspace-dock__notification-badge" aria-hidden="true">{{ notificationCount > 99 ? '99+' : notificationCount }}</span>
       </button>
     </div>
@@ -175,7 +194,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
       <button v-for="id in activeGroup.memberIds" :key="id" type="button" class="workspace-dock__member" :data-member-id="id" :aria-label="t.workspace.dock.restoreMember.replace('{name}', labelOf(id))" @click="restore(activeGroup.id, id)">{{ labelOf(id) }}</button>
       <button type="button" class="workspace-dock__close" :disabled="disabled" @click="closeGroup(activeGroup.id)">{{ t.workspace.dock.closeGroup }}</button>
     </div>
-    <div v-else-if="activePanel === 'settings'" id="workspace-settings-panel" ref="panelRef" class="workspace-dock__panel workspace-dock__panel--settings" role="region" :aria-label="t.workspace.settings.label" :aria-busy="notificationsStatus === 'loading'">
+    <div v-else-if="activePanel === 'settings'" id="workspace-settings-panel" ref="panelRef" class="workspace-dock__panel workspace-dock__panel--settings" role="region" :aria-label="t.workspace.settings.label">
       <h2>{{ t.workspace.settings.title }}</h2>
       <!-- 语言是真正影响全局的设置;两个 aria-pressed 按钮是切换钮,不是 menu。 -->
       <div class="workspace-dock__setting-row">
@@ -185,20 +204,18 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
           <button type="button" :aria-pressed="locale === 'en'" @click="setLocale('en')">English</button>
         </div>
       </div>
-      <div class="workspace-dock__panel-divider" aria-hidden="true" />
-      <!-- 通知中心随设置入口一起承载:通知是全局的,与设置同置底栏右端。 -->
-      <section class="workspace-dock__settings-notifications" :aria-label="t.workspace.notifications.title">
-        <h3>{{ t.workspace.notifications.title }}</h3>
-        <p class="workspace-dock__scope">{{ t.workspace.notifications.scope }}</p>
-        <p v-if="notificationsStatus === 'loading'">{{ t.workspace.notifications.loading }}</p>
-        <template v-else-if="notificationsStatus === 'error'"><p>{{ t.workspace.notifications.error }}</p><button type="button" class="workspace-dock__retry" @click="retryNotifications">{{ t.workspace.retry }}</button></template>
-        <p v-else-if="notificationGroups.length === 0">{{ t.workspace.notifications.empty }}</p>
-        <section v-for="group in notificationsStatus === 'ready' ? notificationGroups : []" :key="group.agentId" class="workspace-dock__notification-group" :data-agent="group.agentId">
-          <h4>{{ agentNameOf(group.agentId) }} · {{ group.items.length }}</h4>
-          <button v-for="item in group.items" :key="item.id" type="button" class="workspace-dock__notice" :data-session-id="item.sessionId" :data-status="item.status" :aria-label="t.workspace.notifications.open.replace('{title}', item.title)" @click="openNotification(item)">
-            <span>{{ item.title }}</span><span class="workspace-dock__notice-meta"><span>{{ projects.find(project => project.id === item.projectId)?.name ?? item.projectId }}</span><span class="workspace-dock__notice-status" :data-status="item.status">{{ item.status === 'awaiting' ? t.workspace.sessionStatus.awaiting : t.workspace.sessionStatus.completed }}</span><time :datetime="item.updatedAt">{{ formatTime(item.updatedAt) }}</time></span>
-          </button>
-        </section>
+    </div>
+    <div v-else-if="activePanel === 'notifications'" id="workspace-notifications-panel" ref="panelRef" class="workspace-dock__panel workspace-dock__panel--notifications" role="region" :aria-label="t.workspace.notifications.title" :aria-busy="notificationsStatus === 'loading'">
+      <h2>{{ t.workspace.notifications.title }}</h2>
+      <p class="workspace-dock__scope">{{ t.workspace.notifications.scope }}</p>
+      <p v-if="notificationsStatus === 'loading'">{{ t.workspace.notifications.loading }}</p>
+      <template v-else-if="notificationsStatus === 'error'"><p>{{ t.workspace.notifications.error }}</p><button type="button" class="workspace-dock__retry" @click="retryNotifications">{{ t.workspace.retry }}</button></template>
+      <p v-else-if="notificationGroups.length === 0">{{ t.workspace.notifications.empty }}</p>
+      <section v-for="group in notificationsStatus === 'ready' ? notificationGroups : []" :key="group.agentId" class="workspace-dock__notification-group" :data-agent="group.agentId">
+        <h4>{{ agentNameOf(group.agentId) }} · {{ group.items.length }}</h4>
+        <button v-for="item in group.items" :key="item.id" type="button" class="workspace-dock__notice" :data-session-id="item.sessionId" :data-status="item.status" :aria-label="t.workspace.notifications.open.replace('{title}', item.title)" @click="openNotification(item)">
+          <span>{{ item.title }}</span><span class="workspace-dock__notice-meta"><span>{{ projects.find(project => project.id === item.projectId)?.name ?? item.projectId }}</span><span class="workspace-dock__notice-status" :data-status="item.status">{{ item.status === 'awaiting' ? t.workspace.sessionStatus.awaiting : t.workspace.sessionStatus.completed }}</span><time :datetime="item.updatedAt">{{ formatTime(item.updatedAt) }}</time></span>
+        </button>
       </section>
     </div>
   </div>
@@ -210,9 +227,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
   --dock-height: 50px;
   --dock-chip-max: 280px;
   --dock-panel-width: 420px;
+  --dock-settings-panel-width: 320px;
   position: relative; grid-column: 1 / -1; display: flex; align-items: center; gap: var(--dl-space-3); height: var(--dock-height); min-width: 0; padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm);
 }
-.workspace-dock__global-status { display: flex; flex: none; align-items: center; min-width: 0; }
+.workspace-dock__global-settings { position: relative; display: flex; flex: none; align-items: center; min-width: 0; }
+.workspace-dock__right-cluster { display: flex; flex: none; align-items: center; gap: var(--dl-space-2); min-width: 0; }
 .workspace-dock__divider { flex: none; inline-size: var(--dl-border-width); block-size: var(--dl-space-6); background: var(--dl-border-base); }
 .workspace-dock__groups { display: flex; align-items: center; gap: var(--dl-space-2); flex: 1 1 0; min-width: 0; overflow-x: auto; overscroll-behavior: contain; padding: var(--dl-space-1); }
 .workspace-dock__empty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
@@ -228,16 +247,25 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .workspace-dock__badge[data-running='true'] { color: var(--dl-accent); }
 .workspace-dock__notice-status[data-status='awaiting'] { color: var(--dl-warning); }
 .workspace-dock__notice-status[data-status='completed'] { color: var(--dl-success); }
-.workspace-dock__menu, .workspace-dock__settings-trigger { flex: none; min-width: var(--workspace-nav-control-size); width: var(--workspace-nav-control-size); padding: 0; border-radius: var(--dl-radius-md); }
-.workspace-dock__restore, .workspace-dock__menu, .workspace-dock__settings-trigger { min-height: var(--workspace-nav-control-size); color: var(--dl-text-primary); }
-.workspace-dock__settings-trigger { position: relative; display: flex; flex: none; align-items: center; justify-content: center; }
-.workspace-dock__settings-trigger .dl-icon { color: var(--dl-text-secondary); }
+.workspace-dock__menu, .workspace-dock__settings-trigger, .workspace-dock__notification-trigger { flex: none; min-width: var(--workspace-nav-control-size); width: var(--workspace-nav-control-size); padding: 0; border-radius: var(--dl-radius-md); }
+.workspace-dock__restore, .workspace-dock__menu, .workspace-dock__settings-trigger, .workspace-dock__notification-trigger { min-height: var(--workspace-nav-control-size); color: var(--dl-text-primary); }
+/* 左端设置与右端铃铛都保持 icon-only;文字只留在 title / aria-label 里。 */
+.workspace-dock__settings-trigger { display: flex; flex: none; align-items: center; justify-content: center; color: var(--dl-text-secondary); }
+.workspace-dock__notification-trigger { position: relative; display: flex; flex: none; align-items: center; justify-content: center; }
+/* 设置只有图标,补一枚显式 tooltip:悬停 / 键盘聚焦都可见;文字同时由按钮 aria-label 提供。 */
+.workspace-dock__settings-tooltip { position: absolute; inset-block-end: calc(100% + var(--dl-space-2)); inset-inline-start: 0; z-index: var(--dl-z-overlay); padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.workspace-dock__global-settings:hover .workspace-dock__settings-tooltip,
+.workspace-dock__settings-trigger:focus-visible + .workspace-dock__settings-tooltip { opacity: 1; visibility: visible; }
+.workspace-dock__settings-trigger .dl-icon, .workspace-dock__notification-trigger .dl-icon { color: var(--dl-text-secondary); }
+.workspace-dock__settings-trigger:hover, .workspace-dock__notification-trigger:hover { color: var(--dl-text-primary); }
+.workspace-dock__settings-trigger:hover .dl-icon, .workspace-dock__notification-trigger:hover .dl-icon { color: var(--dl-text-primary); }
 .workspace-dock__notification-badge { position: absolute; inset-block-start: calc(-1 * var(--dl-space-1)); inset-inline-end: calc(-1 * var(--dl-space-1)); border-radius: var(--dl-radius-pill); padding-inline: var(--dl-space-1); font-size: var(--dl-font-size-xs); background: var(--dl-accent); color: var(--dl-text-on-accent); font-variant-numeric: tabular-nums; }
 .workspace-dock__panel { position: absolute; inset-block-end: calc(100% + var(--dl-space-2)); z-index: var(--dl-z-overlay); width: min(var(--dock-panel-width), calc(100vw - 4 * var(--dl-space-2))); max-height: min(70dvh, calc(100dvh - 2 * var(--dock-height))); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-lg); }
 .workspace-dock__panel--members { inset-inline-start: 0; }
-.workspace-dock__panel--settings { inset-inline-end: 0; }
+.workspace-dock__panel--settings { inset-inline-start: 0; width: min(var(--dock-settings-panel-width), calc(100vw - 4 * var(--dl-space-2))); }
+.workspace-dock__panel--notifications { inset-inline-end: 0; }
 .workspace-dock__panel h2 { font-size: var(--dl-font-size-md); font-weight: 500; }
-.workspace-dock__panel h3, .workspace-dock__panel h4 { font-size: var(--dl-font-size-sm); font-weight: 500; color: var(--dl-text-secondary); padding: var(--dl-space-2); }
+.workspace-dock__panel h4 { font-size: var(--dl-font-size-sm); font-weight: 500; color: var(--dl-text-secondary); padding: var(--dl-space-2); }
 .workspace-dock__panel p { font-size: var(--dl-font-size-sm); color: var(--dl-text-secondary); }
 .workspace-dock__scope { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 /* 设置面板:一行设置的 label + 控件;语言是两个 aria-pressed 切换钮。 */
@@ -246,8 +274,6 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .workspace-dock__language { display: flex; align-items: center; gap: var(--dl-space-1); }
 .workspace-dock__language button { min-height: var(--dl-control-height); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .workspace-dock__language button[aria-pressed='true'] { border-color: transparent; background: var(--dl-accent); color: var(--dl-text-on-accent); }
-.workspace-dock__panel-divider { block-size: var(--dl-border-width); background: var(--dl-border-base); }
-.workspace-dock__settings-notifications { display: flex; flex-direction: column; gap: var(--dl-space-2); }
 .workspace-dock__member, .workspace-dock__close, .workspace-dock__notice { min-height: var(--dl-target-size); padding: var(--dl-space-2); border-radius: var(--dl-radius-sm); text-align: left; color: var(--dl-text-primary); overflow-wrap: anywhere; }
 .workspace-dock__close { border-block-start: var(--dl-border-width) solid var(--dl-border-base); color: var(--dl-error); }
 .workspace-dock__retry { align-self: flex-start; min-height: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); background: var(--dl-bg-elevated); }
@@ -257,6 +283,9 @@ button:hover { background: var(--dl-bg-hover); }
 button:focus-visible { box-shadow: var(--dl-focus-ring); }
 button:active { transform: translateY(var(--dl-lift-press)); }
 button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken); cursor: not-allowed; transform: none; }
-@media (max-width: 767px) { .workspace-dock { gap: var(--dl-space-1); padding-inline: var(--dl-space-2); } .workspace-dock__chip { max-width: calc(4 * var(--dl-space-12)); } }
+@media (max-width: 767px) {
+  .workspace-dock { gap: var(--dl-space-1); padding-inline: var(--dl-space-2); }
+  .workspace-dock__chip { max-width: calc(4 * var(--dl-space-12)); }
+}
 @media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
 </style>

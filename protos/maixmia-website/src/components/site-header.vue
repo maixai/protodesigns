@@ -1,16 +1,19 @@
 <script setup lang="ts">
 // 顶栏:首页与工作台共用深色 sticky;登录直接同步切换到工作台。
+// 语言切换不属于共享顶栏:首页在页脚切换,工作台在底栏「全局设置」切换。
 import { NConfigProvider } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { darkOverrides } from '../theme'
 import { useI18n } from '../i18n'
 import { isAuthenticated, signIn } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
-import LanguageSwitcher from './language-switcher.vue'
 import AccountMenu from './account-menu.vue'
 
 const { t } = useI18n()
 const loginRef = ref<HTMLButtonElement | null>(null)
+
+// 工作台页启用顶栏折叠;首页顶栏常驻。
+const isWorkspace = computed(() => currentRoute.value.page === 'workspace')
 
 // ---- 整站顶栏的折叠(只作用于**工作台页**;首页的顶栏常驻)----
 //
@@ -23,7 +26,7 @@ const loginRef = ref<HTMLButtonElement | null>(null)
 // 状态是**视图状态**(刷新即重置),与仓库约定一致。
 const isCollapsed = ref(false)
 // 只有工作台页提供折叠(首页的整站 Header 保持常驻)。
-const canCollapse = computed(() => currentRoute.value.page === 'workspace')
+const canCollapse = isWorkspace
 const isCollapsedNow = computed(() => canCollapse.value && isCollapsed.value)
 
 function toggleHeader(): void {
@@ -68,7 +71,6 @@ async function onSignedOut(): Promise<void> {
         </a>
 
         <div class="site-header__actions">
-          <LanguageSwitcher />
           <AccountMenu v-if="isAuthenticated" @signed-out="onSignedOut" />
           <button v-else ref="loginRef" class="dl-btn dl-btn--primary" type="button" @click="onLogin">
             {{ t.nav.login }}

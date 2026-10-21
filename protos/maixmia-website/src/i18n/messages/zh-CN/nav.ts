@@ -8,9 +8,7 @@ export const nav = {
   config: '统一管理',
   quickstart: '快速开始',
   features: '功能亮点',
-  language: '语言',
   login: '登录',
-  currentLanguage: '当前语言',
   // 工作台页的整站 Header 折叠控件(首页不渲染它)。
   collapseHeader: '收起顶栏',
   expandHeader: '展开顶栏',

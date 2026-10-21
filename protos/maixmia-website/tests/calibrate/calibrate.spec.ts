@@ -671,9 +671,9 @@ test('顶栏滚动时固定在视口顶端', async ({ page }) => {
   const top = await header.evaluate((el) => el.getBoundingClientRect().top)
   expect(Math.abs(top)).toBeLessThanOrEqual(1)
 
-  // 滚动状态下语言切换与登录仍可见可点,不是"滚到中部就够不着"。
-  // (顶栏已精简:无导航项与 CTA 链接,只留品牌 / 语言 / 登录。)
-  await expect(header.getByRole('button', { name: 'Language' })).toBeVisible()
+  // 滚动状态下登录仍可见可点;语言入口已从共享顶栏移除(首页在页脚切换)。
+  // (顶栏已精简:无导航项 / 语言 / CTA 链接,只留品牌 / 登录。)
+  await expect(header.getByRole('button', { name: 'Language' })).toHaveCount(0)
   const login = header.getByRole('button', { name: 'Sign in' })
   await expect(login).toBeVisible()
 
@@ -704,9 +704,8 @@ test('切换语言后页面文案与 <html lang> 随之变化', async ({ page })
     page.getByRole('heading', { level: 1, name: 'Your AI agent, always within reach' }),
   ).toBeVisible()
 
-  await page.getByRole('button', { name: 'Language' }).click()
-  // disclosure 的命名容器中使用天然可聚焦的原生按钮。
-  await page.locator('.site-header').getByRole('group', { name: 'Language', exact: true }).getByRole('button', { name: '中文', exact: true }).click()
+  // 语言切换在页脚;共享顶栏不再承载语言入口。
+  await page.locator('.site-footer').getByRole('button', { name: '中文', exact: true }).click()
 
   await expect(
     page.getByRole('heading', { level: 1, name: '随时在你身边的 AI Agent' }),
@@ -864,9 +863,9 @@ test('安装引导:外框满宽、左列守行宽、三面板高度齐平(双语
   // en @ 1280(默认语言)
   await expectInstallGeometry(page, 1280)
 
-  // zh @ 1280:经语言 disclosure 的原生按钮切换
-  await page.getByRole('button', { name: 'Language' }).click()
-  await page.locator('.site-header').getByRole('group', { name: 'Language', exact: true }).getByRole('button', { name: '中文', exact: true }).click()
+  // zh @ 1280:经页脚语言按钮切换
+  await page.locator('.site-footer').getByRole('button', { name: '中文', exact: true }).click()
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
   await expectInstallGeometry(page, 1280)
 
@@ -875,8 +874,8 @@ test('安装引导:外框满宽、左列守行宽、三面板高度齐平(双语
   await expectInstallGeometry(page, 1600)
 
   // en @ 1600
-  await page.getByRole('button', { name: '语言' }).click()
-  await page.locator('.site-header').getByRole('group', { name: '语言', exact: true }).getByRole('button', { name: 'English', exact: true }).click()
+  await page.locator('.site-footer').getByRole('button', { name: 'English', exact: true }).click()
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expectInstallGeometry(page, 1600)
 })
@@ -887,7 +886,7 @@ test('安装引导:外框满宽、左列守行宽、三面板高度齐平(双语
 // 内容(反模式)或删真实内容。故窄屏用比例红线:最矮面板与容器之差 ≤ 容器高的
 // 1/8(约一个内容块的高度;小于一个内容块的空档不会被读作「缺了一块」)。
 // 断言没跑到的地方就是问题藏身处:375 / 768 双语都覆盖。
-// 语言经 context locale 注入(navigator.language → 初始语言),不走语言下拉 ——
+// 语言经 context locale 注入(navigator.language → 初始语言),不点页脚语言按钮 ——
 // 本测试断言的是几何,语言只是输入;并行负载下下拉点击不是确定路径。
 test('窄屏(375 / 768):安装引导空白带在比例红线内(双语)', async ({ browser }) => {
   for (const width of [375, 768] as const) {
@@ -1408,7 +1407,7 @@ async function expectActiveTabInView(page: Page): Promise<void> {
 test('375px:安装 Tab 行溢出端渐隐、激活对齐进可视区且无碎片(m2,双语)', async ({
   browser,
 }) => {
-  // 语言经 context locale 注入(同窄屏测试的理由:并行负载下语言下拉不是确定路径)
+  // 语言经 context locale 注入(同窄屏测试的理由:并行负载下页脚语言按钮不是确定路径)
   for (const locale of ['en-US', 'zh-CN'] as const) {
     const context = await browser.newContext({
       viewport: { width: 375, height: VIEWPORT_HEIGHT },

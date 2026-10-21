@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 项目行的「⋯」操作菜单:原生按钮的手写 disclosure,不用 NDropdown —— 本仓实测 NDropdown
-// 的菜单项无 tabindex、键盘完全不可用(与 language-switcher / agent-selector 同因)。
+// 的菜单项无 tabindex、键盘完全不可用(与 agent-selector 同因)。
 //
 // 每个项目行各挂一个实例,开合状态留在组件内部:点其它行的 ⋯ 时,本实例会因「点击落在自己
 // 之外」而自行关闭,故同一时刻实际只有一个菜单打开,无需把状态提到页面。

@@ -5,7 +5,7 @@
 // ChatGPT 放在消息框内右下角 —— 本仓底行右侧与之一致。
 //
 // 实现刻意**不用 Naive UI 的 NDropdown**:本仓实测它的菜单项没有 tabindex、键盘完全不可用
-// (见 project-menu / language-switcher 的同一处置)。这里用原生 button 自己管焦点:
+// (见 project-menu 的同一处置)。这里用原生 button 自己管焦点:
 // 触发钮是 disclosure(aria-haspopup="menu" + aria-expanded),面板 role="menu"、项 role="menuitemradio"
 // + aria-checked,方向键在项间走、Esc 关闭并把焦点还给触发钮、选中项有可见的对勾标识。
 //

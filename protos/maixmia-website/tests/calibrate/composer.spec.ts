@@ -17,21 +17,21 @@ const FILE_DRAG_TYPE = 'application/x-maixmia-file'
 
 test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
 
-// 读应用内存里**真正存下来**的消息:浏览器侧动态 import 与应用共用同一份模块实例(同一 URL),
-// 故 mock 里存下的用户消息带什么附件,就是「发送出去的 payload」带什么 —— 用来机械验证
-// 「粘贴文本的全文随消息出去」,而不是只看芯片的展示。
+// 读应用内存里**真正存下来**的消息:通过 mock 模块在 DEV 下注册的全局桥读取,
+// 保证读到的是页面实际使用的那份实例 —— Vite 的 HMR 会给模块 URL 加 ?t= 时间戳,
+// 测试里再 import 裸路径会落到另一个模块实例,并发 / 热更新后读不到刚发送的消息。
 interface StoredMessage {
   role: string
   body: string
   attachments: { kind: string; name: string; content?: string; path?: string; charCount?: number }[]
 }
 
+declare global {
+  var __maixmiaMock: { mockTranscript: (sessionId: string) => StoredMessage[] } | undefined
+}
+
 function storedMessages(page: Page): Promise<StoredMessage[]> {
-  return page.evaluate(async (): Promise<StoredMessage[]> => {
-    const moduleUrl = '/src/mocks/workspace.ts'
-    const mod: { mockTranscript: (sessionId: string) => StoredMessage[] } = await import(moduleUrl)
-    return mod.mockTranscript('weekly')
-  })
+  return page.evaluate((): StoredMessage[] => globalThis.__maixmiaMock?.mockTranscript('weekly') ?? [])
 }
 
 // 等「这一轮用户消息」落定(发送是异步的:mock 在延迟后才记录)。

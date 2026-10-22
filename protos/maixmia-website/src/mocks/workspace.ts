@@ -1507,3 +1507,11 @@ export function mockSearchHits(query: string, demoState: AppRoute['demoState']):
   }
   return hits
 }
+
+// 开发期给校准测试一个读取「页面实际在使用的那份 mock 状态」的入口。
+// HMR 会给模块 URL 追加 ?t= 时间戳,测试里再 import('/src/mocks/workspace.ts')
+// 可能落到另一个模块实例,读不到页面刚写入的消息;桥接保证读写的是同一份内存状态。
+if (import.meta.env.DEV) {
+  const host = globalThis as typeof globalThis & { __maixmiaMock?: { mockTranscript: typeof mockTranscript } }
+  host.__maixmiaMock = { mockTranscript }
+}

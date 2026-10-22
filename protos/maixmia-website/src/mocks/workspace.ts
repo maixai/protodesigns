@@ -13,6 +13,7 @@ import type { PluginConfigValue } from '../contracts/generated/plugin-config-val
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
+import type { SystemNotification } from '../contracts/generated/system-notification'
 import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { Project } from '../contracts/generated/project'
 import type { Skill } from '../contracts/generated/skill'
@@ -1006,6 +1007,20 @@ export function mockAgentNotifications(demoState: AppRoute['demoState'], seenSes
     .filter((session) => !seen.has(session.id) && (session.status === 'awaiting' || session.status === 'completed'))
     .map((session) => ({ id: `notice:${session.id}`, agentId: session.agent, projectId: session.projectId, sessionId: session.id, title: session.title, status: session.status, updatedAt: session.updatedAt }))
     .sort((a, b) => Number(b.status === 'awaiting') - Number(a.status === 'awaiting') || b.updatedAt.localeCompare(a.updatedAt))
+}
+
+// 系统通知独立于会话，展开不改变已读状态；仅按显式传入的已读集合过滤。
+export function mockSystemNotifications(demoState: AppRoute['demoState'], seenIds: readonly string[]): SystemNotification[] {
+  if (demoState === 'empty') return []
+  const items = t.value.workspace.notifications.systemItems
+  const notices: SystemNotification[] = [
+    { id: 'notice:system:connection', kind: 'connection', severity: 'warning', ...items.connection, createdAt: '2026-10-08T09:45:00Z' },
+    { id: 'notice:system:update', kind: 'update', severity: 'info', ...items.update, createdAt: '2026-10-08T06:10:00Z' },
+    { id: 'notice:system:storage', kind: 'storage', severity: 'warning', ...items.storage, createdAt: '2026-10-07T18:20:00Z' },
+    { id: 'notice:system:security', kind: 'security', severity: 'info', ...items.security, createdAt: '2026-10-06T21:14:00Z' },
+  ]
+  const seen = new Set(seenIds)
+  return notices.filter((item) => !seen.has(item.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 export function mockTranscript(sessionId: string): ChatMessage[] {

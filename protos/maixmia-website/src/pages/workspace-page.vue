@@ -12,6 +12,7 @@ import type { Project } from '../contracts/generated/project'
 import type { Skill } from '../contracts/generated/skill'
 import type { ProjectEntry, ProjectEntryStateId } from '../contracts/generated/project-entry'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
+import type { SystemNotification } from '../contracts/generated/system-notification'
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
 import type { ProjectTreeRow } from '../data/project-tree'
@@ -27,7 +28,7 @@ import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
 import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
-import { closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
+import { closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listSystemNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
@@ -77,6 +78,10 @@ const openMenuSurfaceId = ref('')
 const tabAnnounce = ref('')
 const seenSessions = ref<Set<string>>(new Set())
 const agentNotifications = ref<AgentNotification[]>([])
+const systemNotifications = ref<SystemNotification[]>([])
+const seenSystemNotices = ref<Set<string>>(new Set())
+// 通知跨 Agent 展示，项目名称与身份色需来自全部 Agent，而非当前侧栏的一部分。
+const notificationProjects = ref<Project[]>([])
 const notificationsStatus = ref<'loading' | 'ready' | 'error'>('loading')
 let notificationVersion = 0
 const pageRoot = ref<HTMLElement | null>(null)
@@ -418,7 +423,9 @@ function chipLabel(state: ProjectEntryStateId): string | null {
   return t.value.workspace.entryStates[state]
 }
 function formatTime(timestamp: string): string {
-  return new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(timestamp))
+  // 通知需要精确到分钟:同一天的两条系统通知只显示日期会分不出先后。
+  // 固定 UTC 与 24 小时制,演示数据不随本机时区与语言的小时制漂移。
+  return new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(timestamp))
 }
 // 文件数文案(项目行 title 与「打开项目」对话框共用)。
 function formatFileCount(count: number): string {
@@ -1900,6 +1907,8 @@ async function openNotification(item: AgentNotification): Promise<void> {
   activateChatContent(surfaceId, chatTabOf(target))
   await ensureRuntime(target.id)
   if (isDrawerOpen.value) await closeDrawer()
+  // 会话装载期间若已重新进入底栏，不用迟到的回焦打断通知 Tab 或已读操作。
+  if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.workspace-dock') !== null) return
   focusRestoredTab(id, surfaceId)
 }
 
@@ -2264,6 +2273,7 @@ function syncSwipeGuard(event: Event): void {
 // 演示态把「落点 / 侧栏 Agent」钉到与该状态一致的一组;切换演示态时清空「已看过」集合。
 function applyDemoState(demo: AppRoute['demoState']): void {
   seenSessions.value = new Set()
+  seenSystemNotices.value = new Set()
   // Agent 可能已被删除:演示态只在目标 Agent 仍存在时切换(首次装载时列表为空,直接采用默认)。
   const pickAgent = (agentId: AgentId): void => {
     if (agents.value.length === 0 || agents.value.some((agent) => agent.id === agentId)) selectedAgent.value = agentId
@@ -2358,19 +2368,37 @@ watch([layout, sessions, chatRuntimes], () => {
   }
   if (changed) seenSessions.value = next
 })
-watch([sessions, seenSessions, () => Object.entries(chatRuntimes.value).map(([id, runtime]) => `${id}:${runtime.generation}:${runtime.isSaving}`).join('|')], () => { void loadAgentNotifications() })
-function retryAgentNotifications(): void {
-  notificationsStatus.value = 'loading'
-  if (!leaveDataDemoState()) void loadAgentNotifications()
+watch([sessions, seenSessions, seenSystemNotices, locale, () => Object.entries(chatRuntimes.value).map(([id, runtime]) => `${id}:${runtime.generation}:${runtime.isSaving}`).join('|')], () => { void loadNotifications() })
+function markSystemNoticeRead(id: string): void {
+  seenSystemNotices.value = new Set([...seenSystemNotices.value, id])
 }
-async function loadAgentNotifications(): Promise<void> {
+function markAllNotificationsRead(): void {
+  // 「全部已读」是全局动作:两类通知一起清空,不随当前 Tab 变化。
+  seenSessions.value = new Set([...seenSessions.value, ...agentNotifications.value.map((item) => item.sessionId)])
+  seenSystemNotices.value = new Set([...seenSystemNotices.value, ...systemNotifications.value.map((item) => item.id)])
+}
+function retryNotifications(): void {
+  notificationsStatus.value = 'loading'
+  if (!leaveDataDemoState()) void loadNotifications()
+}
+async function loadNotifications(): Promise<void> {
   notificationVersion += 1
   const version = notificationVersion
-  if (agentNotifications.value.length === 0) notificationsStatus.value = 'loading'
-  const result = await listAgentNotifications([...seenSessions.value])
+  if (agentNotifications.value.length === 0 && systemNotifications.value.length === 0) notificationsStatus.value = 'loading'
+  const [agentResult, systemResult, projectResults] = await Promise.all([
+    listAgentNotifications([...seenSessions.value]),
+    listSystemNotifications([...seenSystemNotices.value]),
+    Promise.all(agents.value.map((agent) => listProjects(agent.id))),
+  ])
   if (!isAlive.value || version !== notificationVersion) return
-  notificationsStatus.value = result.ok ? 'ready' : 'error'
-  if (result.ok) agentNotifications.value = result.value
+  if (!agentResult.ok || !systemResult.ok) {
+    notificationsStatus.value = 'error'
+    return
+  }
+  agentNotifications.value = agentResult.value
+  systemNotifications.value = systemResult.value
+  notificationProjects.value = projectResults.flatMap((result) => result.ok ? result.value : [])
+  notificationsStatus.value = 'ready'
 }
 
 onMounted(() => {
@@ -2810,7 +2838,7 @@ onBeforeUnmount(() => {
       <Transition name="split-preview">
         <div v-if="splitPreview" class="split-preview" aria-hidden="true" :style="splitPreviewStyle" />
       </Transition>
-      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="projects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryAgentNotifications" />
+      <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="notificationProjects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :system-notifications="systemNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryNotifications" @mark-system-read="markSystemNoticeRead" @mark-all-read="markAllNotificationsRead" />
     </div>
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <AgentEditorDialog

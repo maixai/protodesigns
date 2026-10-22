@@ -208,6 +208,33 @@ model AgentNotification {
   updatedAt: utcDateTime;
 }
 
+// 系统通知与应用本身相关，不属于任何会话；已读属于页面视图状态。
+enum SystemNoticeKind {
+  update,
+  connection,
+  storage,
+  security,
+  quota,
+  plugin,
+}
+
+// 紧急程度决定图标颜色与文字标签，不参与时间排序。
+enum SystemNoticeSeverity {
+  info,
+  warning,
+}
+
+@summary("SystemNotification")
+@jsonSchema
+model SystemNotification {
+  id: string;
+  kind: SystemNoticeKind;
+  severity: SystemNoticeSeverity;
+  title: string;
+  body: string;
+  createdAt: utcDateTime;
+}
+
 @summary("ChatSession")
 @jsonSchema
 model ChatSession {

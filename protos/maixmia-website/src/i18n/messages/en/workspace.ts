@@ -239,8 +239,21 @@ export const workspace = {
     minimizedAnnounce: 'Minimized "{name}" ({count} tabs)', restoredAnnounce: 'Restored "{name}" ({count} tabs)', closedGroupAnnounce: 'Closed "{name}"',
   },
   notifications: {
-    label: 'Notifications', title: 'Notification center', scope: 'All agents', globalRegion: 'Global notifications', empty: 'No new notifications', awaiting: 'Needs you', completed: 'Completed', badge: '{count} pending', badgeDone: '{count} completed', badgeTotal: '{count} total', open: 'Open "{title}"',
+    label: 'Notifications', title: 'Notification center', tabsLabel: 'Notification categories', tabAgent: 'Agent notifications', tabSystem: 'System notifications', close: 'Close notification center',
+    unread: '{count} unread', pending: '{count} pending', projectCount: '{count} projects',
+    allRead: 'Mark all read', allReadLabel: 'Mark all notifications as read',
+    agentEmpty: 'Nothing needs your attention', agentEmptyHint: 'Notifications appear here when an agent finishes or needs your confirmation.',
+    systemEmpty: 'No system notifications', systemEmptyHint: 'App updates, connection status, and security alerts appear here.',
+    awaiting: 'Needs you', completed: 'Completed', open: 'Open "{title}"',
+    expand: 'Expand "{title}"', collapse: 'Collapse "{title}"', markRead: 'Mark as read', markReadLabel: 'Mark "{title}" as read', warning: 'Needs attention', continueToWorkspace: 'Continue to workspace',
     loading: 'Loading notifications…', error: 'Unable to load notifications',
+    systemKinds: { update: 'App updates', connection: 'Connection status', storage: 'Storage', security: 'Security', quota: 'Usage', plugin: 'Plugins' },
+    systemItems: {
+      update: { title: 'Mia 1.3.0 is available', body: 'This release adds parallel agent execution and task queues. Restart Mia after installing the update. Any tasks in progress will resume automatically.' },
+      connection: { title: 'Remote gateway reconnected', body: 'The remote gateway lost its connection at 09:42 for about three minutes and is now back online. Remote tasks interrupted during that time have been requeued. No need to submit them again.' },
+      storage: { title: 'Workspace cache is almost full', body: 'Your workspace cache is using 4.2 GB of its 5 GB limit. Removing snapshots older than 30 days can free up about 1.1 GB without affecting your current project files.' },
+      security: { title: 'A new device signed in', body: 'A device running Chrome on macOS signed in to your account through remote access. If this wasn’t you, revoke that session.' },
+    },
   },
   // Global settings sits at the dock's left edge; the panel only holds global
   // configuration (currently language). Notifications live at the right edge

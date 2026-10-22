@@ -242,8 +242,21 @@ export const workspace = {
     minimizedAnnounce: '已最小化「{name}」（{count} 个页签）', restoredAnnounce: '已恢复「{name}」（{count} 个页签）', closedGroupAnnounce: '已关闭「{name}」',
   },
   notifications: {
-    label: '通知', title: '通知中心', scope: '全部 Agent', globalRegion: '全局通知', empty: '没有新通知', awaiting: '等待你', completed: '已完成', badge: '{count} 条待处理', badgeDone: '{count} 条已完成', badgeTotal: '共 {count} 条', open: '打开「{title}」',
+    label: '通知', title: '通知中心', tabsLabel: '通知类别', tabAgent: 'Agent 通知', tabSystem: '系统通知', close: '关闭通知中心',
+    unread: '{count} 条未读', pending: '{count} 条待处理', projectCount: '{count} 个项目',
+    allRead: '全部已读', allReadLabel: '将所有通知标为已读',
+    agentEmpty: '没有需要处理的通知', agentEmptyHint: 'Agent 完成或需要你确认时，通知会出现在这里。',
+    systemEmpty: '没有系统通知', systemEmptyHint: '应用更新、连接状态与安全提醒会出现在这里。',
+    awaiting: '等待你', completed: '已完成', open: '打开「{title}」',
+    expand: '展开「{title}」', collapse: '收起「{title}」', markRead: '标为已读', markReadLabel: '将「{title}」标为已读', warning: '需要留意', continueToWorkspace: '继续到工作区',
     loading: '正在加载通知…', error: '通知加载失败',
+    systemKinds: { update: '应用更新', connection: '连接状态', storage: '存储空间', security: '安全提醒', quota: '用量提醒', plugin: '插件动态' },
+    systemItems: {
+      update: { title: 'Mia 1.3.0 已可用', body: '此版本新增 Agent 并行执行与任务队列。安装后需要重启 Mia，运行中的任务会在重启后自动恢复。' },
+      connection: { title: '远程网关已重新连接', body: '远程网关自 09:42 起连接中断约 3 分钟，目前已恢复连接。中断期间的远程任务已重新排队，无需重复提交。' },
+      storage: { title: '工作区缓存接近上限', body: '工作区缓存已占用 4.2 GB，上限为 5 GB。清理 30 天前的快照可释放约 1.1 GB，清理不会影响当前项目文件。' },
+      security: { title: '新的设备已登录', body: '一台使用 Chrome（macOS）的设备通过远程访问登录了你的账户。如果这不是你本人的操作，请撤销该会话。' },
+    },
   },
   // 底栏三段的左端是全局设置:齿轮打开的面板只放全局配置(当前是语言)。
   // 通知中心独立在右端,由铃铛进入,不再和设置混在同一个面板里。

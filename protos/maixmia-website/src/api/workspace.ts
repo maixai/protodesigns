@@ -15,6 +15,7 @@ import type { ProjectEntry } from '../contracts/generated/project-entry'
 import type { ProjectCandidate } from '../contracts/generated/project-candidate'
 import type { AgentRuntime } from '../contracts/generated/agent-runtime'
 import type { AgentNotification } from '../contracts/generated/agent-notification'
+import type { SystemNotification } from '../contracts/generated/system-notification'
 import type { AgentSignal } from '../contracts/generated/agent-signal'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import type { ConversationSearchHit } from '../contracts/generated/conversation-search-hit'
@@ -26,6 +27,7 @@ import { EFFORT_LEVELS } from '../data/models'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentNotifications,
+  mockSystemNotifications,
   mockAgentRuntime,
   mockAgentSignals,
   mockAgentExists,
@@ -373,6 +375,13 @@ export async function listAgentNotifications(seenSessionIds: readonly string[]):
   await delay()
   if (demoState === 'error') return { ok: false, error: new Error(t.value.workspace.notifications.error) }
   return { ok: true, value: mockAgentNotifications(demoState, seenSessionIds) }
+}
+
+export async function listSystemNotifications(seenIds: readonly string[]): Promise<Result<SystemNotification[]>> {
+  const demoState = currentRoute.value.demoState
+  await delay()
+  if (demoState === 'error') return { ok: false, error: new Error(t.value.workspace.notifications.error) }
+  return { ok: true, value: mockSystemNotifications(demoState, seenIds) }
 }
 
 // 取某个 Agent 在**该会话所属项目**下的运行遥测(状态 / 状态详情键 / 模型 / context 用量 / 时长 /

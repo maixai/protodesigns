@@ -398,7 +398,7 @@ onBeforeUnmount(() => {
   --dock-notice-min-height: 56px;
   /* 状态点只做「等待你」的辅助标记:6px 足够被看见,又不会和 15px 标题抢视觉重量。 */
   --dock-status-dot-size: 6px;
-  /* 组头两行之间的紧凑间距与内高光厚度:都是 1px 的发丝级尺寸,集中成局部变量。 */
+  /* 组头两行之间的紧凑间距:1px 的发丝级尺寸,集中成局部变量。 */
   --dock-inline-tight: 1px;
   --dock-settings-panel-width: 320px;
   position: relative; grid-column: 1 / -1; display: flex; align-items: center; gap: var(--dl-space-3); height: var(--dock-height); min-width: 0; padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm);
@@ -434,25 +434,23 @@ onBeforeUnmount(() => {
 .workspace-dock__panel { position: absolute; inset-block-end: calc(100% + var(--dl-space-2)); z-index: var(--dl-z-overlay); width: min(var(--dock-panel-width), calc(100vw - 4 * var(--dl-space-2))); max-height: min(70dvh, calc(100dvh - 2 * var(--dock-height))); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: var(--dl-space-2); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-lg); }
 .workspace-dock__panel--members { inset-inline-start: 0; }
 .workspace-dock__panel--settings { inset-inline-start: 0; width: min(var(--dock-settings-panel-width), calc(100vw - 4 * var(--dl-space-2))); }
-/* 通知中心是右侧非模态抽屉:顶栏之下、底栏之上,贴住窗口右缘。
+/* 通知中心是右侧悬浮的磨砂面板:上、右、下各留一档间距,四角完整圆角。
    磨砂只做一层(根节点),高 alpha 保证文字对比度,模糊负责质感。 */
 .workspace-dock__drawer {
   position: fixed;
-  inset-block-start: calc(var(--dl-header-height-current) + var(--workspace-shell-inset, var(--dl-space-2)));
-  inset-block-end: calc(var(--dock-height) + 2 * var(--workspace-shell-inset, var(--dl-space-2)));
-  inset-inline-end: 0;
+  inset-block-start: var(--dl-space-3);
+  inset-block-end: calc(var(--dock-height) + var(--workspace-shell-inset, var(--dl-space-2)) + var(--dl-space-3));
+  inset-inline-end: var(--dl-space-3);
   z-index: var(--dl-z-overlay);
   display: flex;
   flex-direction: column;
   gap: var(--dl-space-3);
-  inline-size: clamp(400px, 32vw, 480px);
+  inline-size: clamp(400px, 30vw, 440px);
   padding: var(--dl-space-4);
   border: var(--dl-border-width) solid var(--dl-border-base);
-  border-inline-end: 0;
-  border-start-start-radius: var(--dl-radius-xl);
-  border-end-start-radius: var(--dl-radius-xl);
+  border-radius: var(--dl-radius-xl);
   background: color-mix(in srgb, var(--dl-bg-elevated) 86%, transparent);
-  box-shadow: inset 0 var(--dock-inline-tight) 0 color-mix(in srgb, var(--dl-text-primary) 6%, transparent), var(--dl-shadow-lg);
+  box-shadow: var(--dl-shadow-lg);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   backdrop-filter: blur(16px) saturate(140%);
 }
@@ -478,7 +476,7 @@ onBeforeUnmount(() => {
 .workspace-notification-drawer-enter-active { transition: transform var(--dl-duration-base) var(--dl-ease-standard), opacity var(--dl-duration-base) var(--dl-ease-standard); }
 .workspace-notification-drawer-leave-active { transition: transform var(--dl-duration-fast) var(--dl-ease-standard), opacity var(--dl-duration-fast) var(--dl-ease-standard); }
 .workspace-notification-drawer-enter-from,
-.workspace-notification-drawer-leave-to { opacity: 0; transform: translateX(100%); }
+.workspace-notification-drawer-leave-to { opacity: 0; transform: translateX(calc(100% + var(--dl-space-3))); }
 .workspace-dock__notification-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-3); min-height: var(--dl-space-8); }
 .workspace-dock__all-read { flex: none; min-height: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .workspace-dock__notification-tabs { flex: none; display: flex; gap: var(--dl-space-1); padding: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); }
@@ -554,7 +552,8 @@ button:focus-visible { box-shadow: var(--dl-focus-ring); }
 button:active { transform: translateY(var(--dl-lift-press)); }
 button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken); cursor: not-allowed; transform: none; }
 @media (max-width: 1023px) {
-  .workspace-dock__drawer { inline-size: 100vw; border: 0; border-radius: 0; }
+  /* 窄屏没有余量做悬浮留白:恢复贴边全宽,顶部/右侧贴边、无圆角与阴影。 */
+  .workspace-dock__drawer { inset-block-start: 0; inset-inline-end: 0; inline-size: 100vw; border: 0; border-radius: 0; box-shadow: none; }
 }
 @media (max-width: 767px) {
   .workspace-dock { gap: var(--dl-space-1); padding-inline: var(--dl-space-2); }

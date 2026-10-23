@@ -2002,11 +2002,13 @@ for (const width of [375, 480, 600, 768, 1280, 1600]) {
     // 等抽屉的进场位移结束再量几何。
     await expect.poll(() => notificationsPanel.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
     const notificationsPanelBox = await notificationsPanel.boundingBox()
-    // 右侧抽屉:贴住窗口右缘;≤1023 全宽,宽屏取 clamp(400, 32vw, 480)。
-    const expectedDrawerWidth = width < 1024 ? width : Math.min(480, Math.max(400, width * 0.32))
+    // 悬浮面板:宽屏在上/右/下各留 12px,≤1023 全宽贴边;宽度取 clamp(400, 30vw, 440)。
+    const expectedDrawerWidth = width < 1024 ? width : Math.min(440, Math.max(400, width * 0.30))
+    const expectedRight = width < 1024 ? width : width - 12
+    const expectedTop = width < 1024 ? 0 : 12
     expect(Math.abs((notificationsPanelBox?.width ?? 0) - expectedDrawerWidth)).toBeLessThanOrEqual(1)
-    expect(Math.abs(((notificationsPanelBox?.x ?? 0) + (notificationsPanelBox?.width ?? 0)) - width)).toBeLessThanOrEqual(1)
-    expect(notificationsPanelBox?.y ?? 0).toBeGreaterThanOrEqual(60)
+    expect(Math.abs(((notificationsPanelBox?.x ?? 0) + (notificationsPanelBox?.width ?? 0)) - expectedRight)).toBeLessThanOrEqual(1)
+    expect(Math.abs((notificationsPanelBox?.y ?? 0) - expectedTop)).toBeLessThanOrEqual(1)
     // 「全部已读」是独立操作，触达高度取 44px 下限，不按横向密集行的 32px 例外。
     const allReadBox = await notificationsPanel.locator('.workspace-dock__all-read').boundingBox()
     expect(allReadBox?.height ?? 0).toBeGreaterThanOrEqual(44)
@@ -2491,7 +2493,7 @@ test('通知中心:系统 Tab 下全部已读也清空两类通知，头部固�
   expect(await panel.locator('.workspace-dock__notification-head').boundingBox()).toEqual(headBefore)
   expect(await panel.getByRole('tablist').boundingBox()).toEqual(tabsBefore)
   const box = await panel.boundingBox()
-  expect(box?.width).toBeCloseTo(Math.min(480, Math.max(400, 1280 * 0.32)), 0)
+  expect(box?.width).toBeCloseTo(Math.min(440, Math.max(400, 1280 * 0.30)), 0)
   expect(box?.height ?? 0).toBeGreaterThan(420)
   await panel.getByRole('button', { name: '将所有通知标为已读' }).click()
   await expect(panel).toContainText('没有系统通知')

@@ -103,10 +103,6 @@ export function mockConnectSubscription(provider: ModelSubscriptionProviderId): 
   }
 }
 
-export function mockDisconnectSubscription(provider: ModelSubscriptionProviderId): ModelSubscription {
-  return { provider, connected: false, account: '', plan: '', expiresAt: '', status: 'unchecked' }
-}
-
 // 网关探测:合法地址返回成功(自动发现时带模型列表);地址含 invalid 时模拟 401。
 export function mockProbeModelGateway(baseUrl: string, discoverModels: boolean): GatewayProbe {
   const latencyMs = 120 + Math.floor(Math.random() * 300)

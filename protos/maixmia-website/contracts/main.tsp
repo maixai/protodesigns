@@ -409,13 +409,8 @@ model ModelTierMap {
 // 主对话的默认值对应 SDK 的 effort;子 Agent / 档位值由 Mia 写入生成的 AgentDefinition.effort。
 // ---- Agent 模型配置 ----
 
-// 模型来源:订阅与自定义网关在运行时互斥 —— 同一时刻只有一个活动凭据,
-// 但两套配置都可以保存在 Agent 里,以便显式切换。
-enum ModelSourceKindId {
-  subscription,
-  gateway,
-}
-
+// 模型来源:Claude 订阅、ChatGPT 订阅与 API 渠道都是「来源类型」;
+// 运行时只启用一个来源,但所有来源配置都保存在 Agent 里,以便显式切换。
 // 网关协议:决定请求路径与鉴权头的默认规则。
 enum ModelGatewayProtocolId {
   anthropic,
@@ -458,15 +453,13 @@ model ModelGateway {
   models: string[];
 }
 
-// 当前活动来源与两类配置。kind 决定运行时使用订阅还是 API Key(网关)。
-// 订阅按服务商各保留一份连接配置,activeSubscriptionProvider 指出当前启用的那一个。
+// 所有已配置的来源放在一起,activeSourceId 指向当前启用的那一个。
+// id 约定:订阅为 subscription:<provider>,API 渠道为 gateway:<name/id>。
 // 同样被内联进 AgentModelConfig,不单独产出入口类型。
 model ModelSource {
-  kind: ModelSourceKindId;
   subscriptions: ModelSubscription[];
-  activeSubscriptionProvider: ModelSubscriptionProviderId;
   gateways: ModelGateway[];
-  activeGatewayId: string;
+  activeSourceId: string;
 }
 
 // 网关连接测试结果。connected=false 时仍是一条业务结果(message / statusCode 说明原因)。

@@ -1,7 +1,7 @@
 // 唯一模型目录:设置按能力排序,会话菜单单独保留既有选项的顺序。
 // 展示名是品牌专有名词,两种语言同值;窗口大小用于输入坞的上下文计算。
 import type { Messages } from '../i18n'
-import type { ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
+import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 
 export type ModelTierId = 'fable' | 'opus' | 'sonnet' | 'haiku'
 // 全局模型库里的渠道。名称是产品名,两种语言同值。
@@ -67,8 +67,16 @@ export function modelsForSubscription(provider: ModelSubscriptionProviderId): re
     : model.provider !== 'OpenAI')
 }
 
+export function subscriptionSourceId(provider: ModelSubscriptionProviderId): string {
+  return `subscription:${provider}`
+}
+
 export function activeSubscriptionOf(source: ModelSource): ModelSubscription | undefined {
-  return source.subscriptions.find((item) => item.provider === source.activeSubscriptionProvider)
+  return source.subscriptions.find((item) => subscriptionSourceId(item.provider) === source.activeSourceId)
+}
+
+export function activeGatewayOf(source: ModelSource): ModelGateway | undefined {
+  return source.gateways.find((item) => item.id === source.activeSourceId)
 }
 
 // 订阅可用:已连接、未过期;expiresAt 缺失或不可解析时不判过期。
@@ -88,28 +96,19 @@ const CHATGPT_TIER_DEFAULTS: Record<ModelTierId, string> = {
 
 // 当前来源下,空串档位会解析到的内置模型。
 export function tierDefaultsForSource(source: ModelSource): Record<ModelTierId, string> {
-  if (source.kind === 'subscription' && source.activeSubscriptionProvider === 'chatgpt') {
-    return CHATGPT_TIER_DEFAULTS
-  }
-  return TIER_DEFAULTS
+  return activeSubscriptionOf(source)?.provider === 'chatgpt' ? CHATGPT_TIER_DEFAULTS : TIER_DEFAULTS
 }
 
-// 新建 Agent 的默认来源:两个订阅各保留一份配置,默认启用 Claude;另预置两个 API Key 示例。
-// 真实实现应由各服务商官方 CLI / SDK 的本地登录态与用户配置提供。
+// 新建 Agent 的默认来源:预置 Claude 订阅与两个 API 渠道,默认启用 Claude;
+// ChatGPT 订阅通过「添加来源」接入。真实实现应由各服务商官方 CLI / SDK 的本地登录态与用户配置提供。
 export function defaultModelSource(): ModelSource {
   return {
-    kind: 'subscription',
     subscriptions: [
       {
         provider: 'claude', connected: true, account: 'linyizhou@example.com',
         plan: 'Claude Max', expiresAt: '2026-12-31T00:00:00Z', status: 'ok',
       },
-      {
-        provider: 'chatgpt', connected: false, account: '',
-        plan: '', expiresAt: '', status: 'unchecked',
-      },
     ],
-    activeSubscriptionProvider: 'claude',
     gateways: [
       {
         id: 'gateway:litellm', name: '公司 LiteLLM', baseUrl: 'https://llm.corp.example.com',
@@ -122,7 +121,7 @@ export function defaultModelSource(): ModelSource {
         discoverModels: false, models: ['anthropic/claude-sonnet-5'],
       },
     ],
-    activeGatewayId: 'gateway:litellm',
+    activeSourceId: 'subscription:claude',
   }
 }
 

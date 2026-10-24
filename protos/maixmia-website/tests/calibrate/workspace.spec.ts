@@ -1849,26 +1849,28 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
   await sourceTab.click()
-  const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude' })
+  // 所有来源在同一列表:Claude 订阅 + 两个 API 渠道。
+  const sourceRows = dialog.locator('.source-row')
+  await expect(sourceRows).toHaveCount(3)
+  const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
   await expect(subscriptionRow).toHaveAttribute('data-active', 'true')
   await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
-  // 切到第一个网关:通过行内菜单「使用此 API 渠道」显式切换。
+
+  // 切到第一个 API 渠道:点击行正文即切换当前来源。
   const litellmRow = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
-  await litellmRow.getByRole('button', { name: '公司 LiteLLM 的更多操作' }).click()
-  await dialog.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
+  await litellmRow.getByRole('button', { name: '使用「公司 LiteLLM」作为模型来源' }).click()
   await expect(litellmRow).toHaveAttribute('data-active', 'true')
   await defaultsTab.click()
   const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
   await expect(model).toHaveValue('claude-sonnet-5-5')
-  // 网关来源下,模型选项来自该网关配置的模型列表。
+  // 渠道来源下,模型选项来自该渠道配置的模型列表。
   await model.selectOption('claude-opus-5-5')
   await expect(model).toHaveValue('claude-opus-5-5')
 
-  // 切到只提供一个模型的网关:已选的 opus 不在来源中,提示并阻止保存。
+  // 切到只提供一个模型的渠道:已选的 opus 不在来源中,提示并阻止保存。
   await sourceTab.click()
   const openRouterRow = dialog.locator('.source-row--gateway', { hasText: 'OpenRouter' })
-  await openRouterRow.getByRole('button', { name: 'OpenRouter 的更多操作' }).click()
-  await dialog.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
+  await openRouterRow.getByRole('button', { name: '使用「OpenRouter」作为模型来源' }).click()
   await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
 
@@ -1886,30 +1888,26 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
     const available = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 24
     return context.measureText(text).width - available
   }))
-  expect(tierSelectOverflows.every((value) => value <= 1), '档位下拉的关闭态文本不得被裁切').toBe(true)
+  expect(tierSelectOverflows.every((value) => value <= 1), '档位下拉的关闭态文本不得被裁掉').toBe(true)
 
-  // 退登订阅会把来源变为未配置:先切回订阅,再退出登录。
+  // 移除当前来源后没有启用项:后三个分区锁定,页脚给出可见原因。
   await sourceTab.click()
-  await subscriptionRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
-  await dialog.getByRole('menuitem', { name: '使用此订阅' }).click()
-  await subscriptionRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
-  await dialog.getByRole('menuitem', { name: '断开连接' }).click()
+  await openRouterRow.getByRole('button', { name: '「OpenRouter」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '删除' }).click()
+  await openRouterRow.locator('.source-row__confirm').getByRole('button', { name: '确认删除' }).click()
+  await expect(dialog.locator('.source-row--gateway')).toHaveCount(1)
+  await expect(sourceRows).toHaveCount(2)
   await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
-  // 页脚直接说明保存被拦下的原因,不只依赖行内状态。
-  await expect(dialog.locator('.agent-editor__save-state')).toContainText('当前来源未连接')
+  await expect(dialog.locator('.agent-editor__save-state')).toContainText('未启用任何来源')
   await defaultsTab.click({ force: true })
   await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
   await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
-  // 再点「保存」也必须重新给出可见原因(激活分区会清空提示,不能把反馈一起吞掉)。
-  await sourceTab.click()
-  await expect(dialog.locator('.model-source-notice')).toHaveCount(0)
-  await dialog.getByRole('button', { name: '保存', exact: true }).click({ force: true })
-  await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
-  // 重新登录后恢复可用。
-  await subscriptionRow.getByRole('button', { name: '连接', exact: true }).click()
+
+  // 重新启用仍在列表里的 Claude 订阅。
+  await subscriptionRow.getByRole('button', { name: '使用「Claude 订阅」作为模型来源' }).click()
+  await expect(subscriptionRow).toHaveAttribute('data-active', 'true')
   await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
-  await expect(defaultsTab).not.toHaveAttribute('aria-disabled', 'true')
-})
+  await expect(defaultsTab).not.toHaveAttribute('aria-disabled', 'true')})
 
 // 订阅是服务商中立的:Claude 与 ChatGPT 各保留一份连接配置,切换后模型目录随之变化。
 test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之变化', async ({ page }) => {
@@ -1923,30 +1921,40 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
   await sectionTabs.getByRole('tab', { name: /^模型来源/ }).click()
 
-  // 两个分区标题都使用通用称谓。
-  const headings = dialog.locator('.source-block__head h3')
-  await expect(headings.nth(0)).toHaveText('订阅')
-  await expect(headings.nth(1)).toHaveText('API 渠道')
-
-  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude' })
-  const chatgptRow = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT' })
+  // 所有来源在同一个列表里;默认只有 Claude 订阅与两个 API 渠道。
+  const heading = dialog.locator('.source-block__head h3')
+  await expect(heading).toHaveText('来源')
+  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
   await expect(claudeRow.locator('.source-row__status')).toHaveText('已连接')
-  await expect(chatgptRow.locator('.source-row__status')).toHaveText('未连接')
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'ChatGPT' })).toHaveCount(0)
+  await expect(dialog.locator('.source-row')).toHaveCount(3)
 
   // 点菜单外只收起菜单,不得穿透触发下方控件或关闭对话框。
-  await claudeRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
-  const headingBox = await headings.nth(0).boundingBox()
+  await claudeRow.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
+  const headingBox = await heading.boundingBox()
   expect(headingBox).not.toBeNull()
   if (headingBox !== null) await page.mouse.click(headingBox.x + headingBox.width / 2, headingBox.y + headingBox.height / 2)
   await expect(dialog.getByRole('menu')).toHaveCount(0)
   await expect(dialog).toBeVisible()
-  await expect(chatgptRow.locator('.source-row__status')).toHaveText('未连接')
 
-  // ChatGPT 默认未连接:连接后可在行内菜单切换到它。
-  await chatgptRow.getByRole('button', { name: '连接', exact: true }).click()
+  // ChatGPT 订阅通过「添加来源」接入,添加后不自动抢走当前来源。
+  await dialog.getByRole('button', { name: '添加来源' }).click()
+  await expect(dialog.getByRole('menuitem', { name: /Claude 订阅/ })).toBeDisabled()
+  await dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ }).click()
+  const chatgptRow = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT 订阅' })
+  await expect(chatgptRow).toHaveCount(1)
   await expect(chatgptRow.locator('.source-row__status')).toHaveText('已连接')
-  await chatgptRow.getByRole('button', { name: 'ChatGPT 订阅操作' }).click()
-  await dialog.getByRole('menuitem', { name: '使用此订阅' }).click()
+  await expect(claudeRow).toHaveAttribute('data-active', 'true')
+  await expect(dialog.locator('.source-row')).toHaveCount(4)
+
+  // 每个来源都有「编辑配置」:订阅的配置页展示账户事实与连接操作。
+  await chatgptRow.getByRole('button', { name: '「ChatGPT 订阅」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  await expect(dialog.locator('.source-config__facts')).toContainText('ChatGPT Plus')
+  await dialog.getByRole('button', { name: '返回来源' }).click()
+
+  // 显式切换到 ChatGPT 订阅。
+  await chatgptRow.getByRole('button', { name: '使用「ChatGPT 订阅」作为模型来源' }).click()
   await expect(chatgptRow).toHaveAttribute('data-active', 'true')
   await expect(claudeRow).not.toHaveAttribute('data-active', 'true')
 
@@ -1959,8 +1967,7 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await model.selectOption('gpt-5.5')
   await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toHaveCount(0)
   const optionsAfter = await model.locator('option').allTextContents()
-  expect(optionsAfter.some((text) => text.includes('Claude'))).toBe(false)
-})
+  expect(optionsAfter.some((text) => text.includes('Claude'))).toBe(false)})
 
 // 375px 英文 + 自定义角标是最坏宽度:tab 条必须内部横向滚动,不能把整个对话框撑宽。
 test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可见,body 不横向溢出', async ({ page }) => {
@@ -1977,6 +1984,14 @@ test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可�
   const sectionTabs = dialog.getByRole('tablist', { name: 'Model settings sections' })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^Defaults/ })
   await defaultsTab.click()
+  // 窄屏下每个控件都有可见列名,标签不会指向错误的控件。
+  await expect(dialog.locator('.model-matrix__field-label:visible')).toHaveCount(4)
+  // 单列布局:标签与每个 select 都占满整行,不能被挤成一条竖排文字。
+  const firstMatrixRow = dialog.locator('.model-matrix__row').first()
+  const labelBox = await firstMatrixRow.locator('.model-matrix__label').boundingBox()
+  expect(labelBox?.width ?? 0).toBeGreaterThan(80)
+  const selectWidths = await firstMatrixRow.locator('select').evaluateAll((selects) => selects.map((select) => select.getBoundingClientRect().width))
+  expect(selectWidths.every((width) => width > 150), '窄屏 select 必须接近整行宽').toBe(true)
   // 造一个非默认选择,让 Defaults 带角标。
   await dialog.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption('claude-opus-5-5')
   await expect(defaultsTab.locator('.model-subtabs__count')).toHaveText('1')
@@ -2005,9 +2020,118 @@ test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可�
   await sectionTabs.getByRole('tab', { name: /^Model source/ }).click()
   const sourceOverflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
   expect(sourceOverflow, '来源页不得横向溢出').toBeLessThanOrEqual(1)
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(2)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(1)
+  await expect(dialog.locator('.source-row')).toHaveCount(3)
   const rowOverflow = await dialog.locator('.source-row').evaluateAll((rows) => rows.map((row) => row.scrollWidth - row.clientWidth))
   expect(rowOverflow.every((value) => value <= 1), '来源行内容不得越出自身').toBe(true)
+})
+
+// 子视图:进入时滚回顶部(避免 sticky tab 盖住返回),检查连接有结果反馈,重开回到列表。
+test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 700 })
+  await login(page)
+  await waitForStable(page)
+  await page.getByRole('button', { name: '打开侧栏' }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  let dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+  const body = dialog.locator('.agent-editor__body')
+  await body.evaluate((element) => { element.scrollTop = element.scrollHeight })
+
+  const litellm = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
+  await litellm.getByRole('button', { name: '「公司 LiteLLM」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0)
+  const back = dialog.getByRole('button', { name: '返回来源' })
+  await expect(back).toBeVisible()
+  await back.click()
+
+  const claude = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
+  await claude.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  await dialog.getByRole('button', { name: '检查连接' }).click()
+  const checkNotice = dialog.locator('.gateway-probe[role="status"]')
+  await expect(checkNotice).toContainText('连接正常')
+  const noticeBox = await checkNotice.boundingBox()
+  const noticeBodyBox = await body.boundingBox()
+  expect(noticeBox).not.toBeNull()
+  expect(noticeBodyBox).not.toBeNull()
+  if (noticeBox !== null && noticeBodyBox !== null) {
+    expect(noticeBox.y + noticeBox.height, '检查结果无需额外滚动即可完整可见').toBeLessThanOrEqual(noticeBodyBox.y + noticeBodyBox.height + 1)
+  }
+
+  // 关闭后重开:子视图状态被清空,回到来源列表。
+  await dialog.getByRole('button', { name: '取消' }).click()
+  await expect(dialog).toHaveCount(0)
+  if (!(await page.getByRole('button', { name: '打开侧栏' }).isVisible()) && !(await page.locator(AGENT_TRIGGER).isVisible())) {
+    await page.getByRole('button', { name: '打开侧栏' }).click()
+  }
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+  await expect(dialog.locator('.source-row')).toHaveCount(3)
+  await expect(dialog.locator('.source-config__facts')).toHaveCount(0)
+})
+
+// 空状态是最紧的高度:添加来源菜单必须完整落在视口内,不能首项被裁。
+test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 700 })
+  await login(page)
+  await waitForStable(page)
+  await page.getByRole('button', { name: '打开侧栏' }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+
+  // 先移除全部来源,进入空状态。
+  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
+  await claudeRow.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '移除来源' }).click()
+  await claudeRow.locator('.source-row__confirm').getByRole('button', { name: '移除来源' }).click()
+  for (const name of ['公司 LiteLLM', 'OpenRouter']) {
+    const row = dialog.locator('.source-row--gateway', { hasText: name })
+    await row.getByRole('button', { name: `「${name}」的操作` }).click()
+    await dialog.getByRole('menuitem', { name: '删除' }).click()
+    await row.locator('.source-row__confirm').getByRole('button', { name: '确认删除' }).click()
+  }
+  await expect(dialog.locator('.source-row')).toHaveCount(0)
+  await expect(dialog.locator('.gateway-empty__title')).toHaveText('还没有来源')
+  // 空状态不依赖滚动:滚回顶部后,CTA 完整落在内容区可视范围内。
+  const body = dialog.locator('.agent-editor__body')
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0)
+  const emptyCta = dialog.locator('.gateway-empty').getByRole('button', { name: '添加来源' })
+  await expect(emptyCta).toBeVisible()
+  const ctaBox = await emptyCta.boundingBox()
+  const bodyBox = await body.boundingBox()
+  expect(ctaBox).not.toBeNull()
+  expect(bodyBox).not.toBeNull()
+  if (ctaBox !== null && bodyBox !== null) {
+    expect(ctaBox.height, '空状态 CTA 触达高度不小于 44').toBeGreaterThanOrEqual(44)
+    expect(ctaBox.y + ctaBox.height, '空状态 CTA 不依赖滚动即可见').toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1)
+  }
+
+  await emptyCta.click()
+  const menu = dialog.getByRole('menu')
+  const menuBox = await menu.boundingBox()
+  expect(menuBox).not.toBeNull()
+  if (menuBox !== null) {
+    expect(menuBox.y, '菜单上边缘不得超出视口').toBeGreaterThanOrEqual(0)
+    expect(menuBox.y + menuBox.height, '菜单下边缘不得超出视口').toBeLessThanOrEqual(700)
+  }
+  const firstItem = menu.getByRole('menuitem').first()
+  const firstBox = await firstItem.boundingBox()
+  expect(firstBox).not.toBeNull()
+  if (firstBox !== null) {
+    expect(firstBox.y, '首项名称完整落在视口内').toBeGreaterThanOrEqual(0)
+    expect(firstBox.y + firstBox.height).toBeLessThanOrEqual(700)
+  }
+  await expect(firstItem).toContainText('Claude 订阅')
 })
 
 // 网关:添加 → 测试连接(自动发现模型) → 保存;保存不隐式切换来源,需显式点选。
@@ -2020,7 +2144,8 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
-  await dialog.getByRole('button', { name: '添加 API 渠道', exact: true }).click()
+  await dialog.getByRole('button', { name: '添加来源' }).click()
+  await dialog.getByRole('menuitem', { name: /^API 渠道/ }).click()
   await dialog.getByRole('textbox', { name: '名称' }).fill('测试网关')
   await dialog.getByRole('textbox', { name: 'Base URL' }).fill('https://gateway.example.com')
   await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-test-123456789')
@@ -2031,28 +2156,28 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   await expect(dialog.locator('.source-row--gateway')).toHaveCount(3)
   // 保存只落配置,不隐式切换:来源仍是订阅。
   await expect(dialog.locator('.source-row--gateway[data-active="true"]')).toHaveCount(0)
-  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude' })).toHaveAttribute('data-active', 'true')
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })).toHaveAttribute('data-active', 'true')
 
-  // 点击网关行进入它的设置页,返回后回到列表。
+  // 行点击只切换来源;设置入口收在行内菜单的「编辑」。
   const testGatewayRow = dialog.locator('.source-row--gateway', { hasText: '测试网关' })
-  await testGatewayRow.getByRole('button', { name: '打开 测试网关 的设置' }).click()
+  await testGatewayRow.getByRole('button', { name: '「测试网关」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
   await expect(dialog.locator('.gateway-form')).toContainText('编辑 API 渠道')
   await expect(dialog.getByRole('textbox', { name: 'Base URL' })).toHaveValue('https://gateway.example.com')
-  await dialog.getByRole('button', { name: '返回 API 渠道列表' }).click()
+  await dialog.getByRole('button', { name: '返回来源' }).click()
 
-  // 行内菜单提供「使用此 API 渠道 / 编辑 / 删除」;显式使用后才成为当前来源。
-  await testGatewayRow.getByRole('button', { name: '测试网关 的更多操作' }).click()
-  const menu = dialog.getByRole('menu')
-  await expect(menu.getByRole('menuitem')).toHaveCount(3)
-  await expect(menu.getByRole('menuitem', { name: '使用此 API 渠道' })).toBeEnabled()
-  await menu.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
+  // 点击行即切换到该来源；行内菜单只保留编辑与删除。
+  await testGatewayRow.getByRole('button', { name: '使用「测试网关」作为模型来源' }).click()
   await expect(testGatewayRow).toHaveAttribute('data-active', 'true')
+  await testGatewayRow.getByRole('button', { name: '「测试网关」的操作' }).click()
+  await expect(dialog.getByRole('menu').getByRole('menuitem')).toHaveCount(2)
+  await page.keyboard.press('Escape')
 
   // 菜单键盘可达:Enter 打开并聚焦首项,方向键移动,Esc 收起且焦点回触发钮。
-  const trigger = testGatewayRow.getByRole('button', { name: '测试网关 的更多操作' })
+  const trigger = testGatewayRow.getByRole('button', { name: '「测试网关」的操作' })
   await trigger.focus()
   await page.keyboard.press('Enter')
-  await expect(dialog.getByRole('menu').getByRole('menuitem', { name: '编辑' })).toBeFocused()
+  await expect(dialog.getByRole('menu').getByRole('menuitem', { name: '编辑配置' })).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(dialog.getByRole('menu').getByRole('menuitem', { name: '删除' })).toBeFocused()
   await page.keyboard.press('Escape')

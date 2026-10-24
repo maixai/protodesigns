@@ -25,7 +25,7 @@ import type { FileContent } from '../contracts/generated/file-content'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import { delay } from '../mocks/delay'
-import { EFFORT_LEVELS, activeSubscriptionOf, modelsForSubscription, subscriptionIsReady, tierDefaultsForSource } from '../data/models'
+import { EFFORT_LEVELS, activeGatewayOf, activeSubscriptionOf, modelsForSubscription, subscriptionIsReady, tierDefaultsForSource } from '../data/models'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentNotifications,
@@ -37,7 +37,6 @@ import {
   mockConnectSubscription,
   mockCreateAgent,
   mockDeleteAgent,
-  mockDisconnectSubscription,
   mockProbeModelGateway,
   mockAddMarketplace,
   mockInstallPlugin,
@@ -87,24 +86,22 @@ function invalidFallback(config: AgentConfig): boolean {
     || fallback.includes(config.model.defaultModelId)
 }
 
-// 模型来源可用:当前订阅已连接且未过期,或当前 API Key 存在且填了地址与密钥。
+// 模型来源可用:当前订阅已连接且未过期,或当前 API 渠道存在且填了地址与密钥。
 // 测试连接成功不是解锁条件 —— 离线 / 内网网关仍然应该允许配置模型。
 function sourceReady(source: ModelSource): boolean {
-  if (source.kind === 'subscription') {
-    const subscription = activeSubscriptionOf(source)
-    return subscription !== undefined && subscriptionIsReady(subscription)
-  }
-  const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
+  const subscription = activeSubscriptionOf(source)
+  if (subscription !== undefined) return subscriptionIsReady(subscription)
+  const gateway = activeGatewayOf(source)
   return gateway !== undefined && gateway.baseUrl.trim() !== '' && gateway.apiKeySet
 }
 
-// 当前来源提供的模型集合:订阅按服务商给目录,API Key 给它自己的模型列表。
+// 当前来源提供的模型集合:订阅按服务商给目录,API 渠道给它自己的模型列表。
 function sourceModelIds(source: ModelSource): Set<string> {
-  if (source.kind === 'subscription') {
-    return new Set(modelsForSubscription(source.activeSubscriptionProvider).map((model) => model.id))
+  const subscription = activeSubscriptionOf(source)
+  if (subscription !== undefined) {
+    return new Set(modelsForSubscription(subscription.provider).map((model) => model.id))
   }
-  const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
-  return new Set(gateway?.models ?? [])
+  return new Set(activeGatewayOf(source)?.models ?? [])
 }
 
 // 已配置的模型必须来自当前来源;切换来源后残留的旧模型视为无效,阻止写回。
@@ -179,11 +176,6 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
 export async function connectSubscription(provider: ModelSubscriptionProviderId): Promise<Result<ModelSubscription>> {
   await delay()
   return { ok: true, value: mockConnectSubscription(provider) }
-}
-
-export async function disconnectSubscription(provider: ModelSubscriptionProviderId): Promise<Result<ModelSubscription>> {
-  await delay()
-  return { ok: true, value: mockDisconnectSubscription(provider) }
 }
 
 // 网关连接测试:成功只代表凭据/地址可用,不代表每个模型都可用。

@@ -3,7 +3,7 @@ import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
-import type { ModelSubscription } from '../contracts/generated/agent-model-config'
+import type { ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { PluginComponentId } from '../contracts/generated/plugin'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
@@ -73,7 +73,7 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
     ...config,
     source: {
       ...config.source,
-      subscription: { ...config.source.subscription },
+      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription })),
       gateways: config.source.gateways.map((gateway) => ({ ...gateway, models: [...gateway.models] })),
     },
     tiers: {
@@ -86,13 +86,25 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
   }
 }
 
-// 订阅登录在原型里直接成功,不做真实 OAuth;断开后来源随即变为未配置。
-export function mockConnectSubscription(): ModelSubscription {
-  return { connected: true, account: 'linyizhou@example.com', plan: 'Claude Max', expiresAt: '2026-12-31T00:00:00Z', status: 'ok' }
+// 订阅连接在原型里直接成功,不做真实 OAuth;断开后该订阅随即变为未配置。
+const SUBSCRIPTION_PLANS: Record<ModelSubscriptionProviderId, string> = {
+  claude: 'Claude Max',
+  chatgpt: 'ChatGPT Plus',
 }
 
-export function mockDisconnectSubscription(): ModelSubscription {
-  return { connected: false, account: '', plan: '', expiresAt: '', status: 'unchecked' }
+export function mockConnectSubscription(provider: ModelSubscriptionProviderId): ModelSubscription {
+  return {
+    provider,
+    connected: true,
+    account: 'linyizhou@example.com',
+    plan: SUBSCRIPTION_PLANS[provider],
+    expiresAt: '2026-12-31T00:00:00Z',
+    status: 'ok',
+  }
+}
+
+export function mockDisconnectSubscription(provider: ModelSubscriptionProviderId): ModelSubscription {
+  return { provider, connected: false, account: '', plan: '', expiresAt: '', status: 'unchecked' }
 }
 
 // 网关探测:合法地址返回成功(自动发现时带模型列表);地址含 invalid 时模拟 401。

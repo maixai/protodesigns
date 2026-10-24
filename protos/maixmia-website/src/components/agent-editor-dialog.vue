@@ -7,10 +7,10 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
-import type { ModelGateway } from '../contracts/generated/agent-model-config'
+import type { ModelGateway, ModelSubscription } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
-import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, TIER_DEFAULTS, defaultModelSource, modelById } from '../data/models'
+import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS, activeSubscriptionOf, defaultModelSource, modelById, modelsForSubscription, subscriptionIsReady, tierDefaultsForSource } from '../data/models'
 import { connectSubscription, disconnectSubscription, probeModelGateway } from '../api/workspace'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
@@ -86,11 +86,13 @@ const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
 const isDirty = computed(() => !isCreate.value && JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value)
 const isValid = computed(() => name.value.trim() !== '' && note.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value)
-type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'dirty' | 'clean'
+type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
   if (props.busy) return 'saving'
   if (props.error !== '') return 'error'
   if (!isCreate.value && !isDirty.value && savedAt.value !== '') return 'saved'
+  // 来源不可用时保存被拦下,页脚必须直接说明原因,不能只说「有未保存的更改」。
+  if (!sourceReady.value) return 'blocked'
   if (!isValid.value) return 'incomplete'
   if (!isCreate.value) return isDirty.value ? 'dirty' : 'clean'
   return 'incomplete'
@@ -100,6 +102,7 @@ const saveStateLabel = computed(() => {
   if (saveStateKind.value === 'saving') return copy.saving
   if (saveStateKind.value === 'error') return copy.saveStateFailed
   if (saveStateKind.value === 'saved') return copy.savedInline
+  if (saveStateKind.value === 'blocked') return copy.saveStateBlocked
   if (saveStateKind.value === 'incomplete') return copy.saveStateIncomplete
   if (saveStateKind.value === 'dirty') return copy.saveStateDirty
   return copy.saveStateClean
@@ -144,47 +147,53 @@ const gatewayProbe = ref<GatewayProbe | null>(null)
 const gatewayProbeBusy = ref(false)
 const showGatewayKey = ref(false)
 const deletingGatewayId = ref('')
+// 当前展开的行内操作菜单:订阅用固定键,网关用自身 id;同一时间只开一个。
+const sourceMenuId = ref('')
+// 菜单靠近对话框底部时向上展开,避免被滚动容器裁掉。
+const sourceMenuAbove = ref(false)
 
 const modelSource = computed(() => modelConfig.value.source)
-// 订阅只有在连接、未过期时才可作为来源;expiresAt 缺失或不可解析时不判过期。
-function subscriptionIsReady(subscription: AgentModelConfig['source']['subscription']): boolean {
-  if (!subscription.connected || subscription.status === 'expired') return false
-  const expiresAt = Date.parse(subscription.expiresAt)
-  return !Number.isFinite(expiresAt) || expiresAt > Date.now()
-}
+const subscriptions = computed(() => modelSource.value.subscriptions)
+const hasConnectedSubscription = computed(() => subscriptions.value.some((item) => item.connected))
+const activeSubscription = computed(() => activeSubscriptionOf(modelSource.value))
+const tierDefaults = computed(() => tierDefaultsForSource(modelSource.value))
 const sourceReady = computed(() => {
   const source = modelSource.value
-  if (source.kind === 'subscription') return subscriptionIsReady(source.subscription)
+  if (source.kind === 'subscription') {
+    return activeSubscription.value !== undefined && subscriptionIsReady(activeSubscription.value)
+  }
   const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
   return gateway !== undefined && gateway.baseUrl.trim() !== '' && gateway.apiKeySet
 })
-// 保存还要求来源可用:没有订阅/网关时不允许把模型配置写回。
+// 保存还要求来源可用:没有订阅/API Key 时不允许把模型配置写回。
 const canSubmit = computed(() => isValid.value && !props.busy && (isCreate.value || isDirty.value) && sourceReady.value)
-const subscriptionStatus = computed(() => {
-  const subscription = modelSource.value.subscription
+
+function isSubscriptionActive(subscription: ModelSubscription): boolean {
+  return modelSource.value.kind === 'subscription'
+    && modelSource.value.activeSubscriptionProvider === subscription.provider
+}
+function subscriptionStatusOf(subscription: ModelSubscription): string {
   if (!subscription.connected) return t.value.workspace.agentAdmin.subscriptionDisconnected
   return subscriptionIsReady(subscription)
     ? t.value.workspace.agentAdmin.subscriptionConnected
     : t.value.workspace.agentAdmin.subscriptionExpired
-})
-const subscriptionReady = computed(() => subscriptionIsReady(modelSource.value.subscription))
-const sourceSummary = computed(() => {
-  const source = modelSource.value
-  if (source.kind === 'subscription') {
-    return `${t.value.workspace.agentAdmin.modelSourceSubscription} · ${subscriptionStatus.value}`
-  }
-  const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
-  if (gateway !== undefined) return `${gateway.name} · ${gatewayModelCount(gateway)}`
-  // 有网关但未指定当前来源 ≠ 没有网关。
-  return source.gateways.length === 0
-    ? t.value.workspace.agentAdmin.gatewayEmpty
-    : t.value.workspace.agentAdmin.modelSourceNotConfigured
-})
+}
+function subscriptionToneOf(subscription: ModelSubscription): string {
+  if (!subscription.connected) return 'muted'
+  return subscriptionIsReady(subscription) ? 'ok' : 'warning'
+}
+// 一行说完账户事实:套餐 · 账户 · 到期日。
+function subscriptionMetaOf(subscription: ModelSubscription): string {
+  if (!subscription.connected) return ''
+  const expires = subscription.expiresAt.slice(0, 10)
+  return `${subscription.plan} · ${subscription.account} · ${t.value.workspace.agentAdmin.subscriptionExpires} ${expires}`
+}
 const sourceModels = computed<SelectOption[]>(() => {
   const source = modelSource.value
   if (source.kind === 'subscription') {
-    if (!subscriptionReady.value) return []
-    return MODELS.map((model) => ({ value: model.id, label: modelOptionLabel(model) }))
+    const subscription = activeSubscriptionOf(source)
+    if (subscription === undefined || !subscriptionIsReady(subscription)) return []
+    return modelsForSubscription(subscription.provider).map((model) => ({ value: model.id, label: modelOptionLabel(model) }))
   }
   const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
   if (gateway === undefined) return []
@@ -199,8 +208,8 @@ const sourceModelIds = computed(() => new Set(sourceModels.value.map((option) =>
 const configuredModelIds = computed(() => {
   const config = modelConfig.value
   const ids = [config.defaultModelId, config.subagentModelId, ...config.fallbackModelIds]
-  // 空串档位会解析到内置默认模型,同样必须存在于当前来源。
-  for (const tierId of TIER_IDS) ids.push(config.tiers[tierId].modelId || TIER_DEFAULTS[tierId])
+  // 空串档位会解析到当前来源的内置默认模型,同样必须存在。
+  for (const tierId of TIER_IDS) ids.push(config.tiers[tierId].modelId || tierDefaults.value[tierId])
   return ids.filter((id) => id !== '')
 })
 const hasUnavailableSourceModels = computed(() => sourceReady.value
@@ -275,7 +284,7 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
     ...config,
     source: {
       ...config.source,
-      subscription: { ...config.source.subscription },
+      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription })),
       gateways: config.source.gateways.map((gateway) => ({ ...gateway, models: [...gateway.models] })),
     },
     tiers: {
@@ -293,12 +302,13 @@ function modelNameOf(id: string): string {
   return model === undefined ? id : t.value.workspace.models[model.nameKey]
 }
 
-// 下拉选项标签:当前值不在来源中时显式标注,避免用户以为它仍然可用。
-function sourceOptionLabel(id: string): string {
-  const name = modelNameOf(id)
+// 不可用值会出现在原生 select 的关闭态里,而原生 select 不会省略:
+// 统一去掉「Claude」品牌前缀 + 用短后缀,保证「不可用」本身不被裁掉。
+function compactModelLabel(id: string): string {
+  const name = modelNameOf(id).replace(/^Claude /, '')
   return sourceModelIds.value.has(id)
     ? name
-    : `${name} · ${t.value.workspace.agentAdmin.modelUnavailableTag}`
+    : `${name} · ${t.value.workspace.agentAdmin.modelUnavailableShort}`
 }
 
 // 模型选项同时显示渠道:全局模型库按渠道管理,Agent 配置需要看到模型从哪来。
@@ -318,62 +328,79 @@ function thinkingBudgetLabel(tokens: number): string {
 }
 
 function tierModelOf(tierId: ModelTierId): string {
-  return modelConfig.value.tiers[tierId].modelId || TIER_DEFAULTS[tierId]
+  return modelConfig.value.tiers[tierId].modelId || tierDefaults.value[tierId]
 }
 
 // 档位模型下拉去掉「跟随默认」前缀:第一项直接显示内置默认模型名,其余项排除它,
 // 避免同一个模型名在下拉里出现两次;显式选了内置默认的旧数据在 reset() 里归一到空串。
 // 模型选项来自当前来源:订阅给内置目录,网关给网关的模型列表;自定义值仍可输入。
 function tierModelOptions(tierId: ModelTierId): readonly SelectOption[] {
-  return sourceModels.value.filter((option) => option.value !== TIER_DEFAULTS[tierId])
+  return sourceModels.value
+    .filter((option) => option.value !== tierDefaults.value[tierId])
+    .map((option) => ({ value: option.value, label: compactModelLabel(option.value) }))
 }
 
 function tierModelSelectOptions(tierId: ModelTierId): SelectOption[] {
   const options = tierModelOptions(tierId)
   const current = modelConfig.value.tiers[tierId].modelId
   // 默认项直接给出解析到的模型名,四个档位不再共用同一句模糊的「内置默认」。
-  const defaultLabel = `${t.value.workspace.agentAdmin.modelTierDefault} · ${sourceOptionLabel(TIER_DEFAULTS[tierId])}`
+  const defaultModelId = tierDefaults.value[tierId]
+  // 默认模型在来源中才显示模型名;不在来源时只报「不可用」,避免整句被原生 select 裁掉。
+  const defaultLabel = sourceModelIds.value.has(defaultModelId)
+    ? `${t.value.workspace.agentAdmin.modelTierDefault} · ${compactModelLabel(defaultModelId)}`
+    : `${t.value.workspace.agentAdmin.modelTierDefault} · ${t.value.workspace.agentAdmin.modelUnavailableShort}`
   const base: SelectOption[] = [{ value: '', label: defaultLabel }, ...options]
   return current !== '' && !options.some((option) => option.value === current)
-    ? [{ value: current, label: sourceOptionLabel(current) }, ...base]
+    ? [{ value: current, label: compactModelLabel(current) }, ...base]
     : base
 }
 
 // 当前模型在切换来源后可能不在新列表里:保留它作为一项,避免 select 显示空白。
 function modelSelectOptions(current: string): SelectOption[] {
   if (current === '' || sourceModels.value.some((option) => option.value === current)) return sourceModels.value
-  return [{ value: current, label: sourceOptionLabel(current) }, ...sourceModels.value]
+  return [{ value: current, label: compactModelLabel(current) }, ...sourceModels.value]
 }
 
 // ---- 来源操作 ----
-async function loginSubscription(): Promise<void> {
+function replaceSubscription(next: ModelSubscription): void {
+  const subscriptions = modelSource.value.subscriptions.map((item) => item.provider === next.provider ? next : item)
+  modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions } }
+}
+
+async function loginSubscription(subscription: ModelSubscription): Promise<void> {
   if (sourceBusy.value) return
+  const wasConnected = subscription.connected
   sourceBusy.value = true
-  const result = await connectSubscription()
+  const result = await connectSubscription(subscription.provider)
   sourceBusy.value = false
   if (!result.ok) return
   sourceNotice.value = ''
-  // 登录只更新订阅状态,不隐式切换来源:切换必须由用户点「使用订阅」。
-  modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscription: result.value } }
+  // 连接只更新该服务商的状态,不隐式切换来源:切换必须由用户点「使用此订阅」。
+  replaceSubscription(result.value)
+  // 连接按钮会被行内菜单替换,把焦点交给新的触发钮,键盘用户不会失去位置。
+  if (!wasConnected) void nextTick(() => document.getElementById(sourceMenuTriggerId(subscription.provider))?.focus())
 }
 
-async function logoutSubscription(): Promise<void> {
+async function logoutSubscription(subscription: ModelSubscription): Promise<void> {
   if (sourceBusy.value) return
   sourceBusy.value = true
-  const result = await disconnectSubscription()
+  const result = await disconnectSubscription(subscription.provider)
   sourceBusy.value = false
   if (!result.ok) return
   sourceNotice.value = ''
-  modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscription: result.value } }
+  replaceSubscription(result.value)
 }
 
-function useSubscription(): void {
-  if (!subscriptionReady.value) {
+function useSubscription(subscription: ModelSubscription): void {
+  if (!subscriptionIsReady(subscription)) {
     sourceNotice.value = t.value.workspace.agentAdmin.sourceRequired
     return
   }
   sourceNotice.value = ''
-  modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, kind: 'subscription' } }
+  modelConfig.value = {
+    ...modelConfig.value,
+    source: { ...modelSource.value, kind: 'subscription', activeSubscriptionProvider: subscription.provider },
+  }
 }
 
 function useGateway(id: string): void {
@@ -384,6 +411,90 @@ function useGateway(id: string): void {
   }
   sourceNotice.value = ''
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, kind: 'gateway', activeGatewayId: id } }
+}
+
+// ---- 行内操作菜单 ----
+// 用原生按钮 + 自管 disclosure,不用组件库下拉:菜单项的键盘可达性必须自己保证。
+function sourceDomKey(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '-')
+}
+function sourceMenuDomId(id: string): string {
+  return `${dialogId}-source-menu-${sourceDomKey(id)}`
+}
+function sourceMenuTriggerId(id: string): string {
+  return `${sourceMenuDomId(id)}-trigger`
+}
+
+function toggleSourceMenu(id: string): void {
+  if (sourceMenuId.value === id) {
+    closeSourceMenu(true)
+    return
+  }
+  const trigger = document.getElementById(sourceMenuTriggerId(id))
+  const boundary = trigger?.closest('.agent-editor__body')?.getBoundingClientRect()
+  const rect = trigger?.getBoundingClientRect()
+  // 约等于四行菜单的高度;下方放不下就翻到上方。
+  const menuSpace = 220
+  sourceMenuAbove.value = rect !== undefined && boundary !== undefined && boundary.bottom - rect.bottom < menuSpace
+  sourceMenuId.value = id
+  void nextTick(() => {
+    document.getElementById(sourceMenuDomId(id))?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()
+  })
+}
+
+function closeSourceMenu(restoreFocus = false): void {
+  const id = sourceMenuId.value
+  if (id === '') return
+  sourceMenuId.value = ''
+  if (restoreFocus) void nextTick(() => document.getElementById(sourceMenuTriggerId(id))?.focus())
+}
+
+// 菜单内用方向键在菜单项间移动;Esc / Tab 收起并把焦点还给触发钮。
+function onSourceMenuKeydown(event: KeyboardEvent, id: string): void {
+  if (event.key === 'Escape' || event.key === 'Tab') {
+    event.preventDefault()
+    closeSourceMenu(true)
+    return
+  }
+  const menu = document.getElementById(sourceMenuDomId(id))
+  if (menu === null) return
+  const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'))
+  if (items.length === 0) return
+  const index = items.findIndex((item) => item === document.activeElement)
+  const nextIndex = event.key === 'ArrowDown' ? (index + 1) % items.length
+    : event.key === 'ArrowUp' ? (index <= 0 ? items.length - 1 : index - 1)
+      : event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : -1
+  if (nextIndex < 0) return
+  event.preventDefault()
+  items[nextIndex]?.focus()
+}
+
+function useSubscriptionFromMenu(subscription: ModelSubscription): void {
+  useSubscription(subscription)
+  closeSourceMenu(true)
+}
+function checkSubscriptionFromMenu(subscription: ModelSubscription): void {
+  closeSourceMenu(true)
+  void loginSubscription(subscription)
+}
+function logoutSubscriptionFromMenu(subscription: ModelSubscription): void {
+  closeSourceMenu()
+  void logoutSubscription(subscription).then(() => nextTick(() => document.getElementById(`${dialogId}-subscription-login-${subscription.provider}`)?.focus()))
+}
+function useGatewayFromMenu(id: string): void {
+  useGateway(id)
+  closeSourceMenu(true)
+}
+function editGatewayFromMenu(gateway: ModelGateway): void {
+  closeSourceMenu()
+  startEditGateway(gateway)
+}
+function deleteGatewayFromMenu(id: string): void {
+  closeSourceMenu()
+  deletingGatewayId.value = id
+  void nextTick(() => document.getElementById(`${dialogId}-gateway-delete-${sourceDomKey(id)}`)?.focus())
 }
 
 function startAddGateway(): void {
@@ -529,8 +640,9 @@ function fallbackOptionsFor(index: number): readonly SelectOption[] {
   const selectedElsewhere = new Set(modelConfig.value.fallbackModelIds.filter((_, itemIndex) => itemIndex !== index))
   const options = sourceModels.value.filter((option) => option.value !== ''
     && (option.value === current || (option.value !== modelConfig.value.defaultModelId && !selectedElsewhere.has(option.value))))
-  if (current === '' || options.some((option) => option.value === current)) return options
-  return [{ value: current, label: sourceOptionLabel(current) }, ...options]
+  const compactOptions = options.map((option) => ({ value: option.value, label: compactModelLabel(option.value) }))
+  if (current === '' || options.some((option) => option.value === current)) return compactOptions
+  return [{ value: current, label: compactModelLabel(current) }, ...compactOptions]
 }
 
 function addFallback(): void {
@@ -627,7 +739,7 @@ function reset(): void {
     const tier = model.tiers[id]
     const effort = (EFFORT_LEVELS as readonly string[]).includes(tier.effortLevel) ? tier.effortLevel : DEFAULT_TIER_EFFORT
     model.tiers[id] = {
-      modelId: tier.modelId === TIER_DEFAULTS[id] ? '' : tier.modelId,
+      modelId: tier.modelId === tierDefaults.value[id] ? '' : tier.modelId,
       effortLevel: effort,
     }
   }
@@ -827,11 +939,6 @@ onBeforeUnmount(() => dialogRef.value?.close())
         role="tabpanel" :aria-labelledby="`${dialogId}-tab-model`" tabindex="0"
       >
         <!-- 二级分区用分段控件而不是第二层下划线 tab:视觉权重低于主 tab,滚动时吸顶。 -->
-        <div class="model-source-summary">
-          <span class="model-source-summary__dot" :data-ready="sourceReady ? 'true' : 'false'" aria-hidden="true" />
-          <span class="model-source-summary__text">{{ sourceSummary }}</span>
-          <button v-if="!sourceReady" type="button" class="model-source-summary__action" @click="activateModelSection('source')">{{ t.workspace.agentAdmin.modelSourceConfigure }}</button>
-        </div>
         <div class="model-subtabs">
           <div
             class="model-subtabs__track" role="tablist"
@@ -863,26 +970,59 @@ onBeforeUnmount(() => dialogRef.value?.close())
           <p class="model-section__hint">{{ t.workspace.agentAdmin.modelSourceHint }}</p>
           <p v-if="sourceNotice !== ''" class="model-source-notice" role="alert">{{ sourceNotice }}</p>
 
-          <section class="source-card" :data-active="modelSource.kind === 'subscription' ? 'true' : undefined">
-            <div class="source-card__head">
-              <span class="source-card__dot" :data-tone="modelSource.subscription.connected ? 'ok' : 'muted'" aria-hidden="true" />
-              <div class="source-card__body">
-                <span class="source-card__title">{{ t.workspace.agentAdmin.modelSourceSubscription }}</span>
-                <span class="source-card__meta">{{ subscriptionStatus }}<template v-if="modelSource.subscription.connected"> · {{ modelSource.subscription.plan }} · {{ modelSource.subscription.account }}</template></span>
-              </div>
-              <button v-if="modelSource.subscription.connected" type="button" class="source-card__use" :aria-pressed="modelSource.kind === 'subscription'" @click="useSubscription">{{ t.workspace.agentAdmin.modelSourceUseSubscription }}</button>
+          <div v-if="sourceMenuId !== ''" class="source-menu__scrim" aria-hidden="true" @click.stop="closeSourceMenu()" />
+
+          <!-- 订阅与网关共用同一种「分区标题 + 来源行」结构,不再把订阅裹进独立卡片。 -->
+          <section class="source-block">
+            <div class="source-block__head">
+              <h3>{{ t.workspace.agentAdmin.modelSourceSubscription }}</h3>
             </div>
-            <div v-if="modelSource.subscription.connected" class="source-card__facts">
-              <span>{{ t.workspace.agentAdmin.subscriptionAccount }} <strong>{{ modelSource.subscription.account }}</strong></span>
-              <span>{{ t.workspace.agentAdmin.subscriptionPlan }} <strong>{{ modelSource.subscription.plan }}</strong></span>
-              <span>{{ t.workspace.agentAdmin.subscriptionExpires }} <strong class="source-card__mono">{{ modelSource.subscription.expiresAt.slice(0, 10) }}</strong></span>
-            </div>
-            <div class="source-card__actions">
-              <button v-if="!modelSource.subscription.connected" type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="loginSubscription">{{ t.workspace.agentAdmin.subscriptionLogin }}</button>
-              <button v-else type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="loginSubscription">{{ t.workspace.agentAdmin.subscriptionCheck }}</button>
-              <button v-if="modelSource.subscription.connected" type="button" class="source-card__link" :disabled="sourceBusy" @click="logoutSubscription">{{ t.workspace.agentAdmin.subscriptionLogout }}</button>
-            </div>
-            <p v-if="!modelSource.subscription.connected" class="model-section__hint">{{ t.workspace.agentAdmin.subscriptionLoginHint }}</p>
+            <ul class="source-list">
+              <li
+                v-for="subscription in subscriptions" :key="subscription.provider"
+                class="source-row source-row--subscription"
+                :data-active="isSubscriptionActive(subscription) ? 'true' : undefined"
+                :aria-current="isSubscriptionActive(subscription) ? 'true' : undefined"
+              >
+                <div class="source-row__main source-row__main--static">
+                  <span class="source-row__radio" :data-active="isSubscriptionActive(subscription) ? 'true' : undefined" aria-hidden="true" />
+                  <span class="source-row__body">
+                    <span class="source-row__title">
+                      {{ SUBSCRIPTION_PROVIDER_LABELS[subscription.provider] }}
+                      <span v-if="isSubscriptionActive(subscription)" class="source-row__badge">{{ t.workspace.agentAdmin.gatewayCurrent }}</span>
+                      <span class="source-row__status" :data-tone="subscriptionToneOf(subscription)">{{ subscriptionStatusOf(subscription) }}</span>
+                    </span>
+                    <span v-if="subscriptionMetaOf(subscription) !== ''" class="source-row__meta">{{ subscriptionMetaOf(subscription) }}</span>
+                  </span>
+                </div>
+                <button
+                  v-if="!subscription.connected" :id="`${dialogId}-subscription-login-${subscription.provider}`"
+                  type="button" class="dl-btn dl-btn--ghost source-row__login" :disabled="sourceBusy"
+                  @click="loginSubscription(subscription)"
+                >{{ t.workspace.agentAdmin.subscriptionLogin }}</button>
+                <div v-else class="source-row__menu-wrap">
+                  <button
+                    :id="sourceMenuTriggerId(subscription.provider)" type="button" class="source-row__menu-trigger"
+                    aria-haspopup="menu" :aria-expanded="sourceMenuId === subscription.provider ? 'true' : 'false'"
+                    :aria-controls="sourceMenuId === subscription.provider ? sourceMenuDomId(subscription.provider) : undefined"
+                    :aria-label="t.workspace.agentAdmin.subscriptionActionsLabel.replace('{name}', SUBSCRIPTION_PROVIDER_LABELS[subscription.provider])"
+                    @click="toggleSourceMenu(subscription.provider)"
+                  ><span aria-hidden="true">⋯</span></button>
+                  <div
+                    v-if="sourceMenuId === subscription.provider" :id="sourceMenuDomId(subscription.provider)"
+                    class="source-menu" :class="{ 'source-menu--above': sourceMenuAbove }" role="menu"
+                    :aria-label="t.workspace.agentAdmin.subscriptionActionsLabel.replace('{name}', SUBSCRIPTION_PROVIDER_LABELS[subscription.provider])"
+                    @keydown="onSourceMenuKeydown($event, subscription.provider)"
+                  >
+                    <button type="button" role="menuitem" :disabled="isSubscriptionActive(subscription) || !subscriptionIsReady(subscription)" @click="useSubscriptionFromMenu(subscription)">{{ t.workspace.agentAdmin.modelSourceUseSubscription }}</button>
+                    <button type="button" role="menuitem" @click="checkSubscriptionFromMenu(subscription)">{{ t.workspace.agentAdmin.subscriptionCheck }}</button>
+                    <div class="source-menu__divider" role="separator" />
+                    <button type="button" role="menuitem" class="source-menu__danger" @click="logoutSubscriptionFromMenu(subscription)">{{ t.workspace.agentAdmin.subscriptionLogout }}</button>
+                  </div>
+                </div>
+              </li>
+            </ul>
+            <p v-if="!hasConnectedSubscription" class="model-section__hint">{{ t.workspace.agentAdmin.subscriptionLoginHint }}</p>
           </section>
 
           <section class="source-block">
@@ -952,20 +1092,55 @@ onBeforeUnmount(() => dialogRef.value?.close())
               <button type="button" class="dl-btn dl-btn--ghost" @click="startAddGateway">{{ t.workspace.agentAdmin.gatewayAdd }}</button>
             </div>
 
-            <ul v-else class="gateway-list">
-              <li v-for="gateway in modelSource.gateways" :key="gateway.id" class="gateway-row" :data-active="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id ? 'true' : undefined">
-                <button type="button" class="gateway-row__main" :aria-pressed="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id" @click="useGateway(gateway.id)">
-                  <span class="gateway-row__name"><span class="gateway-row__radio" :data-active="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id ? 'true' : undefined" aria-hidden="true" />{{ gateway.name }}<span v-if="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id" class="gateway-row__badge">{{ t.workspace.agentAdmin.gatewayCurrent }}</span></span>
-                  <span class="gateway-row__url">{{ gateway.baseUrl }}</span>
-                  <span class="gateway-row__meta">{{ gatewayModelCount(gateway) }} · {{ gateway.apiKeySet ? t.workspace.agentAdmin.gatewayConfigured : t.workspace.agentAdmin.gatewayUnverified }}</span>
+            <ul v-else class="source-list">
+              <li
+                v-for="gateway in modelSource.gateways" :key="gateway.id"
+                class="source-row source-row--gateway"
+                :data-active="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id ? 'true' : undefined"
+                :aria-current="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id ? 'true' : undefined"
+              >
+                <button
+                  type="button" class="source-row__main"
+                  :aria-label="t.workspace.agentAdmin.gatewayOpenSettings.replace('{name}', gateway.name)"
+                  @click="startEditGateway(gateway)"
+                >
+                  <span class="source-row__radio" :data-active="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id ? 'true' : undefined" aria-hidden="true" />
+                  <span class="source-row__body">
+                    <span class="source-row__title">
+                      {{ gateway.name }}
+                      <span v-if="modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id" class="source-row__badge">{{ t.workspace.agentAdmin.gatewayCurrent }}</span>
+                    </span>
+                    <span class="source-row__meta source-row__meta--mono">{{ gateway.baseUrl }}</span>
+                    <span class="source-row__meta">{{ gatewayModelCount(gateway) }} · {{ gateway.apiKeySet ? t.workspace.agentAdmin.gatewayConfigured : t.workspace.agentAdmin.gatewayUnverified }}</span>
+                  </span>
+                  <DliIcon name="chevronRight" size="sm" class="source-row__chevron" />
                 </button>
-                <div class="gateway-row__actions">
-                  <button type="button" @click="startEditGateway(gateway)">{{ t.workspace.agentAdmin.gatewayEdit }}</button>
-                  <button type="button" @click="deletingGatewayId = deletingGatewayId === gateway.id ? '' : gateway.id">{{ t.workspace.agentAdmin.gatewayDelete }}</button>
+                <div class="source-row__menu-wrap">
+                  <button
+                    :id="sourceMenuTriggerId(gateway.id)" type="button" class="source-row__menu-trigger"
+                    aria-haspopup="menu" :aria-expanded="sourceMenuId === gateway.id ? 'true' : 'false'"
+                    :aria-controls="sourceMenuId === gateway.id ? sourceMenuDomId(gateway.id) : undefined"
+                    :aria-label="t.workspace.agentAdmin.gatewayActionsLabel.replace('{name}', gateway.name)"
+                    @click="toggleSourceMenu(gateway.id)"
+                  ><span aria-hidden="true">⋯</span></button>
+                  <div
+                    v-if="sourceMenuId === gateway.id" :id="sourceMenuDomId(gateway.id)"
+                    class="source-menu" :class="{ 'source-menu--above': sourceMenuAbove }" role="menu" :aria-label="t.workspace.agentAdmin.gatewayActionsLabel.replace('{name}', gateway.name)"
+                    @keydown="onSourceMenuKeydown($event, gateway.id)"
+                  >
+                    <button
+                      type="button" role="menuitem"
+                      :disabled="(modelSource.kind === 'gateway' && modelSource.activeGatewayId === gateway.id) || gateway.baseUrl.trim() === '' || !gateway.apiKeySet"
+                      @click="useGatewayFromMenu(gateway.id)"
+                    >{{ t.workspace.agentAdmin.gatewayUse }}</button>
+                    <button type="button" role="menuitem" @click="editGatewayFromMenu(gateway)">{{ t.workspace.agentAdmin.gatewayEdit }}</button>
+                    <div class="source-menu__divider" role="separator" />
+                    <button type="button" role="menuitem" class="source-menu__danger" @click="deleteGatewayFromMenu(gateway.id)">{{ t.workspace.agentAdmin.gatewayDelete }}</button>
+                  </div>
                 </div>
-                <div v-if="deletingGatewayId === gateway.id" class="gateway-row__confirm">
+                <div v-if="deletingGatewayId === gateway.id" class="source-row__confirm">
                   <span>{{ t.workspace.agentAdmin.gatewayDeletePrompt }}</span>
-                  <button type="button" class="danger-confirm" @click="deleteGateway(gateway.id)">{{ t.workspace.agentAdmin.gatewayDeleteConfirm }}</button>
+                  <button :id="`${dialogId}-gateway-delete-${sourceDomKey(gateway.id)}`" type="button" class="danger-confirm" @click="deleteGateway(gateway.id)">{{ t.workspace.agentAdmin.gatewayDeleteConfirm }}</button>
                   <button type="button" @click="deletingGatewayId = ''">{{ t.workspace.agentAdmin.gatewayCancel }}</button>
                 </div>
               </li>
@@ -1194,6 +1369,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .agent-editor {
   /* 面板内部的结构常量:只在来源/模型分区用,避免散落字面量。 */
   --agent-hairline: var(--dl-border-width);
+  --agent-emphasis-width: calc(var(--dl-border-width) * 2);
   --agent-row-gap: calc(var(--dl-border-width) * 2);
   --agent-matrix-tier: 80px;
   --agent-matrix-label: 140px;
@@ -1241,63 +1417,58 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .model-subtabs__track button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; gap: var(--dl-space-1); min-inline-size: 0; min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-1); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; }
 .model-subtabs__track button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .model-subtabs__track button[aria-selected='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
-.model-subtabs__count { min-inline-size: var(--dl-space-4); padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; line-height: var(--dl-line-tight); text-align: center; }
-/* 来源摘要:始终回答「现在用的是哪个来源」,也是软门禁提示的落点。 */
-.model-source-summary { display: flex; align-items: center; gap: var(--dl-space-2); margin-block-end: var(--dl-space-2); padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.model-source-summary__dot { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); flex: none; border-radius: var(--dl-radius-pill); background: var(--dl-text-tertiary); }
-.model-source-summary__dot[data-ready='true'] { background: var(--dl-success); }
-.model-source-summary__text { flex: 1 1 auto; min-inline-size: 0; overflow-wrap: anywhere; }
-.model-source-summary__action { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
-.model-source-summary__action:hover { background: var(--dl-bg-hover); }
 .model-subtabs__track button[data-locked='true'] { color: var(--dl-text-disabled); cursor: not-allowed; }
 .model-subtabs__track button[data-locked='true']:hover { background: transparent; color: var(--dl-text-disabled); }
-.model-source-notice { padding: var(--dl-space-2); border-inline-start: var(--agent-row-gap) solid var(--dl-warning); color: var(--dl-warning); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
-.source-card { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
-.source-card[data-active='true'] { border-color: var(--dl-accent); }
-.source-card__head { display: flex; align-items: flex-start; gap: var(--dl-space-2); }
-.source-card__dot { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); flex: none; margin-block-start: var(--dl-space-1); border-radius: var(--dl-radius-pill); background: var(--dl-text-tertiary); }
-.source-card__dot[data-tone='ok'] { background: var(--dl-success); }
-.source-card__body { display: grid; flex: 1 1 auto; gap: var(--agent-hairline); min-inline-size: 0; }
-.source-card__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; }
-.source-card__meta { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.source-card__use { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.source-card__use:hover:not([aria-pressed='true']) { border-color: var(--dl-border-strong); background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.source-card__use[aria-pressed='true'] { border-color: transparent; background: var(--dl-accent-soft); color: var(--dl-text-primary); }
-.source-card__facts { display: flex; flex-wrap: wrap; gap: var(--dl-space-2) var(--dl-space-4); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.source-card__facts strong { color: var(--dl-text-primary); font-weight: 500; overflow-wrap: anywhere; }
-.source-card__mono { font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }
-.source-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); }
-.source-card__actions .dl-btn { min-block-size: var(--dl-target-size); }
-.source-card__link { min-block-size: var(--dl-target-size); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); text-decoration: underline; text-underline-offset: var(--agent-row-gap); }
-.source-card__link:hover:not(:disabled) { color: var(--dl-text-primary); }
-.source-block { display: grid; gap: var(--dl-space-2); margin-block-start: var(--dl-space-4); }
+.model-subtabs__track button[data-locked='true'] .model-subtabs__count { border-color: var(--dl-border-base); color: var(--dl-text-disabled); }
+.model-subtabs__count { min-inline-size: var(--dl-space-4); padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; line-height: var(--dl-line-tight); text-align: center; }
+/* 来源分区:订阅与网关共用「标题 + 行列表」,不再把订阅裹进独立卡片。 */
+.source-block { display: grid; gap: var(--dl-space-2); }
+.source-block + .source-block { margin-block-start: var(--dl-space-4); }
 .source-block__head { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
-.source-block__head h3 { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; }
-.source-block__add { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
+.source-block__head h3 { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; }
+.source-block__add { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
 .source-block__add:hover { background: var(--dl-bg-hover); }
+.source-list { display: grid; margin: 0; padding: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); list-style: none; }
+.source-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-2); padding: var(--dl-space-2) var(--dl-space-3); }
+.source-row + .source-row { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.source-row:first-child { border-start-start-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); border-start-end-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); }
+.source-row:last-child { border-end-start-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); border-end-end-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); }
+.source-row[data-active='true'] { background: var(--dl-accent-soft); }
+.source-row--gateway:hover, .source-row--gateway[data-active='true']:hover { background: var(--dl-bg-hover); }
+.source-row--gateway[data-active='true']:hover { background: var(--dl-accent-soft); box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-border-strong); }
+.source-row__main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; min-block-size: var(--dl-target-size); padding-block: var(--dl-space-1); text-align: left; }
+.source-row__main--static { cursor: default; }
+.source-row__radio { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); flex: none; border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
+.source-row__radio[data-active='true'] { border-color: var(--dl-accent); background: var(--dl-accent); box-shadow: inset 0 0 0 var(--agent-row-gap) var(--dl-bg-elevated); }
+.source-row__body { display: grid; gap: var(--agent-hairline); min-inline-size: 0; }
+.source-row__title { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; }
+.source-row__badge { padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
+.source-row__meta { min-inline-size: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: break-word; }
+.source-row__meta--mono { overflow: hidden; font-family: var(--dl-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.source-row__chevron { color: var(--dl-text-tertiary); }
+.source-row__status { display: inline-flex; flex: none; align-items: center; min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-tight); white-space: nowrap; }
+.source-row__status[data-tone='ok'] { border-color: color-mix(in srgb, var(--dl-success) 35%, transparent); color: var(--dl-success); }
+.source-row__status[data-tone='warning'] { border-color: color-mix(in srgb, var(--dl-warning) 35%, transparent); color: var(--dl-warning); }
+.source-row__login { min-block-size: var(--dl-target-size); }
+.source-row__menu-wrap { position: relative; display: flex; align-items: center; }
+.source-row__menu-trigger { display: inline-grid; place-items: center; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-lg); line-height: var(--dl-line-tight); }
+.source-row__menu-trigger:hover, .source-row__menu-trigger[aria-expanded='true'] { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.source-menu { position: absolute; inset-block-start: calc(100% - var(--dl-space-1)); inset-inline-end: 0; z-index: var(--dl-z-overlay); display: grid; gap: var(--agent-hairline); min-inline-size: max-content; padding: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-lg); }
+.source-menu--above { inset-block-start: auto; inset-block-end: calc(100% - var(--dl-space-1)); }
+.source-menu button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border-radius: var(--dl-radius-sm); text-align: left; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); white-space: nowrap; }
+.source-menu button:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.source-menu button:disabled { background: transparent; color: var(--dl-text-disabled); }
+.source-menu .source-menu__danger { color: var(--dl-error); }
+.source-menu .source-menu__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--dl-error) 14%, transparent); color: var(--dl-error); }
+.source-menu__divider { block-size: var(--dl-border-width); margin-block: var(--dl-space-1); background: var(--dl-border-base); }
+.source-menu__scrim { position: fixed; inset: 0; z-index: calc(var(--dl-z-overlay) - 1); }
+.source-row__confirm { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); padding-block-start: var(--dl-space-2); border-block-start: var(--dl-border-width) solid var(--dl-border-base); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.source-row__confirm button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.source-row__confirm button:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.source-row__confirm .danger-confirm { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); background: var(--dl-error); color: var(--dl-text-on-accent); font-size: var(--dl-font-size-xs); }
+.source-row__confirm .danger-confirm:hover:not(:disabled) { background: var(--dl-error); color: var(--dl-text-on-accent); }
 .gateway-empty { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-4); border: var(--dl-border-width) dashed var(--dl-border-base); border-radius: var(--dl-radius-lg); }
 .gateway-empty__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); }
-.gateway-list { display: grid; padding: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); list-style: none; overflow: hidden; }
-.gateway-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--dl-space-2); padding: var(--dl-space-2) var(--dl-space-3); }
-.gateway-row + .gateway-row { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
-.gateway-row[data-active='true'] { background: var(--dl-accent-soft); }
-.gateway-row:hover { background: var(--dl-bg-hover); }
-.gateway-row[data-active='true']:hover { background: var(--dl-accent-soft); }
-.gateway-row__main { display: grid; gap: var(--agent-row-gap); min-inline-size: 0; text-align: left; }
-.gateway-row__name { display: inline-flex; align-items: center; gap: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; }
-.gateway-row__radio { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); flex: none; border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
-.gateway-row__radio[data-active='true'] { border-color: var(--dl-accent); background: var(--dl-accent); box-shadow: inset 0 0 0 var(--agent-row-gap) var(--dl-bg-elevated); }
-.gateway-row__badge { padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
-.gateway-row__url { min-inline-size: 0; overflow: hidden; color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); text-overflow: ellipsis; white-space: nowrap; }
-.gateway-row__meta { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.gateway-row__actions { display: flex; align-items: center; gap: var(--dl-space-1); }
-.gateway-row__actions button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.gateway-row__actions button:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.gateway-row__confirm { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); padding-block-start: var(--dl-space-2); border-block-start: var(--dl-border-width) solid var(--dl-border-base); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.gateway-row__confirm button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.gateway-row__confirm button:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.gateway-row__confirm .danger-confirm { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); background: var(--dl-error); color: var(--dl-text-on-accent); font-size: var(--dl-font-size-xs); }
-.gateway-row__confirm .danger-confirm:hover:not(:disabled) { background: var(--dl-error); color: var(--dl-text-on-accent); }
 .gateway-form { display: grid; gap: var(--dl-space-3); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
 .gateway-form__back { justify-self: start; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .gateway-form__back:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
@@ -1322,9 +1493,10 @@ onBeforeUnmount(() => dialogRef.value?.close())
 .source-segment button[aria-pressed='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
 /* 窄对话框里四个二级 tab 放不下:改为横向滚动,避免标签越出自身按钮盒。 */
 @media (max-width: 560px) {
-  .model-subtabs__track { overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
-  .model-subtabs__track::-webkit-scrollbar { display: none; }
-  .model-subtabs__track button { flex: 0 0 auto; padding-inline: var(--dl-space-3); }
+  /* 窄屏靠选中底色与实心圆点表达当前来源,角标让位给标题与状态。 */
+  .source-row__badge { display: none; }
+  /* 四个二级 tab 排不下时改成两行两列,所有标签完整可见,不做隐藏滚动。 */
+  .model-subtabs__track { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -1401,7 +1573,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 /* 思考强度是 SDK 原始值(low/medium/high/xhigh/max),用等宽字保留技术感。 */
 .model-effort-select { font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }
 
-.agent-editor__error { border-inline-start: 2px solid var(--dl-error); padding-inline-start: var(--dl-space-2); color: var(--dl-error); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.agent-editor__error { border-inline-start: var(--agent-emphasis-width) solid var(--dl-error); padding-inline-start: var(--dl-space-2); color: var(--dl-error); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
 .agent-editor__danger { display: grid; gap: var(--dl-space-2); padding-block-start: var(--dl-space-3); border-block-start: var(--dl-border-width) solid var(--dl-border-subtle); }
 .agent-editor__danger-title { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); font-weight: 500; }
@@ -1425,7 +1597,8 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .agent-editor__save-state[data-state='dirty'],
 .agent-editor__save-state[data-state='saving'],
 .agent-editor__save-state[data-state='saved'] { color: var(--dl-text-secondary); }
-.agent-editor__save-state[data-state='incomplete'] { color: var(--dl-warning); }
+.agent-editor__save-state[data-state='incomplete'],
+.agent-editor__save-state[data-state='blocked'] { color: var(--dl-warning); }
 .agent-editor__save-state[data-state='error'] { color: var(--dl-error); }
 .agent-editor__save-state .dl-icon { color: var(--dl-success); }
 .agent-editor__save-time { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }
@@ -1460,7 +1633,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .fallback-row__actions { grid-column: 2; justify-content: flex-end; }
   /* 矩阵在窄屏压成两行:标签与思考同排,模型占满下一行;两档矩阵共用。 */
   .model-matrix__head { display: none; }
-  .model-matrix__row, .model-matrix--tiers .model-matrix__row { grid-template-columns: minmax(0, 1fr) 132px; gap: var(--dl-space-2); }
+  .model-matrix__row, .model-matrix--tiers .model-matrix__row { grid-template-columns: minmax(0, 1fr) var(--agent-matrix-control); gap: var(--dl-space-2); }
   .model-matrix__label { grid-column: 1; grid-row: 1; }
   .model-matrix--tiers .model-matrix__tier-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-1) var(--dl-space-2); grid-column: 1; grid-row: 1; }
   /* 默认矩阵:标签 span + 两个 select 包裹层。 */

@@ -1849,10 +1849,14 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
   await sourceTab.click()
-  await expect(dialog.getByRole('button', { name: '使用订阅' })).toHaveAttribute('aria-pressed', 'true')
-  // 切到第一个网关:来源摘要与模型选项随之变化。
-  await dialog.getByRole('button', { name: /公司 LiteLLM/ }).click()
-  await expect(dialog.locator('.model-source-summary')).toContainText('公司 LiteLLM')
+  const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude' })
+  await expect(subscriptionRow).toHaveAttribute('data-active', 'true')
+  await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
+  // 切到第一个网关:通过行内菜单「使用此 API 渠道」显式切换。
+  const litellmRow = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
+  await litellmRow.getByRole('button', { name: '公司 LiteLLM 的更多操作' }).click()
+  await dialog.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
+  await expect(litellmRow).toHaveAttribute('data-active', 'true')
   await defaultsTab.click()
   const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
   await expect(model).toHaveValue('claude-sonnet-5-5')
@@ -1862,15 +1866,37 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
 
   // 切到只提供一个模型的网关:已选的 opus 不在来源中,提示并阻止保存。
   await sourceTab.click()
-  await dialog.getByRole('button', { name: /OpenRouter/ }).click()
+  const openRouterRow = dialog.locator('.source-row--gateway', { hasText: 'OpenRouter' })
+  await openRouterRow.getByRole('button', { name: 'OpenRouter 的更多操作' }).click()
+  await dialog.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
   await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
 
+  // 窄列里的原生 select 关闭态也不能把「不可用」裁掉:实测文本宽不得超过可用宽度。
+  await sectionTabs.getByRole('tab', { name: /^档位映射/ }).click()
+  const tierSelectOverflows = await dialog.locator('.model-matrix--tiers select[aria-label$="模型"]').evaluateAll((selects) => selects.map((select) => {
+    if (!(select instanceof HTMLSelectElement)) return 0
+    const element = select
+    const style = getComputedStyle(element)
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (context === null) return 0
+    context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    const text = element.selectedOptions[0]?.textContent ?? ''
+    const available = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 24
+    return context.measureText(text).width - available
+  }))
+  expect(tierSelectOverflows.every((value) => value <= 1), '档位下拉的关闭态文本不得被裁切').toBe(true)
+
   // 退登订阅会把来源变为未配置:先切回订阅,再退出登录。
   await sourceTab.click()
-  await dialog.getByRole('button', { name: '使用订阅' }).click()
-  await dialog.getByRole('button', { name: '退出登录' }).click()
+  await subscriptionRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
+  await dialog.getByRole('menuitem', { name: '使用此订阅' }).click()
+  await subscriptionRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
+  await dialog.getByRole('menuitem', { name: '断开连接' }).click()
   await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
+  // 页脚直接说明保存被拦下的原因,不只依赖行内状态。
+  await expect(dialog.locator('.agent-editor__save-state')).toContainText('当前来源未连接')
   await defaultsTab.click({ force: true })
   await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
   await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
@@ -1880,13 +1906,64 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await dialog.getByRole('button', { name: '保存', exact: true }).click({ force: true })
   await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
   // 重新登录后恢复可用。
-  await dialog.getByRole('button', { name: '登录 Claude' }).click()
-  await expect(dialog.locator('.source-card__meta')).toContainText('已连接')
+  await subscriptionRow.getByRole('button', { name: '连接', exact: true }).click()
+  await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
   await expect(defaultsTab).not.toHaveAttribute('aria-disabled', 'true')
 })
 
+// 订阅是服务商中立的:Claude 与 ChatGPT 各保留一份连接配置,切换后模型目录随之变化。
+test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之变化', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
+  await sectionTabs.getByRole('tab', { name: /^模型来源/ }).click()
+
+  // 两个分区标题都使用通用称谓。
+  const headings = dialog.locator('.source-block__head h3')
+  await expect(headings.nth(0)).toHaveText('订阅')
+  await expect(headings.nth(1)).toHaveText('API 渠道')
+
+  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude' })
+  const chatgptRow = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT' })
+  await expect(claudeRow.locator('.source-row__status')).toHaveText('已连接')
+  await expect(chatgptRow.locator('.source-row__status')).toHaveText('未连接')
+
+  // 点菜单外只收起菜单,不得穿透触发下方控件或关闭对话框。
+  await claudeRow.getByRole('button', { name: 'Claude 订阅操作' }).click()
+  const headingBox = await headings.nth(0).boundingBox()
+  expect(headingBox).not.toBeNull()
+  if (headingBox !== null) await page.mouse.click(headingBox.x + headingBox.width / 2, headingBox.y + headingBox.height / 2)
+  await expect(dialog.getByRole('menu')).toHaveCount(0)
+  await expect(dialog).toBeVisible()
+  await expect(chatgptRow.locator('.source-row__status')).toHaveText('未连接')
+
+  // ChatGPT 默认未连接:连接后可在行内菜单切换到它。
+  await chatgptRow.getByRole('button', { name: '连接', exact: true }).click()
+  await expect(chatgptRow.locator('.source-row__status')).toHaveText('已连接')
+  await chatgptRow.getByRole('button', { name: 'ChatGPT 订阅操作' }).click()
+  await dialog.getByRole('menuitem', { name: '使用此订阅' }).click()
+  await expect(chatgptRow).toHaveAttribute('data-active', 'true')
+  await expect(claudeRow).not.toHaveAttribute('data-active', 'true')
+
+  // 模型目录切换为 OpenAI 模型;旧的 Claude 默认值需重新选择后警告才消失。
+  await sectionTabs.getByRole('tab', { name: /^默认模型/ }).click()
+  const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  const options = await model.locator('option').allTextContents()
+  expect(options.some((text) => text.includes('GPT-5.5'))).toBe(true)
+  // 旧的 Claude 默认值会保留并标注不可用,选择一个 GPT 模型后它从选项里消失。
+  await model.selectOption('gpt-5.5')
+  await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toHaveCount(0)
+  const optionsAfter = await model.locator('option').allTextContents()
+  expect(optionsAfter.some((text) => text.includes('Claude'))).toBe(false)
+})
+
 // 375px 英文 + 自定义角标是最坏宽度:tab 条必须内部横向滚动,不能把整个对话框撑宽。
-test('Agent 设置 @375 英文:模型页有角标时二级 tab 内部滚动,body 不横向溢出', async ({ page }) => {
+test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可见,body 不横向溢出', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 })
   await login(page)
   await waitForStable(page)
@@ -1908,12 +1985,29 @@ test('Agent 设置 @375 英文:模型页有角标时二级 tab 内部滚动,body
   const overflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
   expect(overflow, '对话框内容区不得横向溢出').toBeLessThanOrEqual(1)
 
-  // 四个 tab 在窄屏下超出可用宽度时,滚动发生在 tab 条自身。
+  // 四个 tab 在窄屏排成两行两列:全部完整可见,不发生裁切或滚动。
   const track = dialog.locator('.model-subtabs__track')
-  const trackScrollable = await track.evaluate((element) => element.scrollWidth > element.clientWidth)
-  expect(trackScrollable, 'tab 条自身应可横向滚动').toBe(true)
+  const trackOverflow = await track.evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(trackOverflow, 'tab 条不得横向溢出').toBeLessThanOrEqual(1)
   const tabOverflows = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => button.scrollWidth - button.clientWidth))
   expect(tabOverflows.every((value) => value <= 1), '每个 tab 的文字不得越出自身按钮盒').toBe(true)
+  const trackBox = await track.boundingBox()
+  const tabBoxes = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => {
+    const rect = button.getBoundingClientRect()
+    return { left: rect.left, right: rect.right }
+  }))
+  expect(trackBox).not.toBeNull()
+  if (trackBox !== null) {
+    expect(tabBoxes.every((box) => box.left >= trackBox.x - 1 && box.right <= trackBox.x + trackBox.width + 1), '每个 tab 都落在 tab 条内').toBe(true)
+  }
+
+  // 订阅与 API 渠道两组来源行在窄屏同样不得撑宽内容区。
+  await sectionTabs.getByRole('tab', { name: /^Model source/ }).click()
+  const sourceOverflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(sourceOverflow, '来源页不得横向溢出').toBeLessThanOrEqual(1)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(2)
+  const rowOverflow = await dialog.locator('.source-row').evaluateAll((rows) => rows.map((row) => row.scrollWidth - row.clientWidth))
+  expect(rowOverflow.every((value) => value <= 1), '来源行内容不得越出自身').toBe(true)
 })
 
 // 网关:添加 → 测试连接(自动发现模型) → 保存;保存不隐式切换来源,需显式点选。
@@ -1926,22 +2020,45 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
-  await dialog.getByRole('button', { name: '添加网关', exact: true }).click()
+  await dialog.getByRole('button', { name: '添加 API 渠道', exact: true }).click()
   await dialog.getByRole('textbox', { name: '名称' }).fill('测试网关')
   await dialog.getByRole('textbox', { name: 'Base URL' }).fill('https://gateway.example.com')
   await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-test-123456789')
   await dialog.getByRole('button', { name: '测试连接', exact: true }).click()
   await expect(dialog.locator('.gateway-probe')).toContainText('连接成功')
   await expect(dialog.getByRole('textbox', { name: '模型（每行一个）' })).toHaveValue(/claude-sonnet-5-5/)
-  await dialog.getByRole('button', { name: '保存网关', exact: true }).click()
-  await expect(dialog.locator('.gateway-row')).toHaveCount(3)
+  await dialog.getByRole('button', { name: '保存 API 渠道', exact: true }).click()
+  await expect(dialog.locator('.source-row--gateway')).toHaveCount(3)
   // 保存只落配置,不隐式切换:来源仍是订阅。
-  await expect(dialog.locator('.gateway-row[data-active="true"]')).toHaveCount(0)
-  await expect(dialog.locator('.model-source-summary')).toContainText('订阅')
-  // 显式点选后才成为当前来源。
-  await dialog.getByRole('button', { name: /测试网关/ }).click()
-  await expect(dialog.locator('.gateway-row[data-active="true"]')).toContainText('测试网关')
-  await expect(dialog.locator('.model-source-summary')).toContainText('测试网关')
+  await expect(dialog.locator('.source-row--gateway[data-active="true"]')).toHaveCount(0)
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude' })).toHaveAttribute('data-active', 'true')
+
+  // 点击网关行进入它的设置页,返回后回到列表。
+  const testGatewayRow = dialog.locator('.source-row--gateway', { hasText: '测试网关' })
+  await testGatewayRow.getByRole('button', { name: '打开 测试网关 的设置' }).click()
+  await expect(dialog.locator('.gateway-form')).toContainText('编辑 API 渠道')
+  await expect(dialog.getByRole('textbox', { name: 'Base URL' })).toHaveValue('https://gateway.example.com')
+  await dialog.getByRole('button', { name: '返回 API 渠道列表' }).click()
+
+  // 行内菜单提供「使用此 API 渠道 / 编辑 / 删除」;显式使用后才成为当前来源。
+  await testGatewayRow.getByRole('button', { name: '测试网关 的更多操作' }).click()
+  const menu = dialog.getByRole('menu')
+  await expect(menu.getByRole('menuitem')).toHaveCount(3)
+  await expect(menu.getByRole('menuitem', { name: '使用此 API 渠道' })).toBeEnabled()
+  await menu.getByRole('menuitem', { name: '使用此 API 渠道' }).click()
+  await expect(testGatewayRow).toHaveAttribute('data-active', 'true')
+
+  // 菜单键盘可达:Enter 打开并聚焦首项,方向键移动,Esc 收起且焦点回触发钮。
+  const trigger = testGatewayRow.getByRole('button', { name: '测试网关 的更多操作' })
+  await trigger.focus()
+  await page.keyboard.press('Enter')
+  await expect(dialog.getByRole('menu').getByRole('menuitem', { name: '编辑' })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(dialog.getByRole('menu').getByRole('menuitem', { name: '删除' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByRole('menu')).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+  await expect(dialog).toBeVisible()
 })
 
 // 至少保留一个 Agent:连续删到只剩一个后,删除入口禁用并给出原因。

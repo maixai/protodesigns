@@ -2,7 +2,7 @@
 import type { AgentId, ChatSession } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
-import type { ModelSource, ModelSubscription } from '../contracts/generated/agent-model-config'
+import type { ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
 import type { InstalledPlugin, PluginInstallScopeId } from '../contracts/generated/installed-plugin'
@@ -25,7 +25,7 @@ import type { FileContent } from '../contracts/generated/file-content'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import { delay } from '../mocks/delay'
-import { EFFORT_LEVELS, MODELS, TIER_DEFAULTS } from '../data/models'
+import { EFFORT_LEVELS, activeSubscriptionOf, modelsForSubscription, subscriptionIsReady, tierDefaultsForSource } from '../data/models'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentNotifications,
@@ -87,36 +87,37 @@ function invalidFallback(config: AgentConfig): boolean {
     || fallback.includes(config.model.defaultModelId)
 }
 
-// 模型来源可用:订阅已连接且未过期,或当前网关存在且填了地址与密钥。
+// 模型来源可用:当前订阅已连接且未过期,或当前 API Key 存在且填了地址与密钥。
 // 测试连接成功不是解锁条件 —— 离线 / 内网网关仍然应该允许配置模型。
 function sourceReady(source: ModelSource): boolean {
   if (source.kind === 'subscription') {
-    const subscription = source.subscription
-    if (!subscription.connected || subscription.status === 'expired') return false
-    const expiresAt = Date.parse(subscription.expiresAt)
-    return !Number.isFinite(expiresAt) || expiresAt > Date.now()
+    const subscription = activeSubscriptionOf(source)
+    return subscription !== undefined && subscriptionIsReady(subscription)
   }
   const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
   return gateway !== undefined && gateway.baseUrl.trim() !== '' && gateway.apiKeySet
 }
 
-// 当前来源提供的模型集合:订阅给内置目录,网关给其模型列表。
+// 当前来源提供的模型集合:订阅按服务商给目录,API Key 给它自己的模型列表。
 function sourceModelIds(source: ModelSource): Set<string> {
-  if (source.kind === 'subscription') return new Set(MODELS.map((model) => model.id))
+  if (source.kind === 'subscription') {
+    return new Set(modelsForSubscription(source.activeSubscriptionProvider).map((model) => model.id))
+  }
   const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
   return new Set(gateway?.models ?? [])
 }
 
 // 已配置的模型必须来自当前来源;切换来源后残留的旧模型视为无效,阻止写回。
-// 空串档位会解析到内置默认模型,同样纳入校验。
+// 空串档位会解析到该来源的内置默认模型,同样纳入校验。
 const TIER_IDS = ['fable', 'opus', 'sonnet', 'haiku'] as const
 function invalidSourceModels(config: AgentConfig): boolean {
   const available = sourceModelIds(config.model.source)
+  const defaults = tierDefaultsForSource(config.model.source)
   const ids = [
     config.model.defaultModelId,
     config.model.subagentModelId,
     ...config.model.fallbackModelIds,
-    ...TIER_IDS.map((tierId) => config.model.tiers[tierId].modelId || TIER_DEFAULTS[tierId]),
+    ...TIER_IDS.map((tierId) => config.model.tiers[tierId].modelId || defaults[tierId]),
   ]
   return ids.some((id) => id !== '' && !available.has(id))
 }
@@ -173,16 +174,16 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
   return { ok: true, value: updated }
 }
 
-// 订阅登录:原型里直接成功;真实实现应由官方 Claude Code / Agent SDK 的本地登录态提供,
-// 不在第三方客户端内自建 claude.ai OAuth。
-export async function connectSubscription(): Promise<Result<ModelSubscription>> {
+// 订阅连接:原型里直接成功;真实实现应由对应服务商官方 CLI / SDK 的本地登录态提供,
+// 不在第三方客户端内自建 OAuth。
+export async function connectSubscription(provider: ModelSubscriptionProviderId): Promise<Result<ModelSubscription>> {
   await delay()
-  return { ok: true, value: mockConnectSubscription() }
+  return { ok: true, value: mockConnectSubscription(provider) }
 }
 
-export async function disconnectSubscription(): Promise<Result<ModelSubscription>> {
+export async function disconnectSubscription(provider: ModelSubscriptionProviderId): Promise<Result<ModelSubscription>> {
   await delay()
-  return { ok: true, value: mockDisconnectSubscription() }
+  return { ok: true, value: mockDisconnectSubscription(provider) }
 }
 
 // 网关连接测试:成功只代表凭据/地址可用,不代表每个模型都可用。

@@ -428,8 +428,15 @@ enum ModelGatewayAuthId {
   apiKey,
 }
 
+// 订阅服务商:同一时间只能启用一个订阅,两套连接配置常驻。
+enum ModelSubscriptionProviderId {
+  claude,
+  chatgpt,
+}
+
 // 订阅登录态:原型只展示与模拟,不实现真实 OAuth。
 model ModelSubscription {
+  provider: ModelSubscriptionProviderId;
   connected: boolean;
   account: string;
   plan: string;
@@ -451,11 +458,13 @@ model ModelGateway {
   models: string[];
 }
 
-// 当前活动来源与两套配置。kind 决定运行时使用订阅还是某个网关。
+// 当前活动来源与两类配置。kind 决定运行时使用订阅还是 API Key(网关)。
+// 订阅按服务商各保留一份连接配置,activeSubscriptionProvider 指出当前启用的那一个。
 // 同样被内联进 AgentModelConfig,不单独产出入口类型。
 model ModelSource {
   kind: ModelSourceKindId;
-  subscription: ModelSubscription;
+  subscriptions: ModelSubscription[];
+  activeSubscriptionProvider: ModelSubscriptionProviderId;
   gateways: ModelGateway[];
   activeGatewayId: string;
 }

@@ -1613,6 +1613,42 @@ test('侧栏 Agent 身份:名称与备注不截断', async ({ page }) => {
   }
 })
 
+// Agent 设置:无变更时保存不可用;有变更才可点;保存后留在对话框并显示内联状态。
+test('Agent 设置:保存按钮随脏状态启用,保存后留在对话框并提示', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  const save = dialog.getByRole('button', { name: '保存', exact: true })
+  const state = dialog.locator('.agent-editor__save-state')
+  const name = dialog.getByRole('textbox', { name: '名称' })
+  await expect(state).toHaveText('无未保存的更改')
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  // 禁用态保留青瓷色相,不再跳到近黑的中性 sunken。
+  const disabledBackground = await save.evaluate((element) => getComputedStyle(element).backgroundColor)
+  expect(disabledBackground).not.toBe(await resolveToken(page, '--dl-bg-sunken'))
+  expect(await save.evaluate((element) => getComputedStyle(element).borderTopColor)).not.toBe('rgba(0, 0, 0, 0)')
+  await name.fill('规划官')
+  await expect(state).toHaveText('有未保存的更改')
+  await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+  await save.click()
+  await expect(dialog).toBeVisible()
+  await expect(save).toBeFocused()
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  await expect(state).toContainText('已保存')
+  // 再改一次 → 回到「有未保存的更改」;改回保存值 → 重新干净。
+  await name.fill('规划官二')
+  await expect(state).toHaveText('有未保存的更改')
+  await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+  await name.fill('规划官')
+  await expect(state).toHaveText('无未保存的更改')
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  await dialog.getByRole('button', { name: '取消' }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
 // Agent 设置:改名后侧栏身份与转录署名同步;删除后自动回到剩余 Agent。
 test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
@@ -1622,14 +1658,26 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await expect(dialog).toBeVisible()
+  const save = dialog.getByRole('button', { name: '保存', exact: true })
+  const saveState = dialog.locator('.agent-editor__save-state')
+  await expect(saveState).toHaveText('无未保存的更改')
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
   await dialog.getByRole('textbox', { name: '名称' }).fill('规划官')
   await dialog.getByRole('textbox', { name: '备注' }).fill('拆解与推进')
-  await dialog.getByRole('button', { name: '保存' }).click()
-  await expect(dialog).toHaveCount(0)
+  await expect(saveState).toHaveText('有未保存的更改')
+  await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+  await save.click()
+  // Apply 语义:保存后留在对话框,由内联状态行确认结果。
+  await expect(dialog).toBeVisible()
+  await expect(save).toBeFocused()
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+  await expect(saveState).toContainText('已保存')
   await expect(page.locator(AGENT_TRIGGER)).toContainText('规划官')
   await expect(page.locator(AGENT_TRIGGER)).toContainText('拆解与推进')
   // 转录里的助手署名与侧栏同源。
   await expect(page.getByRole('log')).toContainText('规划官')
+  await dialog.getByRole('button', { name: '取消' }).click()
+  await expect(dialog).toHaveCount(0)
 
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
@@ -1659,12 +1707,15 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await page.keyboard.press('ArrowRight')
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await expect(modelTab).toBeFocused()
-  // 模型页内再分三区;默认分区选中,页面上只呈现外层模型面板 + 当前分区面板。
+  // 模型页内再分四区;来源已配置,默认模型分区选中,页面上只呈现外层模型面板 + 当前分区面板。
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
+  const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
   const tierTab = sectionTabs.getByRole('tab', { name: /^档位映射/ })
   const advancedTab = sectionTabs.getByRole('tab', { name: /^高级/ })
-  await expect(sectionTabs.getByRole('tab')).toHaveCount(3)
+  await expect(sectionTabs.getByRole('tab')).toHaveCount(4)
+  await expect(sourceTab).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(sourceTab).toHaveAttribute('aria-selected', 'false')
   await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
   await expect(dialog.getByRole('tabpanel')).toHaveCount(2)
 
@@ -1677,7 +1728,6 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(conversationEffort).toHaveValue('')
   await expect(subagentModel).toHaveValue('')
   await expect(subagentEffort).toHaveValue('')
-  await expect(subagentModel.locator('option').first()).toHaveText('跟随对话')
   await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
   await expect(dialog.getByRole('combobox', { name: 'Fable · 模型', exact: true })).toHaveCount(0)
   await expect(advancedTab).toHaveAttribute('aria-label', '高级')
@@ -1731,8 +1781,11 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
 
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(dialog).toHaveCount(0)
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.agent-editor__save-state')).toContainText('已保存')
   await expect(page.locator('.telemetry__model').first()).toHaveText('Claude Opus 5.5')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
 
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
@@ -1781,6 +1834,114 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await page.screenshot({ path: testInfo.outputPath('agent-settings-model-1280.png') })
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(page.locator('.telemetry__model').first()).toHaveText('Claude Opus 5.5')
+})
+
+// 模型来源:订阅与网关互斥切换;未配置来源时后三个分区禁用并引导回来源页。
+test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
+  const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
+  const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
+  await sourceTab.click()
+  await expect(dialog.getByRole('button', { name: '使用订阅' })).toHaveAttribute('aria-pressed', 'true')
+  // 切到第一个网关:来源摘要与模型选项随之变化。
+  await dialog.getByRole('button', { name: /公司 LiteLLM/ }).click()
+  await expect(dialog.locator('.model-source-summary')).toContainText('公司 LiteLLM')
+  await defaultsTab.click()
+  const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  await expect(model).toHaveValue('claude-sonnet-5-5')
+  // 网关来源下,模型选项来自该网关配置的模型列表。
+  await model.selectOption('claude-opus-5-5')
+  await expect(model).toHaveValue('claude-opus-5-5')
+
+  // 切到只提供一个模型的网关:已选的 opus 不在来源中,提示并阻止保存。
+  await sourceTab.click()
+  await dialog.getByRole('button', { name: /OpenRouter/ }).click()
+  await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+
+  // 退登订阅会把来源变为未配置:先切回订阅,再退出登录。
+  await sourceTab.click()
+  await dialog.getByRole('button', { name: '使用订阅' }).click()
+  await dialog.getByRole('button', { name: '退出登录' }).click()
+  await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
+  await defaultsTab.click({ force: true })
+  await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
+  // 再点「保存」也必须重新给出可见原因(激活分区会清空提示,不能把反馈一起吞掉)。
+  await sourceTab.click()
+  await expect(dialog.locator('.model-source-notice')).toHaveCount(0)
+  await dialog.getByRole('button', { name: '保存', exact: true }).click({ force: true })
+  await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
+  // 重新登录后恢复可用。
+  await dialog.getByRole('button', { name: '登录 Claude' }).click()
+  await expect(dialog.locator('.source-card__meta')).toContainText('已连接')
+  await expect(defaultsTab).not.toHaveAttribute('aria-disabled', 'true')
+})
+
+// 375px 英文 + 自定义角标是最坏宽度:tab 条必须内部横向滚动,不能把整个对话框撑宽。
+test('Agent 设置 @375 英文:模型页有角标时二级 tab 内部滚动,body 不横向溢出', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 })
+  await login(page)
+  await waitForStable(page)
+  await switchLanguageViaSettings(page, 'English')
+  // 375 下 Agent 选择器在侧栏抽屉里,先打开抽屉。
+  await page.getByRole('button', { name: 'Open sidebar' }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent settings' })
+  await dialog.getByRole('tab', { name: 'Model', exact: true }).click()
+  const sectionTabs = dialog.getByRole('tablist', { name: 'Model settings sections' })
+  const defaultsTab = sectionTabs.getByRole('tab', { name: /^Defaults/ })
+  await defaultsTab.click()
+  // 造一个非默认选择,让 Defaults 带角标。
+  await dialog.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption('claude-opus-5-5')
+  await expect(defaultsTab.locator('.model-subtabs__count')).toHaveText('1')
+
+  const body = dialog.locator('.agent-editor__body')
+  const overflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(overflow, '对话框内容区不得横向溢出').toBeLessThanOrEqual(1)
+
+  // 四个 tab 在窄屏下超出可用宽度时,滚动发生在 tab 条自身。
+  const track = dialog.locator('.model-subtabs__track')
+  const trackScrollable = await track.evaluate((element) => element.scrollWidth > element.clientWidth)
+  expect(trackScrollable, 'tab 条自身应可横向滚动').toBe(true)
+  const tabOverflows = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => button.scrollWidth - button.clientWidth))
+  expect(tabOverflows.every((value) => value <= 1), '每个 tab 的文字不得越出自身按钮盒').toBe(true)
+})
+
+// 网关:添加 → 测试连接(自动发现模型) → 保存;保存不隐式切换来源,需显式点选。
+test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+  await dialog.getByRole('button', { name: '添加网关', exact: true }).click()
+  await dialog.getByRole('textbox', { name: '名称' }).fill('测试网关')
+  await dialog.getByRole('textbox', { name: 'Base URL' }).fill('https://gateway.example.com')
+  await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-test-123456789')
+  await dialog.getByRole('button', { name: '测试连接', exact: true }).click()
+  await expect(dialog.locator('.gateway-probe')).toContainText('连接成功')
+  await expect(dialog.getByRole('textbox', { name: '模型（每行一个）' })).toHaveValue(/claude-sonnet-5-5/)
+  await dialog.getByRole('button', { name: '保存网关', exact: true }).click()
+  await expect(dialog.locator('.gateway-row')).toHaveCount(3)
+  // 保存只落配置,不隐式切换:来源仍是订阅。
+  await expect(dialog.locator('.gateway-row[data-active="true"]')).toHaveCount(0)
+  await expect(dialog.locator('.model-source-summary')).toContainText('订阅')
+  // 显式点选后才成为当前来源。
+  await dialog.getByRole('button', { name: /测试网关/ }).click()
+  await expect(dialog.locator('.gateway-row[data-active="true"]')).toContainText('测试网关')
+  await expect(dialog.locator('.model-source-summary')).toContainText('测试网关')
 })
 
 // 至少保留一个 Agent:连续删到只剩一个后,删除入口禁用并给出原因。

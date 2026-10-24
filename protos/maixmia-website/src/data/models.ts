@@ -1,6 +1,7 @@
 // 唯一模型目录:设置按能力排序,会话菜单单独保留既有选项的顺序。
 // 展示名是品牌专有名词,两种语言同值;窗口大小用于输入坞的上下文计算。
 import type { Messages } from '../i18n'
+import type { ModelSource } from '../contracts/generated/agent-model-config'
 
 export type ModelTierId = 'fable' | 'opus' | 'sonnet' | 'haiku'
 // 全局模型库里的渠道。名称是产品名,两种语言同值。
@@ -48,6 +49,34 @@ export const TIER_DEFAULTS: Record<ModelTierId, string> = {
   opus: OPUS_MODEL.id,
   sonnet: SONNET_MODEL.id,
   haiku: HAIKU_MODEL.id,
+}
+
+// 新建 Agent 的默认来源:订阅已连接,同时预置两个网关示例,便于演示切换。
+// 真实实现应由官方 Claude Code / Agent SDK 的本地登录态与用户配置提供。
+export function defaultModelSource(): ModelSource {
+  return {
+    kind: 'subscription',
+    subscription: {
+      connected: true,
+      account: 'linyizhou@example.com',
+      plan: 'Claude Max',
+      expiresAt: '2026-12-31T00:00:00Z',
+      status: 'ok',
+    },
+    gateways: [
+      {
+        id: 'gateway:litellm', name: '公司 LiteLLM', baseUrl: 'https://llm.corp.example.com',
+        protocol: 'anthropic', authMode: 'bearer', apiKeyMasked: 'sk-••••••••7f3a', apiKeySet: true,
+        discoverModels: true, models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
+      },
+      {
+        id: 'gateway:openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1',
+        protocol: 'openaiCompatible', authMode: 'bearer', apiKeyMasked: 'sk-or-••••••••a91c', apiKeySet: true,
+        discoverModels: false, models: ['anthropic/claude-sonnet-5'],
+      },
+    ],
+    activeGatewayId: 'gateway:litellm',
+  }
 }
 
 // 添加回退模型时的推荐顺序:便宜 / 快在前,能力更强的在后;默认模型与已选模型会被跳过。

@@ -124,6 +124,8 @@ const isAgentEditorOpen = ref(false)
 const agentEditorMode = ref<'create' | 'edit'>('edit')
 const agentEditorBusy = ref(false)
 const agentEditorError = ref('')
+// 编辑保存成功后递增:对话框据此重置脏状态基线并显示「已保存」。新建成功后仍关闭。
+const agentEditorSavedToken = ref(0)
 // 展开集是**真正的集合**:点一行只 toggle 它自己,不动别人(不再是「单值覆盖」)。
 const expandedProjects = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
@@ -1645,8 +1647,8 @@ async function onSubmitAgent(config: AgentConfig): Promise<void> {
     return
   }
   agents.value = agents.value.map((agent) => (agent.id === summary.id ? summary : agent))
-  isAgentEditorOpen.value = false
-  announcePlacement(t.value.workspace.agentAdmin.saved.replace('{name}', summary.name))
+  // 保存是 Apply 语义:不关闭对话框,让用户继续配置其它项;由对话框内联状态提示结果。
+  agentEditorSavedToken.value += 1
   // 模型可能改了:刷新可见会话的遥测,让状态条里的模型名与设置一致。
   for (const id of visibleChatIds.value) {
     telemetryLoaded.delete(id)
@@ -2844,7 +2846,7 @@ onBeforeUnmount(() => {
     <AgentEditorDialog
       :open="isAgentEditorOpen" :mode="agentEditorMode"
       :agent="agentEditorMode === 'edit' ? currentAgent : undefined"
-      :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError"
+      :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
     />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),

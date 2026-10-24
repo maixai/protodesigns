@@ -2,6 +2,8 @@
 import type { AgentId, ChatSession } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
+import type { ModelSource, ModelSubscription } from '../contracts/generated/agent-model-config'
+import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
 import type { InstalledPlugin, PluginInstallScopeId } from '../contracts/generated/installed-plugin'
 import type { MarketplaceConfig } from '../contracts/generated/marketplace-config'
@@ -23,7 +25,7 @@ import type { FileContent } from '../contracts/generated/file-content'
 import { useI18n } from '../i18n'
 import { currentRoute } from '../router'
 import { delay } from '../mocks/delay'
-import { EFFORT_LEVELS } from '../data/models'
+import { EFFORT_LEVELS, MODELS, TIER_DEFAULTS } from '../data/models'
 import { mockFileContent } from '../mocks/files'
 import {
   mockAgentNotifications,
@@ -32,8 +34,11 @@ import {
   mockAgentSignals,
   mockAgentExists,
   mockAgentSummaries,
+  mockConnectSubscription,
   mockCreateAgent,
   mockDeleteAgent,
+  mockDisconnectSubscription,
+  mockProbeModelGateway,
   mockAddMarketplace,
   mockInstallPlugin,
   mockInstalledPlugins,
@@ -82,6 +87,40 @@ function invalidFallback(config: AgentConfig): boolean {
     || fallback.includes(config.model.defaultModelId)
 }
 
+// 模型来源可用:订阅已连接且未过期,或当前网关存在且填了地址与密钥。
+// 测试连接成功不是解锁条件 —— 离线 / 内网网关仍然应该允许配置模型。
+function sourceReady(source: ModelSource): boolean {
+  if (source.kind === 'subscription') {
+    const subscription = source.subscription
+    if (!subscription.connected || subscription.status === 'expired') return false
+    const expiresAt = Date.parse(subscription.expiresAt)
+    return !Number.isFinite(expiresAt) || expiresAt > Date.now()
+  }
+  const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
+  return gateway !== undefined && gateway.baseUrl.trim() !== '' && gateway.apiKeySet
+}
+
+// 当前来源提供的模型集合:订阅给内置目录,网关给其模型列表。
+function sourceModelIds(source: ModelSource): Set<string> {
+  if (source.kind === 'subscription') return new Set(MODELS.map((model) => model.id))
+  const gateway = source.gateways.find((item) => item.id === source.activeGatewayId)
+  return new Set(gateway?.models ?? [])
+}
+
+// 已配置的模型必须来自当前来源;切换来源后残留的旧模型视为无效,阻止写回。
+// 空串档位会解析到内置默认模型,同样纳入校验。
+const TIER_IDS = ['fable', 'opus', 'sonnet', 'haiku'] as const
+function invalidSourceModels(config: AgentConfig): boolean {
+  const available = sourceModelIds(config.model.source)
+  const ids = [
+    config.model.defaultModelId,
+    config.model.subagentModelId,
+    ...config.model.fallbackModelIds,
+    ...TIER_IDS.map((tierId) => config.model.tiers[tierId].modelId || TIER_DEFAULTS[tierId]),
+  ]
+  return ids.some((id) => id !== '' && !available.has(id))
+}
+
 const EFFORT_VALUES = new Set<string>(['', ...EFFORT_LEVELS])
 
 // 思考强度:主对话、子 Agent 默认、每个档位都必须是 SDK 接受的值或空串。
@@ -108,7 +147,9 @@ export async function createAgent(config: AgentConfig): Promise<Result<AgentSumm
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
   if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
+  if (!sourceReady(config.model.source)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.sourceRequired) }
   if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
+  if (invalidSourceModels(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelUnavailable) }
   if (invalidFallback(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.fallbackInvalid) }
   if (invalidEffort(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.effortInvalid) }
   if (invalidCompactWindow(config.model.autoCompactWindowTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.compactWindowInvalid) }
@@ -120,7 +161,9 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
   if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
+  if (!sourceReady(config.model.source)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.sourceRequired) }
   if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
+  if (invalidSourceModels(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelUnavailable) }
   if (invalidFallback(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.fallbackInvalid) }
   if (invalidEffort(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.effortInvalid) }
   if (invalidCompactWindow(config.model.autoCompactWindowTokens)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.compactWindowInvalid) }
@@ -128,6 +171,24 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
   const updated = mockUpdateAgent(agentId, config)
   if (updated === null) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
   return { ok: true, value: updated }
+}
+
+// 订阅登录:原型里直接成功;真实实现应由官方 Claude Code / Agent SDK 的本地登录态提供,
+// 不在第三方客户端内自建 claude.ai OAuth。
+export async function connectSubscription(): Promise<Result<ModelSubscription>> {
+  await delay()
+  return { ok: true, value: mockConnectSubscription() }
+}
+
+export async function disconnectSubscription(): Promise<Result<ModelSubscription>> {
+  await delay()
+  return { ok: true, value: mockDisconnectSubscription() }
+}
+
+// 网关连接测试:成功只代表凭据/地址可用,不代表每个模型都可用。
+export async function probeModelGateway(baseUrl: string, discoverModels: boolean): Promise<Result<GatewayProbe>> {
+  await delay()
+  return { ok: true, value: mockProbeModelGateway(baseUrl, discoverModels) }
 }
 
 // 删除 Agent:它的项目连接、对话与插件配置一并移除。至少保留一个 Agent —— 没有 Agent

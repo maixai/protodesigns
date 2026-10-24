@@ -3,6 +3,8 @@ import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
+import type { ModelSubscription } from '../contracts/generated/agent-model-config'
+import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { PluginComponentId } from '../contracts/generated/plugin'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
 import type { Marketplace, PluginTrustId } from '../contracts/generated/marketplace'
@@ -25,7 +27,7 @@ import type { ConversationSearchHit } from '../contracts/generated/conversation-
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { Messages } from '../i18n'
 import { useI18n } from '../i18n'
-import { DEFAULT_MODEL, modelById } from '../data/models'
+import { DEFAULT_MODEL, defaultModelSource, modelById } from '../data/models'
 
 const { t } = useI18n()
 
@@ -44,8 +46,11 @@ interface AgentSeed {
   builtIn: boolean
 }
 
+// 模型来源:默认用已连接的 Claude 订阅;网关配置同时保留,便于在对话框里显式切换。
+// 订阅与网关在运行时互斥,同一时刻只有 kind 指向的那个来源生效。
 function defaultAgentModelConfig(): AgentModelConfig {
   return {
+    source: defaultModelSource(),
     defaultModelId: DEFAULT_MODEL.id,
     defaultEffortLevel: '',
     subagentModelId: '',
@@ -62,10 +67,15 @@ function defaultAgentModelConfig(): AgentModelConfig {
   }
 }
 
-// 档位是嵌套对象、回退是数组:读写都深拷贝,避免列表与对话框共享引用。
+// 档位是嵌套对象、回退是数组、来源含网关列表:读写都深拷贝,避免列表与对话框共享引用。
 function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
   return {
     ...config,
+    source: {
+      ...config.source,
+      subscription: { ...config.source.subscription },
+      gateways: config.source.gateways.map((gateway) => ({ ...gateway, models: [...gateway.models] })),
+    },
     tiers: {
       fable: { ...config.tiers.fable },
       opus: { ...config.tiers.opus },
@@ -74,6 +84,27 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
     },
     fallbackModelIds: [...config.fallbackModelIds],
   }
+}
+
+// 订阅登录在原型里直接成功,不做真实 OAuth;断开后来源随即变为未配置。
+export function mockConnectSubscription(): ModelSubscription {
+  return { connected: true, account: 'linyizhou@example.com', plan: 'Claude Max', expiresAt: '2026-12-31T00:00:00Z', status: 'ok' }
+}
+
+export function mockDisconnectSubscription(): ModelSubscription {
+  return { connected: false, account: '', plan: '', expiresAt: '', status: 'unchecked' }
+}
+
+// 网关探测:合法地址返回成功(自动发现时带模型列表);地址含 invalid 时模拟 401。
+export function mockProbeModelGateway(baseUrl: string, discoverModels: boolean): GatewayProbe {
+  const latencyMs = 120 + Math.floor(Math.random() * 300)
+  if (baseUrl.toLowerCase().includes('invalid')) {
+    return { connected: false, models: [], latencyMs, statusCode: 401, message: t.value.workspace.agentAdmin.probeUnauthorized }
+  }
+  if (!discoverModels) {
+    return { connected: true, models: [], latencyMs, statusCode: 200, message: t.value.workspace.agentAdmin.probeNoModels }
+  }
+  return { connected: true, models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'], latencyMs, statusCode: 200, message: t.value.workspace.agentAdmin.probeSuccess }
 }
 
 const agentStore: AgentSeed[] = [
@@ -85,6 +116,7 @@ const agentStore: AgentSeed[] = [
     noteKey: 'writing',
     // 写作助手刻意给一组非默认值,让「档位映射 / 思考强度 / 回退 / 自动压缩」都有实物可看。
     model: {
+      source: defaultModelSource(),
       defaultModelId: 'claude-opus-5-5',
       defaultEffortLevel: 'high',
       subagentModelId: 'claude-sonnet-5-5',

@@ -407,9 +407,75 @@ model ModelTierMap {
 
 // effortLevel 的合法值:空串(默认)、low、medium、high、xhigh、max。
 // 主对话的默认值对应 SDK 的 effort;子 Agent / 档位值由 Mia 写入生成的 AgentDefinition.effort。
+// ---- Agent 模型配置 ----
+
+// 模型来源:订阅与自定义网关在运行时互斥 —— 同一时刻只有一个活动凭据,
+// 但两套配置都可以保存在 Agent 里,以便显式切换。
+enum ModelSourceKindId {
+  subscription,
+  gateway,
+}
+
+// 网关协议:决定请求路径与鉴权头的默认规则。
+enum ModelGatewayProtocolId {
+  anthropic,
+  openaiCompatible,
+}
+
+// 网关鉴权方式。
+enum ModelGatewayAuthId {
+  bearer,
+  apiKey,
+}
+
+// 订阅登录态:原型只展示与模拟,不实现真实 OAuth。
+model ModelSubscription {
+  connected: boolean;
+  account: string;
+  plan: string;
+  expiresAt: string; // ISO 时间;空串 = 无到期信息
+  status: string;    // ok / expired / error / unchecked
+}
+
+// 自定义模型网关。apiKey 只以掩码返回,isSet 表示已保存;保存时留空表示保持原值。
+// 被 AgentModelConfig 引用,不加 @jsonSchema:由入口类型的 schema 内联,保持自包含。
+model ModelGateway {
+  id: string;
+  name: string;
+  baseUrl: string;
+  protocol: ModelGatewayProtocolId;
+  authMode: ModelGatewayAuthId;
+  apiKeyMasked: string;
+  apiKeySet: boolean;
+  discoverModels: boolean;
+  models: string[];
+}
+
+// 当前活动来源与两套配置。kind 决定运行时使用订阅还是某个网关。
+// 同样被内联进 AgentModelConfig,不单独产出入口类型。
+model ModelSource {
+  kind: ModelSourceKindId;
+  subscription: ModelSubscription;
+  gateways: ModelGateway[];
+  activeGatewayId: string;
+}
+
+// 网关连接测试结果。connected=false 时仍是一条业务结果(message / statusCode 说明原因)。
+@summary("GatewayProbe")
+@jsonSchema
+model GatewayProbe {
+  connected: boolean;
+  models: string[];
+  latencyMs: int32;
+  statusCode: int32;
+  message: string;
+}
+
 @summary("AgentModelConfig")
 @jsonSchema
 model AgentModelConfig {
+  // 模型从哪里来:订阅或某个自定义网关。默认模型 / 档位映射 / 高级都依赖它。
+  source: ModelSource;
   defaultModelId: string;         // 主对话模型,对应 SDK 的 model。
   defaultEffortLevel: string;     // 主对话思考强度,对应 SDK 的 effort;空串 = 模型默认。
   subagentModelId: string;        // 子 Agent 默认模型,对应 CLAUDE_CODE_SUBAGENT_MODEL;空串 = 跟随主模型。

@@ -186,6 +186,11 @@
 
   /* 焦点环:由 --dl-accent 派生,深浅通用 */
   --dl-focus-ring: 0 0 0 3px color-mix(in oklab, var(--dl-accent) 45%, transparent);
+  /* 有边框输入控件以染色描边指示焦点,仅叠极轻 halo;裁切编辑器改用细内描边。
+     无边框的按钮、菜单项、列表行与 Tab 继续使用上面的外扩焦点环。 */
+  --dl-focus-border: var(--dl-accent);
+  --dl-focus-halo: 0 0 0 1px color-mix(in oklab, var(--dl-accent) 35%, transparent);
+  --dl-focus-inner: inset 0 0 0 1px var(--dl-accent);
 
   color: var(--dl-text-primary);
   background-color: var(--dl-bg-base);
@@ -386,6 +391,13 @@ a {
   outline: none;
   box-shadow: var(--dl-focus-ring);
   border-radius: var(--dl-radius-sm);
+}
+
+/* 组件库输入框由外层状态描边指示焦点,内部原生 input 不再叠全局粗环。 */
+.n-input .n-input__input-el:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-radius: inherit;
 }
 
 /* 动效降级:状态切换仍发生,位移与缩放去掉;用极短时长而非 0 */

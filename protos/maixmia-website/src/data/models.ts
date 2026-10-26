@@ -67,12 +67,12 @@ export function modelsForSubscription(provider: ModelSubscriptionProviderId): re
     : model.provider !== 'OpenAI')
 }
 
-export function subscriptionSourceId(provider: ModelSubscriptionProviderId): string {
-  return `subscription:${provider}`
+export function subscriptionSourceId(id: string): string {
+  return `subscription:${id}`
 }
 
 export function activeSubscriptionOf(source: ModelSource): ModelSubscription | undefined {
-  return source.subscriptions.find((item) => subscriptionSourceId(item.provider) === source.activeSourceId)
+  return source.subscriptions.find((item) => subscriptionSourceId(item.id) === source.activeSourceId)
 }
 
 export function activeGatewayOf(source: ModelSource): ModelGateway | undefined {
@@ -99,14 +99,30 @@ export function tierDefaultsForSource(source: ModelSource): Record<ModelTierId, 
   return activeSubscriptionOf(source)?.provider === 'chatgpt' ? CHATGPT_TIER_DEFAULTS : TIER_DEFAULTS
 }
 
-// 新建 Agent 的默认来源:预置 Claude 订阅与两个 API 渠道,默认启用 Claude;
-// ChatGPT 订阅通过「添加来源」接入。真实实现应由各服务商官方 CLI / SDK 的本地登录态与用户配置提供。
+// 预置多个订阅以演示额度耗尽后的手动切换;用量不影响配置与保存。
 export function defaultModelSource(): ModelSource {
   return {
     subscriptions: [
       {
-        provider: 'claude', connected: true, account: 'linyizhou@example.com',
-        plan: 'Claude Max', expiresAt: '2026-12-31T00:00:00Z', status: 'ok',
+        id: 'claude-work', provider: 'claude', label: '工作', connected: true,
+        account: 'yizhou.lin@studio.example.com', plan: 'Claude Max',
+        expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(), status: 'ok',
+        usage: { state: 'exhausted', usedPercent: 100, resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString() },
+        credentialRef: 'keychain://mia/subscriptions/claude-work',
+      },
+      {
+        id: 'claude-personal', provider: 'claude', label: '个人', connected: true,
+        account: 'yizhou.personal@example.com', plan: 'Claude Pro',
+        expiresAt: new Date(Date.now() + 24 * 86_400_000).toISOString(), status: 'ok',
+        usage: { state: 'ok', usedPercent: 18, resetsAt: new Date(Date.now() + 4 * 3_600_000).toISOString() },
+        credentialRef: 'keychain://mia/subscriptions/claude-personal',
+      },
+      {
+        id: 'chatgpt-personal', provider: 'chatgpt', label: '个人', connected: true,
+        account: 'yizhou.openai@example.com', plan: 'ChatGPT Plus',
+        expiresAt: new Date(Date.now() + 18 * 86_400_000).toISOString(), status: 'ok',
+        usage: { state: 'ok', usedPercent: 35, resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+        credentialRef: 'keychain://mia/subscriptions/chatgpt-personal',
       },
     ],
     gateways: [
@@ -121,7 +137,7 @@ export function defaultModelSource(): ModelSource {
         models: ['anthropic/claude-sonnet-5'],
       },
     ],
-    activeSourceId: 'subscription:claude',
+    activeSourceId: 'subscription:claude-work',
   }
 }
 

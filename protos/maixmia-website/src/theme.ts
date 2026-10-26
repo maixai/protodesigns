@@ -125,13 +125,14 @@ export const darkOverrides: GlobalThemeOverrides = {
     placeholderColor: '#8f867a',
     textColorDisabled: '#6b6358',
     placeholderColorDisabled: '#6b6358',
-    // --dl-border-base / --dl-border-strong / --dl-accent
+    // --dl-border-base / --dl-border-strong / --dl-focus-border
     border: '1px solid #38332c',
     borderHover: '1px solid #4a443b',
-    borderFocus: '1px solid #8cc7b9',
+    borderFocus: '1px solid var(--dl-focus-border)',
     borderDisabled: '1px solid #38332c',
-    // --dl-focus-ring / --dl-radius-md / --dl-font-size-sm / --dl-line-body
-    boxShadowFocus: '0 0 0 3px color-mix(in oklab, #8cc7b9 45%, transparent)',
+    // 焦点描边与 halo 是原样交给 CSS 的字符串,可直接复用语义 token。
+    // --dl-focus-halo / --dl-radius-md / --dl-font-size-sm / --dl-line-body
+    boxShadowFocus: 'var(--dl-focus-halo)',
     borderRadius: '8px',
     fontSizeMedium: '13px',
     lineHeight: '1.7',

@@ -35,6 +35,8 @@ import {
   mockAgentExists,
   mockAgentSummaries,
   mockConnectSubscription,
+  mockCheckSubscription,
+  mockReauthorizeSubscription,
   mockCreateAgent,
   mockDeleteAgent,
   mockProbeModelGateway,
@@ -173,9 +175,19 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
 
 // 订阅连接:原型里直接成功;真实实现应由对应服务商官方 CLI / SDK 的本地登录态提供,
 // 不在第三方客户端内自建 OAuth。
-export async function connectSubscription(provider: ModelSubscriptionProviderId): Promise<Result<ModelSubscription>> {
+export async function connectSubscription(provider: ModelSubscriptionProviderId, existing: ModelSubscription[]): Promise<Result<ModelSubscription>> {
   await delay()
-  return { ok: true, value: mockConnectSubscription(provider) }
+  return { ok: true, value: mockConnectSubscription(provider, existing) }
+}
+
+export async function checkSubscription(subscription: ModelSubscription): Promise<Result<ModelSubscription>> {
+  await delay()
+  return { ok: true, value: mockCheckSubscription(subscription) }
+}
+
+export async function reauthorizeSubscription(subscription: ModelSubscription): Promise<Result<ModelSubscription>> {
+  await delay()
+  return { ok: true, value: mockReauthorizeSubscription(subscription) }
 }
 
 // 网关探测:一次请求同时验证凭据/地址并取回模型列表。

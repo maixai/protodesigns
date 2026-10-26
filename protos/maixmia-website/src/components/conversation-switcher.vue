@@ -1836,8 +1836,8 @@ onBeforeUnmount(() => {
 }
 
 .conversation-search:focus-within {
-  border-color: var(--dl-border-strong);
-  box-shadow: var(--dl-focus-ring);
+  border-color: var(--dl-focus-border);
+  box-shadow: var(--dl-focus-halo);
 }
 
 .conversation-search__icon {
@@ -1854,9 +1854,7 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-/* 焦点环只留**外层**那一圈(画在容器描边外侧的 .conversation-search:focus-within 上)。
-   输入框自身是透明无框的,若再继承全局 :focus-visible 的 box-shadow,就会与容器那圈叠加成
-   「双层青瓷框」;故这里显式抹掉,让输入框在聚焦时保持无自身描边(容器描边始终是中性发丝线)。 */
+/* 焦点由外层容器的 accent 描边与轻 halo 承担;透明输入框不再叠加全局粗环。 */
 .conversation-search__input:focus,
 .conversation-search__input:focus-visible {
   outline: none;

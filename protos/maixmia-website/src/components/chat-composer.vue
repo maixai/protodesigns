@@ -802,15 +802,11 @@ textarea { width: 100%; height: 100%; max-height: inherit; resize: none; color: 
 textarea::placeholder { color: var(--dl-text-secondary); }
 textarea:hover:not(:read-only) { background: var(--dl-bg-hover); }
 textarea:read-only { color: var(--dl-text-secondary); }
-/* 焦点环画在**输入框的可见边界**上(即 .composer-form 那圈描边),而不是 textarea 自身:
-   textarea 是无边框的,且被 .textarea-sizer 的 overflow:hidden 裁切 —— 而全局 `:focus-visible`
-   给的是**外扩** 3px 的环,画在它身上会整条被裁掉(实测只剩四个圆角处逃出的小楔形,
-   聚焦 / 未聚焦两图的强差异像素仅 327 个,四条边的中点全无变化),键盘用户因此看不出
-   哪个输入框被聚焦。这与「搜索框只由容器承担焦点环」是同一条既有做法
-   (见 conversation-switcher 的 .conversation-search:focus-within)。 */
+/* 焦点由输入坞可见边界的 accent 描边与轻 halo 承担,同时保留原阴影。
+   textarea 自身无框且被 .textarea-sizer 裁切,不在它身上叠加全局粗环。 */
 .composer-form:focus-within {
-  border-color: var(--dl-border-strong);
-  box-shadow: var(--dl-shadow-md), var(--dl-focus-ring);
+  border-color: var(--dl-focus-border);
+  box-shadow: var(--dl-shadow-md), var(--dl-focus-halo);
 }
 /* 输入框自身不再画环(它继承全局 :focus-visible),否则会与容器那圈叠成「双层青瓷框」。 */
 textarea:focus,

@@ -187,7 +187,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
   line-height: var(--dl-line-body);
 }
 
-/* 搜索框沿用输入框配方:抬起底 + 发丝描边,聚焦时描边加强并加焦点环。 */
+/* 搜索框沿用输入框配方:聚焦时描边染成 accent,仅叠极轻 halo。 */
 .picker__search-input {
   width: 100%;
   min-height: var(--dl-control-height);
@@ -204,7 +204,10 @@ onBeforeUnmount(() => dialogRef.value?.close())
 }
 
 .picker__search-input:focus-visible {
-  border-color: var(--dl-border-strong);
+  border-color: var(--dl-focus-border);
+  outline: none;
+  box-shadow: var(--dl-focus-halo);
+  border-radius: var(--dl-radius-md);
 }
 
 /* 列表自身滚动:对话框有最大高度,候选目录可能很多。滚动链同样隔离在工作台内。 */

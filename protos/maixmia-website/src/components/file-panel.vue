@@ -1100,14 +1100,32 @@ const statRemoved = computed(() => t.value.workspace.filePanel.removedStat.repla
 }
 
 /* ---- 源码档:编辑器撑满内容区(内部自己滚)----
-   焦点环画在**容器**上并向内收:面板的圆角裁切会把外扩的环整条剪掉(本仓既有教训)。 */
+   焦点用容器上的细内描边指示,避免面板圆角裁掉外扩 halo。 */
 .file-panel__editor {
+  position: relative;
+  isolation: isolate;
   block-size: 100%;
   overflow: hidden;
 }
 
 .file-panel__editor:focus-within {
-  box-shadow: inset var(--dl-focus-ring);
+  box-shadow: var(--dl-focus-inner);
+}
+
+/* 子编辑器有不透明背景,用不拦截指针的上层复现容器内描边,避免四边被盖住。 */
+.file-panel__editor:focus-within::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: var(--dl-z-sticky);
+  pointer-events: none;
+  box-shadow: inherit;
+}
+
+.file-panel__editor :deep(.cm-content:focus-visible) {
+  outline: none;
+  box-shadow: none;
+  border-radius: inherit;
 }
 
 /* 语法高亮的 token 类(类名来自 data/file-language.ts 的 HighlightStyle)。CodeMirror 产出的

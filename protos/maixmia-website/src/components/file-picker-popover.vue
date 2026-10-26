@@ -581,8 +581,8 @@ onBeforeUnmount(() => {
 }
 
 .file-picker__search:focus-within {
-  border-color: var(--dl-border-strong);
-  box-shadow: var(--dl-focus-ring);
+  border-color: var(--dl-focus-border);
+  box-shadow: var(--dl-focus-halo);
 }
 
 .file-picker__search-icon {

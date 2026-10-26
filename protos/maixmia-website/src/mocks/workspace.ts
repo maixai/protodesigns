@@ -27,7 +27,7 @@ import type { ConversationSearchHit } from '../contracts/generated/conversation-
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { Messages } from '../i18n'
 import { useI18n } from '../i18n'
-import { DEFAULT_MODEL, defaultModelSource, modelById } from '../data/models'
+import { DEFAULT_MODEL, defaultModelSource, modelById, subscriptionIsReady } from '../data/models'
 
 const { t } = useI18n()
 
@@ -73,7 +73,7 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
     ...config,
     source: {
       ...config.source,
-      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription })),
+      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription, usage: { ...subscription.usage } })),
       gateways: config.source.gateways.map((gateway) => ({ ...gateway, models: [...gateway.models] })),
     },
     tiers: {
@@ -86,20 +86,57 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
   }
 }
 
-// 订阅连接在原型里直接成功,不做真实 OAuth;断开后该订阅随即变为未配置。
+// 新订阅使用独立的演示身份与钥匙串引用,不执行真实 OAuth。
 const SUBSCRIPTION_PLANS: Record<ModelSubscriptionProviderId, string> = {
   claude: 'Claude Max',
   chatgpt: 'ChatGPT Plus',
 }
 
-export function mockConnectSubscription(provider: ModelSubscriptionProviderId): ModelSubscription {
+let subscriptionSequence = 0
+
+export function mockConnectSubscription(provider: ModelSubscriptionProviderId, existing: ModelSubscription[]): ModelSubscription {
+  const providerSubscriptions = existing.filter((item) => item.provider === provider)
+  const labels = new Set(providerSubscriptions.map((item) => item.label))
+  let accountNumber = providerSubscriptions.length + 1
+  // 删除账户后数量会回退,仍须跳过保留实例已占用的名称。
+  while (labels.has(`账户 ${accountNumber}`)) accountNumber += 1
+  subscriptionSequence += 1
+  while (existing.some((item) => item.id === `${provider}-account-${subscriptionSequence}`)) subscriptionSequence += 1
+  const id = `${provider}-account-${subscriptionSequence}`
   return {
-    provider,
+    id, provider,
+    label: `账户 ${accountNumber}`,
     connected: true,
-    account: 'linyizhou@example.com',
+    account: `yizhou.${provider}.${subscriptionSequence}@example.com`,
     plan: SUBSCRIPTION_PLANS[provider],
-    expiresAt: '2026-12-31T00:00:00Z',
+    expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
     status: 'ok',
+    usage: { state: 'ok', usedPercent: 5 + subscriptionSequence % 26, resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString() },
+    credentialRef: `keychain://mia/subscriptions/${id}`,
+  }
+}
+
+// 检查不会替换账户身份,也不会绕过过期或失效的授权;正常检查仅小幅增加用量。
+export function mockCheckSubscription(subscription: ModelSubscription): ModelSubscription {
+  if (!subscriptionIsReady(subscription) || subscription.status === 'error' || subscription.credentialRef === '') {
+    return { ...subscription, connected: false, status: subscription.status === 'expired' ? 'expired' : 'error', credentialRef: '', usage: { state: 'unknown', usedPercent: -1, resetsAt: '' } }
+  }
+  const usedPercent = subscription.usage.usedPercent < 0 ? -1 : Math.min(100, subscription.usage.usedPercent + 2)
+  return {
+    ...subscription, connected: true, status: 'ok',
+    usage: { ...subscription.usage, usedPercent, state: usedPercent < 0 ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= 80 ? 'warning' : 'ok' },
+  }
+}
+
+// 重新授权只更新同一个实例的凭据,不会额外创建来源或重置真实已知的额度。
+export function mockReauthorizeSubscription(subscription: ModelSubscription): ModelSubscription {
+  return {
+    ...subscription, connected: true, status: 'ok',
+    expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    credentialRef: `keychain://mia/subscriptions/${subscription.id}`,
+    usage: subscription.usage.state === 'unknown'
+      ? { state: 'ok', usedPercent: 8, resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString() }
+      : { ...subscription.usage },
   }
 }
 

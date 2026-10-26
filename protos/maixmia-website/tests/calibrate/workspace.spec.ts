@@ -1860,17 +1860,17 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
   await sourceTab.click()
-  // 所有来源在同一列表:Claude 订阅 + 两个 API 渠道。
+  // 所有来源在同一列表:三个订阅实例 + 两个 API 渠道。
   const sourceRows = dialog.locator('.source-row')
-  await expect(sourceRows).toHaveCount(3)
-  const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
-  await expect(subscriptionRow).toHaveAttribute('data-active', 'true')
-  await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
+  await expect(sourceRows).toHaveCount(5)
+  const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude · 工作' })
+  await expect(subscriptionRow).toHaveAttribute('data-selected', 'true')
+  await expect(subscriptionRow.locator('.source-row__status')).toHaveCount(0)
 
   // 切到第一个 API 渠道:点击行正文即切换当前来源。
   const litellmRow = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
   await litellmRow.getByRole('button', { name: '使用「公司 LiteLLM」作为模型来源' }).click()
-  await expect(litellmRow).toHaveAttribute('data-active', 'true')
+  await expect(litellmRow).toHaveAttribute('data-selected', 'true')
   await defaultsTab.click()
   const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
   await expect(model).toHaveValue('claude-sonnet-5-5')
@@ -1913,20 +1913,27 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await dialog.getByRole('menuitem', { name: '删除' }).click()
   await openRouterRow.locator('.source-row__confirm').getByRole('button', { name: '确认删除' }).click()
   await expect(dialog.locator('.source-row--gateway')).toHaveCount(1)
-  await expect(sourceRows).toHaveCount(2)
+  await expect(sourceRows).toHaveCount(4)
   await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
   await expect(dialog.locator('.agent-editor__save-state')).toContainText('未启用任何来源')
   await defaultsTab.click({ force: true })
   await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
   await expect(dialog.locator('.model-source-notice')).toContainText('先配置模型来源')
 
+  // 已有来源但没有启用项时,添加账户也不得偷偷启用它。
+  await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await expect(dialog.locator('.source-row[data-selected="true"]')).toHaveCount(0)
+  await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
+
   // 重新启用仍在列表里的 Claude 订阅。
-  await subscriptionRow.getByRole('button', { name: '使用「Claude 订阅」作为模型来源' }).click()
-  await expect(subscriptionRow).toHaveAttribute('data-active', 'true')
-  await expect(subscriptionRow.locator('.source-row__status')).toHaveText('已连接')
+  await subscriptionRow.getByRole('button', { name: '使用「Claude · 工作」作为模型来源' }).click()
+  await expect(subscriptionRow).toHaveAttribute('data-selected', 'true')
+  await expect(subscriptionRow.locator('.source-row__status')).toHaveCount(0)
   await expect(defaultsTab).not.toHaveAttribute('aria-disabled', 'true')})
 
-// 订阅是服务商中立的:Claude 与 ChatGPT 各保留一份连接配置,切换后模型目录随之变化。
+// 同服务商可添加多个账户,但切换必须是用户的显式动作;模型目录仍按服务商划分。
 test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之变化', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -1937,54 +1944,50 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
   await sectionTabs.getByRole('tab', { name: /^模型来源/ }).click()
-
-  // 所有来源在同一个列表里;默认只有 Claude 订阅与两个 API 渠道。
   const heading = dialog.locator('.source-block__head h3')
   await expect(heading).toHaveText('来源')
-  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
-  await expect(claudeRow.locator('.source-row__status')).toHaveText('已连接')
-  await expect(dialog.locator('.source-row--subscription', { hasText: 'ChatGPT' })).toHaveCount(0)
-  await expect(dialog.locator('.source-row')).toHaveCount(3)
+  const claudeRow = dialog.locator('[data-source-id="subscription:claude-work"]')
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('.source-row')).toHaveCount(5)
+  await expect(claudeRow).toHaveAttribute('data-selected', 'true')
+  await expect(dialog.locator('.source-row__status')).toHaveCount(0)
+  await expect(dialog.getByText('已连接', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText('已配置', { exact: true })).toHaveCount(0)
 
-  // 点菜单外只收起菜单,不得穿透触发下方控件或关闭对话框。
-  await claudeRow.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
-  const headingBox = await heading.boundingBox()
-  expect(headingBox).not.toBeNull()
-  if (headingBox !== null) await page.mouse.click(headingBox.x + headingBox.width / 2, headingBox.y + headingBox.height / 2)
+  await claudeRow.getByRole('button', { name: '「Claude · 工作」的操作' }).click()
+  const toolbarBox = await dialog.locator('.source-block__head').boundingBox()
+  expect(toolbarBox).not.toBeNull()
+  if (toolbarBox !== null) await page.mouse.click(toolbarBox.x + 2, toolbarBox.y + 2)
   await expect(dialog.getByRole('menu')).toHaveCount(0)
   await expect(dialog).toBeVisible()
 
-  // ChatGPT 订阅通过「添加来源」接入,添加后不自动抢走当前来源。
   await dialog.getByRole('button', { name: '添加来源' }).click()
-  await expect(dialog.getByRole('menuitem', { name: /Claude 订阅/ })).toBeDisabled()
-  await dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ }).click()
-  const chatgptRow = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT 订阅' })
-  await expect(chatgptRow).toHaveCount(1)
-  await expect(chatgptRow.locator('.source-row__status')).toHaveText('已连接')
-  await expect(claudeRow).toHaveAttribute('data-active', 'true')
-  await expect(dialog.locator('.source-row')).toHaveCount(4)
+  await expect(dialog.getByRole('menuitem', { name: /Claude 订阅/ })).toBeEnabled()
+  await expect(dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ })).toBeEnabled()
+  await expect(dialog.getByRole('menuitem', { name: /Claude 订阅/ })).toContainText('添加另一个账户')
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  const newClaude = dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 3' })
+  await expect(newClaude).toHaveCount(1)
+  await expect(newClaude).not.toHaveAttribute('data-selected', 'true')
+  await expect(claudeRow).toHaveAttribute('data-selected', 'true')
 
-  // 每个来源都有「编辑配置」:订阅的配置页展示账户事实与连接操作。
-  await chatgptRow.getByRole('button', { name: '「ChatGPT 订阅」的操作' }).click()
+  const chatgptRow = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+  await chatgptRow.getByRole('button', { name: '「ChatGPT · 个人」的操作' }).click()
   await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
   await expect(dialog.locator('.source-config__facts')).toContainText('ChatGPT Plus')
+  await expect(dialog.locator('.source-config__facts')).toContainText('keychain://mia/subscriptions/chatgpt-personal')
   await dialog.getByRole('button', { name: '返回来源' }).click()
-
-  // 显式切换到 ChatGPT 订阅。
-  await chatgptRow.getByRole('button', { name: '使用「ChatGPT 订阅」作为模型来源' }).click()
-  await expect(chatgptRow).toHaveAttribute('data-active', 'true')
-  await expect(claudeRow).not.toHaveAttribute('data-active', 'true')
-
-  // 模型目录切换为 OpenAI 模型;旧的 Claude 默认值需重新选择后警告才消失。
+  await chatgptRow.getByRole('button', { name: '使用「ChatGPT · 个人」作为模型来源' }).click()
+  await expect(chatgptRow).toHaveAttribute('data-selected', 'true')
+  await expect(claudeRow).not.toHaveAttribute('data-selected', 'true')
   await sectionTabs.getByRole('tab', { name: /^默认模型/ }).click()
   const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
-  const options = await model.locator('option').allTextContents()
-  expect(options.some((text) => text.includes('GPT-5.5'))).toBe(true)
-  // 旧的 Claude 默认值会保留并标注不可用,选择一个 GPT 模型后它从选项里消失。
+  expect((await model.locator('option').allTextContents()).some((text) => text.includes('GPT-5.5'))).toBe(true)
   await model.selectOption('gpt-5.5')
   await expect(dialog.locator('.model-subtabs__warn')).toHaveCount(0)
-  const optionsAfter = await model.locator('option').allTextContents()
-  expect(optionsAfter.some((text) => text.includes('Claude'))).toBe(false)})
+  expect((await model.locator('option').allTextContents()).some((text) => text.includes('Claude'))).toBe(false)
+})
 
 // 375px 英文 + 自定义角标是最坏宽度:tab 条必须内部横向滚动,不能把整个对话框撑宽。
 test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢出', async ({ page }) => {
@@ -2037,8 +2040,8 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   await sectionTabs.getByRole('tab', { name: /^Model source/ }).click()
   const sourceOverflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
   expect(sourceOverflow, '来源页不得横向溢出').toBeLessThanOrEqual(1)
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(1)
-  await expect(dialog.locator('.source-row')).toHaveCount(3)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('.source-row')).toHaveCount(5)
   const rowOverflow = await dialog.locator('.source-row').evaluateAll((rows) => rows.map((row) => row.scrollWidth - row.clientWidth))
   expect(rowOverflow.every((value) => value <= 1), '来源行内容不得越出自身').toBe(true)
 
@@ -2050,6 +2053,160 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   const warnedTabOverflows = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => button.scrollWidth - button.clientWidth))
   expect(warnedTabOverflows.every((value) => value <= 1), '警示图标不得把 tab 文字挤出按钮').toBe(true)
 })
+
+// 固定外壳:只允许内容区滚动,主 / 子 Tab 与来源配置的切换均不得改变窗体尺寸。
+for (const width of [375, 768, 1280, 1600]) {
+  test(`Agent 设置 @${width}:固定外壳、切页动效与减弱动态效果`, async ({ page }, testInfo) => {
+    // 两种媒体偏好各走完整键盘与子视图路径,给 WebKit 留足执行时间。
+    test.setTimeout(60_000)
+    const runtimeIssues: string[] = []
+    page.on('pageerror', (error) => runtimeIssues.push(`uncaught error: ${error.message}`))
+    page.on('console', (message) => { if (message.type() === 'error') runtimeIssues.push(`console.error: ${message.text()}`) })
+    page.on('response', (response) => { if (response.status() >= 400) runtimeIssues.push(`HTTP ${response.status()} ${response.url()}`) })
+    page.on('requestfailed', (request) => runtimeIssues.push(`request failed: ${request.url()}`))
+    const dialog = await openSubscriptionSettings(page, width)
+    const viewportHeight = width === 375 ? 700 : VIEWPORT_HEIGHT
+    await page.setViewportSize({ width, height: viewportHeight })
+    const body = dialog.locator('.agent-editor__body')
+    const footer = dialog.locator('.agent-editor__actions')
+    const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
+    const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
+    const sourceTab = dialog.getByRole('tab', { name: /^模型来源/ })
+    const viewportGap = await dialog.evaluate((element) => parseFloat(getComputedStyle(element).getPropertyValue('--dl-space-6')))
+    const expectedHeight = Math.min(720, viewportHeight - 2 * viewportGap)
+    // resize 后 dvh 的更新异步进入渲染帧,先等视口约束落定再记录基准。
+    await expect.poll(async () => Math.abs(((await dialog.boundingBox())?.height ?? 0) - expectedHeight)).toBeLessThanOrEqual(1)
+    const initialBox = await dialog.boundingBox()
+    expect(initialBox).not.toBeNull()
+    const initialHeight = initialBox?.height ?? 0
+
+    async function expectStableShell(): Promise<void> {
+      const box = await dialog.boundingBox()
+      const bodyBox = await body.boundingBox()
+      const footerBox = await footer.boundingBox()
+      expect(box).not.toBeNull()
+      expect(bodyBox).not.toBeNull()
+      expect(footerBox).not.toBeNull()
+      if (box === null || bodyBox === null || footerBox === null) return
+      expect(Math.abs(box.height - initialHeight), '切页前后窗体高度差不超过 1px').toBeLessThanOrEqual(1)
+      expect(box.x).toBeGreaterThanOrEqual(0)
+      expect(box.y).toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width).toBeLessThanOrEqual(width)
+      expect(box.y + box.height).toBeLessThanOrEqual(viewportHeight)
+      expect(footerBox.y).toBeGreaterThanOrEqual(bodyBox.y + bodyBox.height - 1)
+      expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(box.y + box.height)
+      expect(await dialog.evaluate((element) => element.scrollHeight - element.clientHeight), '外壳不滚动').toBeLessThanOrEqual(1)
+      expect(await body.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+      await expect(footer.getByRole('button', { name: '保存', exact: true })).toBeInViewport({ ratio: 1 })
+    }
+
+    async function expectAtTop(): Promise<void> {
+      await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0)
+    }
+
+    async function scrollBodyToEnd(): Promise<void> {
+      await expect.poll(() => body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0)
+      const box = await body.boundingBox()
+      expect(box).not.toBeNull()
+      // 指针放在 body 的内边距,避免滚轮被 textarea 的内部滚动区消费。
+      if (box !== null) await page.mouse.move(box.x + 2, box.y + box.height / 2)
+      await page.mouse.wheel(0, 10_000)
+      await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+    }
+
+    for (const reducedMotion of ['no-preference', 'reduce'] satisfies ('no-preference' | 'reduce')[]) {
+      await page.emulateMedia({ reducedMotion })
+      async function expectPageAnimation(panel: Locator): Promise<void> {
+        await expect(panel).toBeVisible()
+        const animation = await panel.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { name: style.animationName, duration: style.animationDuration, fill: style.animationFillMode }
+        })
+        if (reducedMotion === 'reduce') expect(animation.name).toBe('none')
+        else {
+          expect(animation.name).toContain('agent-editor-page-enter')
+          expect(animation.duration).toBe('0.2s')
+          expect(animation.fill).toBe('none')
+        }
+        await expectStableShell()
+      }
+
+      await expectPageAnimation(dialog.locator('.source-list'))
+      await basicTab.click()
+      await expect(basicTab).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.agent-editor__panel:visible'))
+      if (reducedMotion === 'no-preference') await page.screenshot({ path: testInfo.outputPath(`agent-editor-fixed-basic-${width}.png`), animations: 'disabled' })
+      await page.keyboard.press('ArrowRight')
+      await expect(modelTab).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.source-list'))
+      // 模型页的布局外层与吸顶子 Tab 不参与动效,实际内容单独入场。
+      for (const selector of ['.agent-editor__panel--model', '.model-subtabs', '.agent-editor__tabbar']) {
+        expect(await dialog.locator(selector).evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
+        expect(await dialog.locator(selector).evaluate((element) => getComputedStyle(element).transform)).toBe('none')
+      }
+      await sourceTab.focus()
+      for (const sectionName of [/^默认模型/, /^档位映射/, /^高级/]) {
+        await page.keyboard.press('ArrowRight')
+        await expect(dialog.getByRole('tab', { name: sectionName })).toBeFocused()
+        await expectAtTop()
+        await expectPageAnimation(dialog.locator('.model-subpanel:visible'))
+      }
+      await page.keyboard.press('Home')
+      await expect(sourceTab).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.source-list'))
+      if (reducedMotion === 'no-preference') await page.screenshot({ path: testInfo.outputPath(`agent-editor-fixed-source-${width}.png`), animations: 'disabled' })
+
+      const subscriptionActions = dialog.locator('[data-source-id="subscription:claude-work"] .source-row__menu-trigger')
+      await subscriptionActions.click()
+      await dialog.getByRole('menuitem', { name: '编辑配置', exact: true }).click()
+      const back = dialog.getByRole('button', { name: '返回来源' })
+      await expect(back).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.gateway-form'))
+      await back.click()
+      await expect(subscriptionActions).toBeFocused()
+      await expectPageAnimation(dialog.locator('.source-list'))
+
+      const gatewayActions = dialog.locator('.source-row--gateway').first().locator('.source-row__menu-trigger')
+      await gatewayActions.click()
+      await dialog.getByRole('menuitem', { name: '编辑配置', exact: true }).click()
+      await expect(back).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.gateway-form'))
+      const models = dialog.getByRole('textbox', { name: '模型', exact: true })
+      // 空行仅拉长 textarea,不改变来源提供的模型集合。
+      const longDraft = `${await models.inputValue()}${'\n'.repeat(10)}`
+      await models.fill(longDraft)
+      await scrollBodyToEnd()
+      await expectStableShell()
+      if (reducedMotion === 'no-preference') await page.screenshot({ path: testInfo.outputPath(`agent-editor-fixed-gateway-scroll-${width}.png`), animations: 'disabled' })
+      await basicTab.click()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.agent-editor__panel:visible'))
+      await page.keyboard.press('ArrowRight')
+      await expect(modelTab).toBeFocused()
+      await expectAtTop()
+      await expect(models).toHaveValue(longDraft)
+      await expectPageAnimation(dialog.locator('.gateway-form'))
+      await scrollBodyToEnd()
+      await dialog.getByRole('tab', { name: /^高级/ }).click()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.model-subpanel:visible'))
+      await sourceTab.click()
+      await expect(sourceTab).toBeFocused()
+      await expectAtTop()
+      await expectPageAnimation(dialog.locator('.gateway-form'))
+      await back.click()
+      await expect(gatewayActions).toBeFocused()
+      await expectPageAnimation(dialog.locator('.source-list'))
+    }
+    expect(runtimeIssues, '设置切页路径无运行时错误或失败请求').toEqual([])
+  })
+}
 
 // 子视图:进入时滚回顶部(避免 sticky tab 盖住返回),检查连接有结果反馈,重开回到列表。
 test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', async ({ page }) => {
@@ -2073,8 +2230,8 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
   await expect(back).toBeVisible()
   await back.click()
 
-  const claude = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
-  await claude.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
+  const claude = dialog.locator('.source-row--subscription', { hasText: 'Claude · 工作' })
+  await claude.getByRole('button', { name: '「Claude · 工作」的操作' }).click()
   await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
   await dialog.getByRole('button', { name: '检查连接' }).click()
   const checkNotice = dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')
@@ -2106,7 +2263,7 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
   dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
-  await expect(dialog.locator('.source-row')).toHaveCount(3)
+  await expect(dialog.locator('.source-row')).toHaveCount(5)
   await expect(dialog.locator('.source-config__facts')).toHaveCount(0)
 })
 
@@ -2122,11 +2279,16 @@ test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ pa
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
 
-  // 先移除全部来源,进入空状态。
-  const claudeRow = dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })
-  await claudeRow.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
-  await dialog.getByRole('menuitem', { name: '移除来源' }).click()
-  await claudeRow.locator('.source-row__confirm').getByRole('button', { name: '移除来源' }).click()
+  const shellHeightBeforeEmpty = (await dialog.boundingBox())?.height ?? 0
+  expect(shellHeightBeforeEmpty).toBeGreaterThan(0)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  // 按实例逐一移除,同服务商的另一个账户不得被连带删除。
+  for (const name of ['Claude · 工作', 'Claude · 个人', 'ChatGPT · 个人']) {
+    const row = dialog.locator('.source-row--subscription', { hasText: name })
+    await row.getByRole('button', { name: `「${name}」的操作` }).click()
+    await dialog.getByRole('menuitem', { name: '移除来源' }).click()
+    await row.locator('.source-row__confirm').getByRole('button', { name: '移除来源' }).click()
+  }
   for (const name of ['公司 LiteLLM', 'OpenRouter']) {
     const row = dialog.locator('.source-row--gateway', { hasText: name })
     await row.getByRole('button', { name: `「${name}」的操作` }).click()
@@ -2135,6 +2297,10 @@ test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ pa
   }
   await expect(dialog.locator('.source-row')).toHaveCount(0)
   await expect(dialog.locator('.gateway-empty__title')).toHaveText('还没有来源')
+  expect(Math.abs(((await dialog.boundingBox())?.height ?? 0) - shellHeightBeforeEmpty), '来源列表变为空态也不缩小外壳').toBeLessThanOrEqual(1)
+  expect(await dialog.locator('.gateway-empty').evaluate((element) => getComputedStyle(element).animationName)).toContain('agent-editor-page-enter')
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await dialog.locator('.gateway-empty').evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
   // 空状态不依赖滚动:滚回顶部后,CTA 完整落在内容区可视范围内。
   const body = dialog.locator('.agent-editor__body')
   await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0)
@@ -2357,8 +2523,8 @@ test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ 
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(dialog.locator('.source-row--gateway')).toHaveCount(3)
   // 保存只落配置,不隐式切换:来源仍是订阅。
-  await expect(dialog.locator('.source-row--gateway[data-active="true"]')).toHaveCount(0)
-  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude 订阅' })).toHaveAttribute('data-active', 'true')
+  await expect(dialog.locator('.source-row--gateway[data-selected="true"]')).toHaveCount(0)
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude · 工作' })).toHaveAttribute('data-selected', 'true')
 
   // 行点击只切换来源;设置入口收在行内菜单的「编辑」。
   const testGatewayRow = dialog.locator('.source-row--gateway', { hasText: '测试网关' })
@@ -2386,7 +2552,7 @@ test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ 
 
   // 点击行即切换到该来源；行内菜单只保留编辑与删除。
   await testGatewayRow.getByRole('button', { name: '使用「测试网关」作为模型来源' }).click()
-  await expect(testGatewayRow).toHaveAttribute('data-active', 'true')
+  await expect(testGatewayRow).toHaveAttribute('data-selected', 'true')
   await testGatewayRow.getByRole('button', { name: '「测试网关」的操作' }).click()
   await expect(dialog.getByRole('menu').getByRole('menuitem')).toHaveCount(2)
   await page.keyboard.press('Escape')
@@ -8156,11 +8322,95 @@ test('标题栏在最小窗宽下仍可点:文件窗与对话窗的每一枚控�
   }
 })
 
-// 输入坞的焦点环:全局 :focus-visible 给的是**外扩** 3px 的环,而输入框住在
-// `.textarea-sizer { overflow: hidden }` 里、两者盒子逐值相等 —— 环画在输入框身上会整条被裁掉,
-// 只剩四个圆角处逃出的小楔形(实测强差异像素仅 327 个,四条边的中点全无变化),键盘用户看不出
-// 哪个输入框被聚焦。修法是把环改画在**输入坞容器**上(与 .conversation-search 同一条既有做法),
-// 且容器必须落在任何裁切祖先之内 —— 这两件事都是机械可判定的,故在这里锁死。
+// 对比度取实际焦点描边,不拿低透明度 halo 充当焦点指示;背景按祖先透明层合成。
+async function expectInputFocusIndicator(target: Locator, isInset = false): Promise<void> {
+  await expect(target).toHaveCSS('box-shadow', /0px 0px 0px 1px/)
+  const measured = await target.evaluate((element, inset) => {
+    const style = getComputedStyle(element)
+    const canvas = document.createElement('canvas')
+    canvas.width = 1
+    canvas.height = 1
+    const context = canvas.getContext('2d')
+    if (context === null) throw new Error('Canvas unavailable')
+    const rgba = (color: string): number[] => {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = color
+      context.fillRect(0, 0, 1, 1)
+      return Array.from(context.getImageData(0, 0, 1, 1).data)
+    }
+    const background = (start: Element | null): number[] => {
+      const layers: Element[] = []
+      let current = start
+      while (current !== null) { layers.unshift(current); current = current.parentElement }
+      return layers.reduce<number[]>((under, layer) => {
+        const over = rgba(getComputedStyle(layer).backgroundColor)
+        const alpha = (over[3] ?? 0) / 255
+        return [0, 1, 2].map((index) => (over[index] ?? 0) * alpha + (under[index] ?? 0) * (1 - alpha))
+      }, [255, 255, 255])
+    }
+    const luminance = (color: number[]): number => {
+      const channels = color.slice(0, 3).map((channel) => {
+        const value = channel / 255
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      })
+      return (channels[0] ?? 0) * 0.2126 + (channels[1] ?? 0) * 0.7152 + (channels[2] ?? 0) * 0.0722
+    }
+    const ink = rgba(inset ? style.boxShadow.match(/rgba?\([^)]+\)/)?.[0] ?? 'transparent' : style.borderTopColor)
+    const inkLuminance = luminance(ink)
+    const ratio = (color: number[]): number => {
+      const bg = luminance(color)
+      return (Math.max(inkLuminance, bg) + 0.05) / (Math.min(inkLuminance, bg) + 0.05)
+    }
+    return {
+      ink,
+      accent: rgba(style.getPropertyValue('--dl-accent').trim()),
+      ring: style.boxShadow,
+      borderWidth: parseFloat(style.borderTopWidth),
+      innerContrast: ratio(background(element)),
+      outerContrast: ratio(background(element.parentElement)),
+    }
+  }, isInset)
+  expect(measured.ring, '输入控件不叠 3px 粗环').not.toContain('3px')
+  expect(measured.ring.includes('inset'), '只在裁切编辑器使用内描边').toBe(isInset)
+  expect(measured.ink, '实际描边等于当前作用域的 accent 解析值').toEqual(measured.accent)
+  if (!isInset) expect(measured.borderWidth, '焦点染色落在可见边框上').toBeGreaterThanOrEqual(1)
+  expect(measured.innerContrast, '焦点描边对控件背景 ≥3:1').toBeGreaterThanOrEqual(3)
+  expect(measured.outerContrast, '焦点描边对相邻背景 ≥3:1').toBeGreaterThanOrEqual(3)
+  if (isInset) {
+    await expect(target.locator('.cm-content')).toHaveCSS('box-shadow', 'none')
+    // 真实截图取四边中点,防止容器虽有内描边、却被子编辑器背景整条覆盖。
+    const image = (await target.screenshot({ animations: 'disabled', scale: 'css' })).toString('base64')
+    const edgeDistances = await target.evaluate(async (element, base64) => {
+      const picture = new Image()
+      picture.src = `data:image/png;base64,${base64}`
+      await picture.decode()
+      const canvas = document.createElement('canvas')
+      canvas.width = picture.width
+      canvas.height = picture.height
+      const context = canvas.getContext('2d')
+      if (context === null) throw new Error('Canvas unavailable')
+      context.fillStyle = getComputedStyle(element).getPropertyValue('--dl-accent').trim()
+      context.fillRect(0, 0, 1, 1)
+      const accent = Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+      context.drawImage(picture, 0, 0)
+      const centerX = Math.floor(picture.width / 2)
+      const centerY = Math.floor(picture.height / 2)
+      return [
+        [[centerX, 0], [centerX, 1]],
+        [[centerX, picture.height - 1], [centerX, picture.height - 2]],
+        [[0, centerY], [1, centerY]],
+        [[picture.width - 1, centerY], [picture.width - 2, centerY]],
+      ].map((points) => Math.min(...points.map(([x = 0, y = 0]) => {
+        const pixel = Array.from(context.getImageData(x, y, 1, 1).data).slice(0, 3)
+        return Math.hypot(...pixel.map((channel, index) => channel - (accent[index] ?? 0)))
+      })))
+    }, image)
+    for (const distance of edgeDistances) expect(distance, '四边中点均有实际可见的 accent 内描边').toBeLessThan(35)
+  }
+}
+
+// 输入坞以容器的 accent 描边与外扩 1px halo 指示焦点,textarea 自身不叠粗环。
+// halo 必须完整落在所有裁切祖先之内,区域与悬浮窗体两种宿主都要覆盖。
 test('输入坞焦点环:画在容器上、输入框自身无环,且不被任何裁切祖先切掉(区域与悬浮窗体两处)', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -8197,18 +8447,128 @@ test('输入坞焦点环:画在容器上、输入框自身无环,且不被任何
     })
 
   const docked = await audit('.conversation-panel .composer-form')
-  expect(docked.ring, '环画在输入坞容器上').toContain('0px 0px 0px 3px')
+  expect(docked.ring, '1px halo 画在输入坞容器上').toContain('0px 0px 0px 1px')
+  expect(docked.ring, '不再叠加 3px 粗环').not.toContain('3px')
   expect(docked.textareaRing, '输入框自身不再画环(否则与容器叠成双层)').toBe('none')
-  expect(docked.clipMargin, '外扩 3px 的环完整落在裁切祖先之内').toBeGreaterThanOrEqual(3)
+  expect(docked.clipMargin, '外扩 1px 的 halo 完整落在裁切祖先之内').toBeGreaterThanOrEqual(1)
+  await expectInputFocusIndicator(page.locator('.conversation-panel .composer-form'))
 
   // 拆出一段对话:悬浮窗体里的输入坞(同一个组件、另一种宿主)同样成立。
   await page.locator('.tab-pop').first().click()
   const floating = page.locator(`${CHAT_PANEL}[data-mode="floating"]`)
   await expect(floating).toHaveCount(1)
   const inPanel = await audit(`${CHAT_PANEL}[data-mode="floating"] .composer-form`)
-  expect(inPanel.ring, '悬浮窗体里的环同样画在容器上').toContain('0px 0px 0px 3px')
-  expect(inPanel.clipMargin, '不被窗体的 overflow:hidden 圆角面裁掉').toBeGreaterThanOrEqual(3)
+  expect(inPanel.ring, '悬浮窗体里的 1px halo 同样画在容器上').toContain('0px 0px 0px 1px')
+  expect(inPanel.ring, '悬浮窗体同样不叠粗环').not.toContain('3px')
+  expect(inPanel.textareaRing, '悬浮窗体的输入框自身无环').toBe('none')
+  expect(inPanel.clipMargin, '1px halo 不被窗体的 overflow:hidden 圆角面裁掉').toBeGreaterThanOrEqual(1)
+  await expectInputFocusIndicator(floating.locator('.composer-form'))
 })
+
+for (const width of [375, 768, 1280]) {
+  test(`输入焦点样式 @${width}:来源搜索、字段、select、textarea 与端点仅保留细 halo`, async ({ page }, testInfo) => {
+    const dialog = await openSubscriptionSettings(page, width)
+    const search = dialog.locator('.source-search__input')
+    await search.focus()
+    await expect(search).toBeFocused()
+    await expectInputFocusIndicator(dialog.locator('.source-search__field'))
+    await expect(search).toHaveCSS('box-shadow', 'none')
+    await expect(search).toHaveCSS('outline-style', 'none')
+    await expect(search).toHaveCSS('border-radius', '8px')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-source-${width}.png`) })
+
+    await dialog.getByRole('tab', { name: '基本', exact: true }).click()
+    const name = dialog.locator('input.field__input').first()
+    await name.focus()
+    await name.hover()
+    await expectInputFocusIndicator(name)
+    await expect(name).toHaveCSS('border-radius', '8px')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-name-${width}.png`) })
+
+    await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+    await dialog.getByRole('tab', { name: /^默认模型/ }).click()
+    const select = dialog.locator('select.field__input').first()
+    await select.focus()
+    await select.hover()
+    await expectInputFocusIndicator(select)
+    await expect(select).toHaveCSS('border-radius', '8px')
+    await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+    await dialog.locator('.source-row--gateway').first().locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: '编辑配置', exact: true }).click()
+    const requestUrl = dialog.getByRole('textbox', { name: '请求地址', exact: true })
+    await requestUrl.focus()
+    await requestUrl.hover()
+    await expectInputFocusIndicator(requestUrl)
+    const models = dialog.locator('.gateway-form__models')
+    await models.focus()
+    await expectInputFocusIndicator(models)
+    await expect(models).toHaveCSS('border-radius', '8px')
+    await dialog.getByRole('button', { name: '修改模型列表 API', exact: true }).click()
+    const endpoint = dialog.locator('.gateway-form__endpoint-input')
+    await endpoint.focus()
+    await endpoint.hover()
+    await expectInputFocusIndicator(endpoint)
+    await expect(endpoint).toHaveCSS('border-radius', '8px')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-endpoint-${width}.png`) })
+  })
+
+  test(`输入焦点样式 @${width}:插件页组件库输入同样由外层染色描边与细 halo 承担`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await login(page)
+    await waitForStable(page)
+    await openSidebarIfNarrow(page, width)
+    await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: /^插件/ }).click()
+    const plugins = page.locator('.agent-plugins')
+    await expect(plugins.locator('.plugin-main')).toHaveCount(2)
+    await plugins.locator('[data-group="markets"] .plugin-group-head').getByRole('button', { name: '添加市场', exact: true }).click()
+    const name = plugins.getByLabel('名称', { exact: true })
+    await name.focus()
+    await expect(name).toHaveCSS('box-shadow', 'none')
+    const stateBorder = plugins.locator('.add-market .n-input').first().locator('.n-input__state-border')
+    await expectInputFocusIndicator(stateBorder)
+    await expect(stateBorder).toHaveCSS('border-radius', '8px')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-plugin-${width}.png`) })
+  })
+
+  test(`输入焦点样式 @${width}:会话与文件搜索、项目搜索和编辑器可见且不叠粗环`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await login(page)
+    await waitForStable(page)
+    await openSwitcher(page)
+    const conversationInput = page.locator('.conversation-search__input')
+    await conversationInput.focus()
+    await expectInputFocusIndicator(page.locator('.conversation-search'))
+    await expect(conversationInput).toHaveCSS('box-shadow', 'none')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-conversation-${width}.png`) })
+    await closeSwitcher(page)
+    await chooseOpenFile(page)
+    const fileInput = page.locator('.file-picker__input')
+    await expect(fileInput).toBeFocused()
+    await expectInputFocusIndicator(page.locator('.file-picker__search'))
+    await expect(fileInput).toHaveCSS('box-shadow', 'none')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-file-search-${width}.png`) })
+    await fileInput.fill('readme')
+    await expect(page.locator('.file-picker__row[data-kind="file"]')).toHaveCount(1)
+    await page.keyboard.press('Enter')
+    const panel = page.locator(FILE_PANEL)
+    await expect(panel).toHaveAttribute('data-status', 'ready')
+    await showPane(panel, '源码')
+    const editor = panel.locator('.file-panel__editor')
+    await editor.locator('.cm-content').focus()
+    await expect(editor.locator('.cm-content')).toBeFocused()
+    await expectInputFocusIndicator(editor, true)
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-editor-${width}.png`) })
+    await openSidebarIfNarrow(page, width)
+    await page.getByRole('button', { name: '打开项目', exact: true }).click()
+    const projectSearch = page.locator('dialog.picker .picker__search-input')
+    await projectSearch.focus()
+    await expect(projectSearch).toBeFocused()
+    await expectInputFocusIndicator(projectSearch)
+    await expect(projectSearch).toHaveCSS('border-radius', '8px')
+    await page.screenshot({ path: testInfo.outputPath(`input-focus-project-${width}.png`) })
+    expect(await horizontalOverflow(page)).toBe(0)
+  })
+}
 
 // tab 上的状态徽标:既不许把标题压成 0 宽,也**不许自己被截断**。
 // 前半条是「看不出是哪段对话」;后半条是语义问题 —— 英文 "Response complete" 截成 "Response…"
@@ -9949,3 +10309,1023 @@ test('通知中心:错误态可重试，重试后从 loading 回到通知列表'
   await expect(panel).toHaveAttribute('aria-busy', 'false')
   await expect(panel).not.toContainText('通知加载失败')
 })
+
+
+// 同一个列表里,当前生效与草稿选中必须能够独立识别。
+async function expectSourceSelection(dialog: Locator, currentId: string, selectedId: string, isEnglish = false): Promise<void> {
+  const current = dialog.locator('.source-row[data-current="true"]')
+  const selected = dialog.locator('.source-row[data-selected="true"]')
+  const pending = dialog.locator('.source-row[data-pending="true"]')
+  await expect(current).toHaveCount(currentId === '' ? 0 : 1)
+  await expect(selected).toHaveCount(selectedId === '' ? 0 : 1)
+  if (currentId !== '') {
+    await expect(current).toHaveAttribute('data-source-id', currentId)
+    await expect(current.locator('.source-row__badge')).toHaveText(isEnglish ? 'Active source' : '当前来源')
+    await expect(current.locator('.source-row__main')).toHaveAttribute('aria-current', 'true')
+  }
+  if (selectedId !== '') {
+    await expect(selected).toHaveAttribute('data-source-id', selectedId)
+    await expect(selected.locator('.source-row__main')).toHaveAttribute('aria-pressed', 'true')
+  }
+  const hasPending = selectedId !== '' && selectedId !== currentId
+  await expect(pending).toHaveCount(hasPending ? 1 : 0)
+  if (hasPending) {
+    await expect(pending).toHaveAttribute('data-source-id', selectedId)
+    await expect(pending.locator('.source-row__badge')).toHaveText(isEnglish ? 'Draft' : '待保存')
+    await expect(pending.locator('.source-row__main')).not.toHaveAttribute('aria-current')
+    await expect(pending.locator('.source-row__main')).toHaveAccessibleDescription(isEnglish ? /Draft/ : /待保存/)
+    const hasDraftOutline = await pending.evaluate((element) => getComputedStyle(element).boxShadow.includes('inset'))
+    expect(hasDraftOutline).toBe(true)
+  }
+  if (currentId !== '' && currentId !== selectedId) await expect(current.locator('.source-row__main')).toHaveAttribute('aria-pressed', 'false')
+}
+
+for (const isEnglish of [false, true]) {
+  test(`Agent 设置:当前来源固定到保存,取消待切换与关闭还原 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const workId = 'subscription:claude-work'
+    const personalId = 'subscription:claude-personal'
+    const work = dialog.locator(`[data-source-id="${workId}"] .source-row__main`)
+    const personal = dialog.locator(`[data-source-id="${personalId}"] .source-row__main`)
+    const defaultsTab = dialog.getByRole('tab', { name: isEnglish ? /^Defaults/ : /^默认模型/ })
+    const context = dialog.locator('.model-source-context:visible')
+    const save = dialog.getByRole('button', { name: isEnglish ? 'Save' : '保存', exact: true })
+    await expectSourceSelection(dialog, workId, workId, isEnglish)
+    // 键盘聚焦不切换,Enter 仅选择草稿,生效标记仍在工作订阅。
+    await personal.focus()
+    await expectSourceSelection(dialog, workId, workId, isEnglish)
+    await page.keyboard.press('Enter')
+    await expectSourceSelection(dialog, workId, personalId, isEnglish)
+    await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+    await work.click()
+    await expectSourceSelection(dialog, workId, workId, isEnglish)
+    await expect(save).toHaveAttribute('aria-disabled', 'true')
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'clean')
+    await defaultsTab.click()
+    await expect(context.locator('.model-source-context__draft, .model-source-context__switching')).toHaveCount(0)
+    await context.getByRole('button').click()
+    await personal.click()
+    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await expectSourceSelection(dialog, workId, workId, isEnglish)
+    await expect(save).toHaveAttribute('aria-disabled', 'true')
+    await defaultsTab.click()
+    await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
+    await expect(context.locator('.model-source-context__draft, .model-source-context__switching')).toHaveCount(0)
+    // API 渠道的草稿指示不展示其它订阅的账户。
+    await context.getByRole('button').click()
+    await dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' }).locator('.source-row__main').click()
+    await defaultsTab.click()
+    await expect(context.locator('.model-source-context__account')).toHaveCount(0)
+    await expect(context.locator('.model-source-context__draft')).toBeVisible()
+  })
+
+  test(`新建 Agent:来源点击即选中,没有待保存来源标记 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const settings = await openSubscriptionSettings(page, 1280, isEnglish)
+    await settings.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'New agent' : '新建 Agent', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: isEnglish ? 'New agent' : '新建 Agent' })
+    await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
+    await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+    await expectSourceSelection(dialog, 'subscription:claude-personal', 'subscription:claude-personal', isEnglish)
+    for (const name of [isEnglish ? /^Defaults/ : /^默认模型/, isEnglish ? /^Tiers/ : /^档位映射/]) {
+      await dialog.getByRole('tab', { name }).click()
+      await expect(dialog.locator('.model-source-context:visible .model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
+      await expect(dialog.locator('.model-source-context__draft, .model-source-context__switching')).toHaveCount(0)
+    }
+  })
+}
+
+for (const removedState of ['current', 'pending']) {
+  test(`Agent 设置:删除${removedState === 'current' ? '当前' : '待保存'}来源不留下悬空标记`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page)
+    await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+    await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-personal')
+    const removedId = removedState === 'current' ? 'subscription:claude-work' : 'subscription:claude-personal'
+    const row = dialog.locator(`[data-source-id="${removedId}"]`)
+    await row.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: '移除来源', exact: true }).click()
+    await row.locator('.source-row__confirm').getByRole('button', { name: '移除来源', exact: true }).click()
+    await expect(row).toHaveCount(0)
+    await expectSourceSelection(dialog, removedState === 'current' ? '' : 'subscription:claude-work', removedState === 'current' ? 'subscription:claude-personal' : 'subscription:claude-work')
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+    const savedId = removedState === 'current' ? 'subscription:claude-personal' : 'subscription:claude-work'
+    await expectSourceSelection(dialog, savedId, savedId)
+  })
+}
+
+for (const removedState of ['current', 'pending']) {
+  test(`Agent 设置:删除${removedState === 'current' ? '当前' : '待保存'} API 渠道不留下悬空标记`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page)
+    const gateway = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
+    const gatewayId = await gateway.getAttribute('data-source-id') ?? ''
+    expect(gatewayId).not.toBe('')
+    await gateway.locator('.source-row__main').click()
+    if (removedState === 'current') {
+      // 演示渠道只有三款模型,先给 Fable 档位选择渠道内模型,保持原有保存校验。
+      await dialog.getByRole('tab', { name: /^档位映射/ }).click()
+      await dialog.getByRole('combobox', { name: 'Fable · 模型', exact: true }).selectOption('claude-sonnet-5-5')
+      await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+      await dialog.getByRole('button', { name: '保存', exact: true }).click()
+      await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+      await expectSourceSelection(dialog, gatewayId, gatewayId)
+      await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+    }
+    await gateway.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: '删除', exact: true }).click()
+    await gateway.locator('.source-row__confirm').getByRole('button', { name: '确认删除', exact: true }).click()
+    await expect(gateway).toHaveCount(0)
+    await expectSourceSelection(dialog, removedState === 'current' ? '' : 'subscription:claude-work', removedState === 'current' ? 'subscription:claude-personal' : '')
+    if (removedState === 'pending') await dialog.locator('[data-source-id="subscription:claude-work"] .source-row__main').click()
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+    const savedId = removedState === 'current' ? 'subscription:claude-personal' : 'subscription:claude-work'
+    await expectSourceSelection(dialog, savedId, savedId)
+  })
+}
+
+// 来源指示条只比较来源 ID;其它模型改动不应冒充来源切换。
+for (const isEnglish of [false, true]) {
+  test(`Agent 设置:来源指示条草稿、保存与焦点 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const sourceTab = dialog.getByRole('tab', { name: isEnglish ? /^Model source/ : /^模型来源/ })
+    const defaultsTab = dialog.getByRole('tab', { name: isEnglish ? /^Defaults/ : /^默认模型/ })
+    const tiersTab = dialog.getByRole('tab', { name: isEnglish ? /^Tiers/ : /^档位映射/ })
+    const context = dialog.locator('.model-source-context:visible')
+    const draft = context.locator('.model-source-context__draft')
+    const change = context.getByRole('button', { name: isEnglish ? 'Change' : '更改', exact: true })
+    const personal = dialog.locator('[data-source-id="subscription:claude-personal"]')
+    const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+    await defaultsTab.click()
+    await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
+    await expect(context.locator('.model-source-context__account')).toHaveText('yizhou.lin@studio.example.com')
+    await expect(draft).toHaveCount(0)
+    await dialog.getByRole('combobox', { name: isEnglish ? 'Conversation' : '对话默认模型', exact: true }).selectOption('claude-opus-5-5')
+    await expect(draft).toHaveCount(0)
+    await change.click()
+    await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(sourceTab).toBeFocused()
+    await personal.locator('.source-row__main').click()
+    await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-personal', isEnglish)
+    for (const tab of [defaultsTab, tiersTab]) {
+      await tab.click()
+      await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
+      await expect(context.locator('.model-source-context__account')).toHaveText('yizhou.personal@example.com')
+      await expect(context.locator('.model-source-context__switching')).toHaveText(isEnglish ? 'Switching to' : '待切换至')
+      await expect(draft).toHaveText(isEnglish ? 'Takes effect after save' : '保存后生效')
+      const modelOptions = await dialog.locator('.model-subpanel:visible select').first().locator('option').evaluateAll((options) => options.map((option) => option.getAttribute('value') ?? ''))
+      expect(modelOptions.some((id) => id.startsWith('claude-'))).toBe(true)
+      expect(modelOptions.some((id) => id.startsWith('gpt-'))).toBe(false)
+    }
+    // 改回已保存来源时立即清掉提示,不必保存。
+    await change.click()
+    await expect(sourceTab).toBeFocused()
+    await work.locator('.source-row__main').click()
+    await defaultsTab.click()
+    await expect(draft).toHaveCount(0)
+    await change.click()
+    await personal.locator('.source-row__main').click()
+    await defaultsTab.click()
+    await dialog.getByRole('button', { name: isEnglish ? 'Save' : '保存', exact: true }).click()
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+    await expect(draft).toHaveCount(0)
+    await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
+    await tiersTab.click()
+    await expect(draft).toHaveCount(0)
+    await expect(context.locator('.model-source-context__switching')).toHaveCount(0)
+    await change.click()
+    await expectSourceSelection(dialog, 'subscription:claude-personal', 'subscription:claude-personal', isEnglish)
+    await work.locator('.source-row__main').click()
+    await tiersTab.click()
+    await expect(draft).toBeVisible()
+    // 放弃后重开,基线与来源都恢复到刚刚保存的个人订阅。
+    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await defaultsTab.click()
+    await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
+    await expect(draft).toHaveCount(0)
+  })
+}
+
+for (const width of [375, 768, 1280, 1600]) {
+  for (const isEnglish of [false, true]) {
+    test(`Agent 设置:来源指示条 @${width} ${isEnglish ? 'en' : 'zh'} 不溢出`, async ({ page }, testInfo) => {
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+      page.on('response', (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
+      const dialog = await openSubscriptionSettings(page, width, isEnglish)
+      await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+      await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-personal', isEnglish)
+      const rows = dialog.locator('.source-row[data-current="true"], .source-row[data-pending="true"]')
+      const rowGeometry = await rows.evaluateAll((elements) => elements.map((element) => {
+        const outer = element.getBoundingClientRect()
+        const texts = Array.from(element.querySelectorAll('.source-row__title, .source-row__badge'))
+        return {
+          overflow: element.scrollWidth - element.clientWidth,
+          isTextContained: texts.every((text) => {
+            const range = document.createRange()
+            range.selectNodeContents(text)
+            const bounds = text.getBoundingClientRect()
+            return Array.from(range.getClientRects()).every((rect) => rect.left >= outer.left - 1 && rect.right <= outer.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1)
+          }),
+        }
+      }))
+      expect(rowGeometry.every((geometry) => geometry.overflow <= 1 && geometry.isTextContained)).toBe(true)
+      await dialog.locator('.source-block__head').hover({ position: { x: 2, y: 2 } })
+      await expect(dialog.locator('.source-row[data-pending="true"]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+      await page.screenshot({ path: testInfo.outputPath(`source-current-pending-${width}.png`) })
+      for (const [section, tabName] of [
+        ['defaults', isEnglish ? /^Defaults/ : /^默认模型/],
+        ['tiers', isEnglish ? /^Tiers/ : /^档位映射/],
+      ] as const) {
+        await dialog.getByRole('tab', { name: tabName }).click()
+        const context = dialog.locator('.model-source-context:visible')
+        await expect(context.locator('.model-source-context__draft')).toBeVisible()
+        await expect(context.locator('.model-source-context__account')).toBeVisible()
+        const surface = await context.evaluate((element) => {
+          const style = getComputedStyle(element)
+          const dot = element.querySelector('.model-source-context__dot')
+          const draft = element.querySelector('.model-source-context__draft')
+          function tokenColor(name: string): string {
+            const value = style.getPropertyValue(name).trim()
+            if (!/^#[0-9a-f]{6}$/i.test(value)) return value
+            return `rgb(${parseInt(value.slice(1, 3), 16)}, ${parseInt(value.slice(3, 5), 16)}, ${parseInt(value.slice(5, 7), 16)})`
+          }
+          return {
+            borderWidths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+            borderColors: [style.borderTopColor, style.borderRightColor, style.borderBottomColor, style.borderLeftColor],
+            radius: style.borderTopLeftRadius, expectedRadius: style.getPropertyValue('--dl-radius-md').trim(),
+            background: style.backgroundColor, expectedBackground: tokenColor('--dl-bg-base'),
+            shadow: style.boxShadow,
+            dotColor: dot === null ? '' : getComputedStyle(dot).backgroundColor,
+            dotWidth: dot?.getBoundingClientRect().width ?? 0,
+            draftColor: draft === null ? '' : getComputedStyle(draft).color,
+            warning: tokenColor('--dl-warning'),
+          }
+        })
+        expect(surface.borderWidths).toEqual(['1px', '1px', '1px', '1px'])
+        expect(new Set(surface.borderColors).size).toBe(1)
+        expect(surface.radius).toBe(surface.expectedRadius)
+        expect(surface.background).toBe(surface.expectedBackground)
+        expect(surface.background).not.toBe('rgba(0, 0, 0, 0)')
+        expect(surface.shadow).toBe('none')
+        expect(surface.dotWidth).toBe(8)
+        expect(surface.dotColor).toBe(surface.warning)
+        expect(surface.draftColor).toBe(surface.warning)
+        // 对每段文本用真实 Range 验证,不能靠 overflow:hidden 假装没有横向溢出。
+        const geometry = await context.evaluate((element) => {
+          const outer = element.getBoundingClientRect()
+          const textElements = Array.from(element.querySelectorAll('span, button'))
+          const isTextContained = textElements.every((text) => {
+            const range = document.createRange()
+            range.selectNodeContents(text)
+            const bounds = text.getBoundingClientRect()
+            return Array.from(range.getClientRects()).every((rect) => rect.left >= outer.left - 1 && rect.right <= outer.right + 1
+              && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1)
+          })
+          const button = element.querySelector('button')?.getBoundingClientRect()
+          return { overflow: element.scrollWidth - element.clientWidth, isTextContained, width: button?.width ?? 0, height: button?.height ?? 0 }
+        })
+        expect(geometry.overflow).toBeLessThanOrEqual(1)
+        expect(geometry.isTextContained).toBe(true)
+        expect(geometry.width).toBeGreaterThanOrEqual(44)
+        expect(geometry.height).toBeGreaterThanOrEqual(44)
+        expect(await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+        expect((await contrastViolations(page)).filter((violation) => violation.startsWith('model-source-context'))).toEqual([])
+        await expect(context.getByRole('button')).toHaveCount(1)
+        await page.screenshot({ path: testInfo.outputPath(`source-context-${section}-${width}.png`) })
+      }
+      expect(errors).toEqual([])
+    })
+  }
+}
+
+// 多订阅用量:只在测试中替换演示数据模块的单个实例,不向 UI 暴露测试开关。
+async function seedSubscriptionException(page: Page, isNearLimit = false): Promise<void> {
+  await page.route(/\/src\/data\/models\.ts(?:\?|$)/, async (route) => {
+    const response = await route.fetch()
+    const body = await response.text()
+    const fixture = /(id: ["']claude-personal["'],[\s\S]*?credentialRef: ["'][^"']*["'])/
+    expect(fixture.test(body), '异常 fixture 必须命中个人订阅,避免测试静默使用正常数据').toBe(true)
+    const patched = body.replace(fixture, (subscription) => isNearLimit
+      ? subscription.replace('usedPercent: 18', 'usedPercent: 78')
+      : subscription.replace('connected: true', 'connected: false')
+        .replace(/status: ["']ok["']/, 'status: "expired"')
+        .replace(/credentialRef: ["'][^"']*["']/, 'credentialRef: ""'))
+    await route.fulfill({ response, body: patched })
+  })
+}
+
+async function openSubscriptionSettings(page: Page, width = 1280, isEnglish = false): Promise<Locator> {
+  await page.setViewportSize({ width, height: 900 })
+  await login(page)
+  await waitForStable(page)
+  if (isEnglish) await switchLanguageViaSettings(page, 'English')
+  if (width < 1024) await page.getByRole('button', { name: isEnglish ? 'Open sidebar' : '打开侧栏' }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
+  await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
+  await expect(dialog.getByRole('tab', { name: isEnglish ? /^Model source/ : /^模型来源/ })).toHaveAttribute('aria-selected', 'true')
+  return dialog
+}
+
+test('Agent 设置:多订阅额度用尽时手动切换,保存并重开保留实例', async ({ page }, testInfo) => {
+  const dialog = await openSubscriptionSettings(page)
+  const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+  const personal = dialog.locator('[data-source-id="subscription:claude-personal"]')
+  const chatgpt = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(work).toContainText('Claude · 工作')
+  await expect(personal).toContainText('Claude · 个人')
+  await expect(chatgpt).toContainText('ChatGPT · 个人')
+  await expect(work).toHaveAttribute('data-state', 'exhausted')
+  await expect(work).toHaveAttribute('data-selected', 'true')
+  await expect(work.locator('progress')).toHaveAttribute('value', '100')
+  await expect(personal.locator('progress')).toHaveAttribute('value', '18')
+  await expect(chatgpt.locator('progress')).toHaveAttribute('value', '35')
+  await expect(work.locator('.subscription-usage__text')).toContainText('已用 100%')
+  await expect(work.locator('.subscription-usage__text')).toContainText('重置')
+  await expect(work.locator('.subscription-usage__text')).toContainText('额度用尽')
+  // 原生 progress 的真实内部填充比例等于 value/max,而不是固定装饰线。
+  for (const row of [work, personal, chatgpt]) {
+    expect(await row.locator('progress').evaluate((element) => element instanceof HTMLProgressElement ? element.position : -1))
+      .toBe(Number(await row.locator('progress').getAttribute('value')) / 100)
+  }
+  // 额度只通过行内用量条表达;用户直接点另一个订阅,不会自动切换。
+  await page.screenshot({ path: testInfo.outputPath('subscription-usage-before-switch.png') })
+  await personal.locator('.source-row__main').click()
+  await expect(personal).toHaveAttribute('data-selected', 'true')
+  await expect(personal.locator('.source-row__main')).toBeFocused()
+  await expect(personal.locator('.source-row__badge')).toHaveText('待保存')
+  await expect(work.locator('.source-row__badge')).toHaveText('当前来源')
+  await expect(work).toHaveAttribute('data-current', 'true')
+  await expect(personal).toHaveAttribute('data-pending', 'true')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+  await expect(personal.locator('.source-row__badge')).toHaveText('当前来源')
+  await expect(work.locator('.source-row__badge')).toHaveCount(0)
+  await expect(personal).toHaveAttribute('data-current', 'true')
+  await expect(dialog.locator('[data-pending="true"]')).toHaveCount(0)
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await expect(personal).toHaveAttribute('data-selected', 'true')
+})
+
+for (const provider of ['Claude', 'ChatGPT']) {
+  for (const isEnglish of [false, true]) {
+    test(`Agent 设置:多订阅 ${provider} 连续添加与删除后再添加名称唯一 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+      const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+      const initialCount = provider === 'Claude' ? 2 : 1
+      const accountName = (number: number): string => `${provider} · ${isEnglish ? 'Account' : '账户'} ${number}`
+      const addAccount = async (): Promise<void> => {
+        await dialog.getByRole('button', { name: isEnglish ? 'Add source' : '添加来源', exact: true }).click()
+        await dialog.getByRole('menuitem', { name: new RegExp(`${provider} ${isEnglish ? 'subscription' : '订阅'}`) }).click()
+      }
+      const expectUniqueNames = async (): Promise<void> => {
+        const titles = await dialog.locator('.source-row__title').allTextContents()
+        const names = await dialog.locator('.source-row__main, .source-row__menu-trigger').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))
+        expect(new Set(titles).size).toBe(titles.length)
+        expect(names.every((name) => name !== null && name !== '')).toBe(true)
+        expect(new Set(names).size).toBe(names.length)
+      }
+      for (const number of [initialCount + 1, initialCount + 2]) {
+        await addAccount()
+        await expect(dialog.locator('.source-row__main')).toHaveCount(5 + number - initialCount)
+        await expect(dialog.getByRole('button', { name: isEnglish
+          ? `Use ${accountName(number)} as the model source`
+          : `使用「${accountName(number)}」作为模型来源`, exact: true })).toBeVisible()
+        await expectUniqueNames()
+      }
+      const removed = dialog.locator('.source-row--subscription', { hasText: accountName(initialCount + 1) })
+      await removed.locator('.source-row__menu-trigger').click()
+      await dialog.getByRole('menuitem', { name: isEnglish ? 'Remove source' : '移除来源', exact: true }).click()
+      await removed.locator('.source-row__confirm').getByRole('button', { name: isEnglish ? 'Remove source' : '移除来源', exact: true }).click()
+      await expect(removed).toHaveCount(0)
+      // 数量回退会再次命中保留的编号,必须循环跳过而不是复用它。
+      await addAccount()
+      await expect(dialog.locator('.source-row--subscription', { hasText: accountName(initialCount + 3) })).toBeVisible()
+      await expectUniqueNames()
+    })
+  }
+}
+
+test('Agent 设置:多订阅添加 ChatGPT 不自动切换,移除仅影响选中实例', async ({ page }) => {
+  const dialog = await openSubscriptionSettings(page)
+  await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
+  await dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ }).click()
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  const added = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT · 账户 2' })
+  await expect(added).not.toHaveAttribute('data-source-id', 'subscription:chatgpt-personal')
+  await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
+  const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+  await work.locator('.source-row__menu-trigger').click()
+  await dialog.getByRole('menuitem', { name: '移除来源' }).click()
+  await work.locator('.source-row__confirm').getByRole('button', { name: '移除来源' }).click()
+  await expect(work).toHaveCount(0)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('[data-source-id="subscription:claude-personal"]')).toHaveAttribute('data-selected', 'true')
+})
+
+test('Agent 设置:多订阅异常检查与重新授权使用底部状态槽,不新增实例', async ({ page }, testInfo) => {
+  await seedSubscriptionException(page)
+  const dialog = await openSubscriptionSettings(page, 375)
+  const personal = dialog.locator('[data-source-id="subscription:claude-personal"]')
+  await expect(personal.locator('.source-row__status')).toHaveText('已过期')
+  // 过期实例不改变当前来源;用户仍能直接选择另一个服务商的账户。
+  const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+  const chatgpt = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+  await expect(work).toHaveAttribute('data-selected', 'true')
+  await chatgpt.locator('.source-row__main').click()
+  await expect(chatgpt).toHaveAttribute('data-selected', 'true')
+  await work.locator('.source-row__main').click()
+  await personal.locator('.source-row__menu-trigger').click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  await expect(dialog.locator('.gateway-form h3')).toHaveText('Claude · 个人')
+  const facts = dialog.locator('.source-config__facts')
+  await expect(facts.locator('dt', { hasText: '凭据' })).toBeVisible()
+  await expect(facts.locator('dt', { hasText: '凭据' }).locator('+ dd')).toHaveText('需要重新授权')
+  await expect(facts.locator('dd.gateway-form__mono')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '重新授权', exact: true })).toBeEnabled()
+  await dialog.getByRole('button', { name: '检查连接', exact: true }).click()
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'probe-fail')
+  await expect(dialog.locator('.agent-editor__save-state')).toContainText('需要重新授权')
+  await expect(facts.locator('progress')).toHaveCount(0)
+  await expect(facts).toContainText('额度未知')
+  await page.screenshot({ path: testInfo.outputPath('subscription-reauthorize-375.png') })
+  await dialog.getByRole('button', { name: '重新授权', exact: true }).click()
+  await expect(facts.locator('dd.gateway-form__mono')).toHaveText('keychain://mia/subscriptions/claude-personal')
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'probe-ok')
+  await expect(dialog.getByRole('button', { name: '重新授权', exact: true })).toHaveCount(0)
+  await expect(facts.locator('progress')).toHaveAttribute('value', '8')
+  await dialog.getByRole('button', { name: '检查连接', exact: true }).click()
+  await expect(facts.locator('progress')).toHaveAttribute('value', '10')
+  await dialog.getByRole('button', { name: '返回来源' }).click()
+  await expect(personal.locator('.source-row__status')).toHaveCount(0)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+})
+
+for (const width of [375, 768, 1280, 1600]) {
+  for (const isEnglish of [false, true]) {
+    test(`Agent 设置:多订阅用量与配置 @${width} ${isEnglish ? 'en' : 'zh'} 不溢出`, async ({ page }, testInfo) => {
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+      page.on('response', (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
+      const dialog = await openSubscriptionSettings(page, width, isEnglish)
+      const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+      await expect(work.locator('.source-row__badge')).toBeVisible()
+      await expect(work).toContainText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
+      await expect(work.locator('.subscription-usage__text')).toContainText(isEnglish ? 'Resets in 5 hours' : '5小时后重置')
+      // 动作名称保持简短,账户、套餐、到期日与用量通过事实容器成为可访问描述。
+      const descriptionIds: string[] = []
+      for (const row of await dialog.locator('.source-row').all()) {
+        const main = row.locator('.source-row__main')
+        const descriptionId = await main.getAttribute('aria-describedby') ?? ''
+        expect(descriptionId).not.toBe('')
+        descriptionIds.push(descriptionId)
+        const facts = row.locator('.source-row__facts')
+        await expect(facts).toHaveAttribute('id', descriptionId)
+        await expect(facts).toBeVisible()
+        if (await row.locator('.subscription-usage').count() > 0) {
+          await expect(main).toHaveAccessibleDescription(/yizhou\.[\w.]+@[\w.]+/)
+          await expect(main).toHaveAccessibleDescription(/Claude Max|Claude Pro|ChatGPT Plus/)
+          await expect(main).toHaveAccessibleDescription(isEnglish ? /\d+% used/ : /已用 \d+%/)
+          await expect(main).toHaveAccessibleDescription(/\d{4}-\d{2}-\d{2}/)
+        } else {
+          await expect(main).toHaveAccessibleDescription(await facts.innerText())
+        }
+      }
+      expect(new Set(descriptionIds).size).toBe(descriptionIds.length)
+      if (width === 375) {
+        for (const expires of await dialog.locator('.source-row__expires').all()) {
+          await expect(expires).toHaveText(isEnglish ? /^Expires \d{4}-\d{2}-\d{2}$/ : /^到期 \d{4}-\d{2}-\d{2}$/)
+          // Range 实测整段只有一行,且完整落在行按钮内,不是靠裁切掩盖溢出。
+          const geometry = await expires.evaluate((element) => {
+            const range = document.createRange()
+            range.selectNodeContents(element)
+            const textRects = Array.from(range.getClientRects())
+            const main = element.closest('button')?.getBoundingClientRect()
+            return {
+              lines: new Set(textRects.map((rect) => rect.top)).size,
+              isContained: main !== undefined && textRects.every((rect) => rect.left >= main.left - 1 && rect.right <= main.right + 1 && rect.bottom <= main.bottom + 1),
+            }
+          })
+          expect(geometry.lines).toBe(1)
+          expect(geometry.isContained).toBe(true)
+        }
+      }
+      const overflow = await dialog.locator('.source-row, .subscription-usage, .agent-editor__body').evaluateAll((elements) => elements.map((element) => element.scrollWidth - element.clientWidth))
+      expect(overflow.every((value) => value <= 1)).toBe(true)
+      await page.screenshot({ path: testInfo.outputPath(`subscriptions-list-${width}.png`) })
+      await work.locator('.source-row__menu-trigger').click()
+      await dialog.getByRole('menuitem', { name: isEnglish ? 'Edit configuration' : '编辑配置', exact: true }).click()
+      await expect(dialog.locator('.source-config__facts dt')).toContainText([isEnglish ? 'Credentials' : '凭据'])
+      await expect(dialog.locator('.source-config__facts dd.gateway-form__mono')).toHaveText('keychain://mia/subscriptions/claude-work')
+      await expect(dialog.locator('.gateway-form .model-section__hint')).toHaveText(isEnglish
+        ? 'Credentials stay in the system keychain; Mia only stores a reference'
+        : '凭据保存在系统钥匙串，Mia 只保存引用')
+      await expect(dialog.locator('.source-config__facts .subscription-usage')).toBeVisible()
+      const factOverflow = await dialog.locator('.source-config__facts, .source-config__facts dd, .gateway-form, .agent-editor__body').evaluateAll((elements) => elements.map((element) => element.scrollWidth - element.clientWidth))
+      expect(factOverflow.every((value) => value <= 1)).toBe(true)
+      await page.screenshot({ path: testInfo.outputPath(`subscriptions-config-${width}.png`) })
+      expect(errors).toEqual([])
+    })
+  }
+}
+
+
+test('Agent 设置:多订阅检查连接刷新用量,80% 才显示额度紧张', async ({ page }) => {
+  await seedSubscriptionException(page, true)
+  const dialog = await openSubscriptionSettings(page)
+  const personal = dialog.locator('[data-source-id="subscription:claude-personal"]')
+  await expect(personal).toHaveAttribute('data-state', 'ok')
+  await expect(personal.locator('.subscription-usage__text')).toContainText('已用 78%')
+  await expect(personal).not.toContainText('额度紧张')
+  await personal.locator('.source-row__menu-trigger').click()
+  await dialog.getByRole('menuitem', { name: '编辑配置', exact: true }).click()
+  await dialog.getByRole('button', { name: '检查连接', exact: true }).click()
+  await expect(dialog.locator('.source-config__facts progress')).toHaveAttribute('value', '80')
+  await expect(dialog.locator('.source-config__facts')).toContainText('额度紧张')
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'probe-ok')
+  await dialog.getByRole('button', { name: '返回来源' }).click()
+  await expect(personal).toHaveAttribute('data-state', 'warning')
+  await expect(personal.locator('.source-row__status')).toHaveCount(0)
+})
+
+test('Agent 设置:多订阅全部耗尽时保留当前来源,添加账户后不自动切换', async ({ page }) => {
+  await page.route(/\/src\/data\/models\.ts(?:\?|$)/, async (route) => {
+    const response = await route.fetch()
+    const body = (await response.text()).replace(/state: ["']ok["']/g, 'state: "exhausted"').replace(/usedPercent: (18|35)/g, 'usedPercent: 100')
+    await route.fulfill({ response, body })
+  })
+  const dialog = await openSubscriptionSettings(page)
+  await expect(dialog.locator('.source-row--subscription[data-state="exhausted"]')).toHaveCount(3)
+  await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
+  await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 3' })).not.toHaveAttribute('data-selected', 'true')
+  await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
+})
+
+
+for (const isEnglish of [false, true]) {
+  test(`Agent 设置:多订阅空与非空菜单按 provider 显示账户文案,完全空列表才自动启用 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const removeName = isEnglish ? 'Remove source' : '移除来源'
+    const chatgpt = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+    await chatgpt.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
+    await chatgpt.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
+    // 只删掉 ChatGPT 后仍有 Claude 与 API 渠道,文案应按 provider 而非总数判断。
+    const addName = isEnglish ? 'Add source' : '添加来源'
+    const claudeMenuName = isEnglish ? /Claude subscription/ : /Claude 订阅/
+    const chatgptMenuName = isEnglish ? /ChatGPT subscription/ : /ChatGPT 订阅/
+    const firstAccount = isEnglish ? 'Add account' : '添加账户'
+    const anotherAccount = isEnglish ? 'Add another account' : '添加另一个账户'
+    await dialog.locator('.source-block__head').getByRole('button', { name: addName, exact: true }).click()
+    await expect(dialog.getByRole('menuitem', { name: claudeMenuName }).locator('.source-type__hint')).toHaveText(anotherAccount)
+    await expect(dialog.getByRole('menuitem', { name: chatgptMenuName }).locator('.source-type__hint')).toHaveText(firstAccount)
+    await page.keyboard.press('Escape')
+    for (const name of isEnglish ? ['Claude · Work', 'Claude · Personal'] : ['Claude · 工作', 'Claude · 个人']) {
+      const row = dialog.locator('.source-row--subscription', { hasText: name })
+      await row.locator('.source-row__menu-trigger').click()
+      await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
+      await row.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
+    }
+    for (const name of ['公司 LiteLLM', 'OpenRouter']) {
+      const row = dialog.locator('.source-row--gateway', { hasText: name })
+      await row.locator('.source-row__menu-trigger').click()
+      await dialog.getByRole('menuitem', { name: isEnglish ? 'Delete' : '删除', exact: true }).click()
+      await row.locator('.source-row__confirm').getByRole('button', { name: isEnglish ? 'Confirm delete' : '确认删除', exact: true }).click()
+    }
+    await expect(dialog.locator('.source-row')).toHaveCount(0)
+    await expect(dialog.locator('.gateway-empty__title')).toHaveText(isEnglish ? 'No sources yet' : '还没有来源')
+    // 无来源时保留既有分区锁定;两个隐藏子面板仍须正确渲染空来源兜底。
+    for (const context of await dialog.locator('.model-source-context').all()) {
+      await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'No source yet' : '尚无来源')
+      await expect(context.locator('.model-source-context__account')).toHaveCount(0)
+      await expect(context.locator('button')).toHaveText(isEnglish ? 'Configure' : '去配置')
+    }
+    await dialog.locator('.source-block__head').getByRole('button', { name: addName, exact: true }).click()
+    for (const menuName of [claudeMenuName, chatgptMenuName]) {
+      await expect(dialog.getByRole('menuitem', { name: menuName }).locator('.source-type__hint')).toHaveText(firstAccount)
+    }
+    await dialog.getByRole('menuitem', { name: claudeMenuName }).click()
+    await expect(dialog.locator('.source-row')).toHaveCount(1)
+    await expect(dialog.locator('.source-row--subscription')).toHaveAttribute('data-selected', 'true')
+    await expect(dialog.locator('.source-row--subscription')).toContainText(isEnglish ? 'Claude · Account 1' : 'Claude · 账户 1')
+    await expect(dialog.locator('.gateway-empty')).toHaveCount(0)
+    await dialog.locator('.source-block__head').getByRole('button', { name: addName, exact: true }).click()
+    await expect(dialog.getByRole('menuitem', { name: claudeMenuName }).locator('.source-type__hint')).toHaveText(anotherAccount)
+    await expect(dialog.getByRole('menuitem', { name: chatgptMenuName }).locator('.source-type__hint')).toHaveText(firstAccount)
+  })
+}
+
+// 标题只保留读屏语义;搜索填满左侧并紧邻添加,低于阈值时仅添加按钮右对齐。
+async function expectSourceToolbarRow(dialog: Locator, hasSearch = true): Promise<void> {
+  const head = dialog.locator('.source-block__head')
+  await expect(head).toBeVisible()
+  const heading = head.getByRole('heading', { name: /^(来源|Sources)$/, exact: true })
+  await expect(heading).toHaveCount(1)
+  // 视觉隐藏仍在无障碍树中;不能用 Playwright 的矩形可见性代替裁切判断。
+  await expect(heading).toHaveClass('agent-editor__visually-hidden')
+  await expect(heading).toHaveCSS('position', 'absolute')
+  await expect(heading).toHaveCSS('clip-path', 'inset(50%)')
+  const list = dialog.locator('.source-list')
+  if (await list.count() > 0) await expect(list).toHaveAccessibleName(await heading.innerText())
+  // 入场与视口高度调整会移动整行,等动画落定再同时读取几何,避免跨帧比较。
+  await expect.poll(() => head.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
+  const [toolbar, add] = await Promise.all([
+    head.boundingBox(),
+    head.locator('.source-block__add').boundingBox(),
+  ])
+  expect(toolbar).not.toBeNull()
+  expect(add).not.toBeNull()
+  if (toolbar === null || add === null) return
+  expect(Math.abs(toolbar.x + toolbar.width - add.x - add.width)).toBeLessThanOrEqual(1)
+  if (hasSearch) {
+    const search = await head.locator('.source-search').boundingBox()
+    expect(search).not.toBeNull()
+    if (search === null) return
+    expect(Math.abs(add.y + add.height / 2 - search.y - search.height / 2)).toBeLessThanOrEqual(2)
+    expect(Math.abs(search.x - toolbar.x)).toBeLessThanOrEqual(1)
+    expect(add.x - search.x - search.width).toBeGreaterThanOrEqual(0)
+    expect(add.x - search.x - search.width).toBeLessThanOrEqual(12)
+    expect(search.width).toBeGreaterThanOrEqual(120)
+  } else {
+    await expect(head.locator('.source-search')).toHaveCount(0)
+    await expect(head.getByRole('button')).toHaveCount(1)
+  }
+  expect(toolbar.height).toBeGreaterThanOrEqual(48)
+  expect(toolbar.height).toBeLessThanOrEqual(52)
+  expect(await head.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+}
+
+// 搜索只筛选可见来源,不得改变当前来源、来源草稿或提交状态。
+for (const isEnglish of [false, true]) {
+  test(`Agent 设置:来源搜索字段、计数、无结果与清除 ${isEnglish ? 'en' : 'zh'}`, async ({ page }, testInfo) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const search = dialog.getByRole('searchbox', { name: isEnglish ? 'Search sources' : '搜索来源' })
+    const clearName = isEnglish ? 'Clear search' : '清除搜索'
+    const count = dialog.locator('.source-search__count')
+    const save = dialog.getByRole('button', { name: isEnglish ? 'Save' : '保存', exact: true })
+    await expect(search).toBeVisible()
+    await expect(search).toHaveAttribute('aria-controls', await dialog.locator('.source-list').getAttribute('id') ?? '')
+    await expect(search).toHaveAttribute('title', isEnglish ? 'Press / to focus' : '按 / 聚焦')
+    await expect(count).toHaveCount(0)
+    await expect(dialog.locator('.source-search__clear')).toHaveCount(0)
+    for (const [query, matched] of [
+      ['  cLaUdE  ', 2], [isEnglish ? 'Work' : '工作', 1], ['个人', 2],
+      ['yizhou.personal@', 1], ['Claude Max', 1], ['LiteLLM', 1], ['llm.corp.example.com', 1],
+    ] as const) {
+      await search.fill(query)
+      await expect(dialog.locator('.source-row')).toHaveCount(matched)
+      await expect(count).toHaveText(`${matched} / 5`)
+      await expect(count).toHaveAttribute('aria-live', 'polite')
+      await expect(save).toHaveAttribute('aria-disabled', 'true')
+      await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'clean')
+    }
+    await search.fill('not-a-source')
+    const empty = dialog.locator('.source-search-empty')
+    await expect(empty).toHaveAttribute('role', 'status')
+    await expect(empty).toContainText(isEnglish ? 'No matching sources' : '没有匹配的来源')
+    await expect(empty).toContainText(isEnglish ? 'The active source “Claude · Work” is still in use' : '当前来源「Claude · 工作」仍在使用')
+    await expect(count).toHaveText('0 / 5')
+    await expect(dialog.locator('.source-row')).toHaveCount(0)
+    await page.screenshot({ path: testInfo.outputPath('source-search-empty.png') })
+    await empty.getByRole('button', { name: clearName }).click()
+    await expect(search).toHaveValue('')
+    await expect(search).toBeFocused()
+    await expect(dialog.locator('.source-row')).toHaveCount(5)
+    await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-work', isEnglish)
+    await search.fill('personal@')
+    await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+    await expect(dialog.locator('[data-source-id="subscription:claude-personal"]')).toHaveAttribute('data-pending', 'true')
+    await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+    await search.fill('not-a-source')
+    // 待保存选择被隐藏也不改变生效来源;无结果提示必须仍指向已保存的工作订阅。
+    await expect(empty).toContainText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
+    await dialog.locator('.source-search__clear').click()
+    await expect(search).toBeFocused()
+    await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-personal', isEnglish)
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'dirty')
+    await search.fill('Claude')
+    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await expect(search).toHaveValue('')
+    await expect(dialog.locator('.source-row')).toHaveCount(5)
+    await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-work', isEnglish)
+  })
+
+  test(`Agent 设置:来源搜索五项阈值与删除后不残留过滤 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const search = dialog.getByRole('searchbox')
+    await expect(dialog.locator('.source-row')).toHaveCount(5)
+    await expect(search).toBeVisible()
+    await search.fill('ChatGPT')
+    const row = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+    await row.locator('.source-row__menu-trigger').click()
+    const removeName = isEnglish ? 'Remove source' : '移除来源'
+    await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
+    await row.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
+    await expect(dialog.locator('.source-row')).toHaveCount(4)
+    await expect(search).toHaveCount(0)
+    await expect(dialog.locator('.source-search')).toHaveCount(0)
+    await expectSourceToolbarRow(dialog, false)
+    const toolbar = await dialog.locator('.source-block__head').boundingBox()
+    const addButton = await dialog.locator('.source-block__add').boundingBox()
+    expect(Math.abs((toolbar?.x ?? 0) + (toolbar?.width ?? 0) - (addButton?.x ?? 0) - (addButton?.width ?? 0))).toBeLessThanOrEqual(1)
+    await dialog.getByRole('button', { name: isEnglish ? 'Add source' : '添加来源', exact: true }).click()
+    await dialog.getByRole('menuitem', { name: isEnglish ? /ChatGPT subscription/ : /ChatGPT 订阅/ }).click()
+    await expect(search).toBeVisible()
+    await expect(search).toHaveValue('ChatGPT')
+    await expect(dialog.locator('.source-row')).toHaveCount(1)
+    await expect(dialog.locator('.source-search__count')).toHaveText('1 / 5')
+    await dialog.locator('.source-search__clear').click()
+    await expect(dialog.locator('.source-row')).toHaveCount(5)
+  })
+
+  test(`Agent 设置:来源搜索键盘与配置返回保留查询 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+    const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
+    const search = dialog.getByRole('searchbox')
+    await dialog.focus()
+    await page.keyboard.press('/')
+    await expect(search).toBeFocused()
+    await expect(search).toHaveValue('')
+    await search.press('/')
+    await expect(search).toHaveValue('/')
+    await search.press('Escape')
+    await expect(search).toHaveValue('')
+    await expect(search).toBeFocused()
+    await expect(dialog).toBeVisible()
+    await search.press('Escape')
+    await expect(dialog).toBeVisible()
+    const add = dialog.getByRole('button', { name: isEnglish ? 'Add source' : '添加来源', exact: true })
+    await add.focus()
+    await page.keyboard.press('/')
+    await expect(add).toBeFocused()
+    await dialog.focus()
+    await page.keyboard.press('Control+/')
+    await expect(search).not.toBeFocused()
+    await add.click()
+    const menuItem = dialog.getByRole('menuitem').first()
+    await menuItem.focus()
+    await page.keyboard.press('/')
+    await expect(menuItem).toBeFocused()
+    await page.keyboard.press('Escape')
+    await search.fill('Claude')
+    const work = dialog.locator('[data-source-id="subscription:claude-work"]')
+    await work.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: isEnglish ? 'Edit configuration' : '编辑配置', exact: true }).click()
+    await expect(search).toHaveCount(0)
+    await dialog.focus()
+    await page.keyboard.press('/')
+    await expect(search).toHaveCount(0)
+    await dialog.locator('.gateway-form__back').click()
+    await expect(search).toHaveValue('Claude')
+    await expect(dialog.locator('.source-row')).toHaveCount(2)
+    await search.fill('LiteLLM')
+    await dialog.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: isEnglish ? 'Edit configuration' : '编辑配置', exact: true }).click()
+    await expect(search).toHaveCount(0)
+    const gatewayName = dialog.locator('.gateway-form input').first()
+    const originalName = await gatewayName.inputValue()
+    await gatewayName.press('End')
+    await gatewayName.press('/')
+    await expect(gatewayName).toHaveValue(`${originalName}/`)
+    await gatewayName.press('Backspace')
+    await dialog.locator('.gateway-form__back').click()
+    await expect(search).toHaveValue('LiteLLM')
+    await expect(dialog.locator('.source-row')).toHaveCount(1)
+    await dialog.getByRole('tab', { name: isEnglish ? /^Defaults/ : /^默认模型/ }).click()
+    const modelSelect = dialog.locator('.model-subpanel:visible select').first()
+    await modelSelect.focus()
+    await page.keyboard.press('/')
+    await expect(modelSelect).toBeFocused()
+  })
+}
+
+for (const width of [375, 768, 1280, 1600]) {
+  for (const isEnglish of [false, true]) {
+    test(`Agent 设置:来源搜索布局 @${width} ${isEnglish ? 'en' : 'zh'}`, async ({ page }, testInfo) => {
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+      page.on('response', (response) => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`) })
+      page.on('requestfailed', (request) => errors.push(request.url()))
+      const dialog = await openSubscriptionSettings(page, width, isEnglish)
+      const search = dialog.getByRole('searchbox')
+      const shell = await dialog.boundingBox()
+      await expect(search).toBeVisible()
+      await expectSourceToolbarRow(dialog)
+      const field = dialog.locator('.source-search__field')
+      const measureFilled = () => field.evaluate((element) => {
+        const style = getComputedStyle(element)
+        const input = element.querySelector('input')
+        if (input === null) throw new Error('Source search input unavailable')
+        const canvas = document.createElement('canvas')
+        canvas.width = 1
+        canvas.height = 1
+        const context = canvas.getContext('2d')
+        if (context === null) throw new Error('Canvas unavailable')
+        const rgba = (color: string): number[] => {
+          context.clearRect(0, 0, 1, 1)
+          context.fillStyle = color
+          context.fillRect(0, 0, 1, 1)
+          return Array.from(context.getImageData(0, 0, 1, 1).data)
+        }
+        const luminance = (color: number[]): number => {
+          const channels = color.slice(0, 3).map((channel) => {
+            const value = channel / 255
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+          })
+          return (channels[0] ?? 0) * 0.2126 + (channels[1] ?? 0) * 0.7152 + (channels[2] ?? 0) * 0.0722
+        }
+        const background = rgba(style.backgroundColor)
+        const bgLuminance = luminance(background)
+        const contextBlock = document.querySelector('.model-source-context')
+        return {
+          background,
+          base: rgba(style.getPropertyValue('--dl-bg-base').trim()),
+          contextBackground: rgba(contextBlock === null ? 'transparent' : getComputedStyle(contextBlock).backgroundColor),
+          border: rgba(style.borderTopColor),
+          expectedBorder: rgba(style.getPropertyValue('--dl-border-base').trim()),
+          strongBorder: rgba(style.getPropertyValue('--dl-border-strong').trim()),
+          radius: style.borderRadius,
+          contrasts: [getComputedStyle(input).color, getComputedStyle(input, '::placeholder').color].map((color) => {
+            const ink = luminance(rgba(color))
+            return (Math.max(ink, bgLuminance) + 0.05) / (Math.min(ink, bgLuminance) + 0.05)
+          }),
+        }
+      })
+      const filled = await measureFilled()
+      expect(filled.background[3]).toBe(255)
+      // 搜索槽与「来源」上下文块共用同一表面层级。
+      expect(filled.background).toEqual(filled.base)
+      expect(filled.background).toEqual(filled.contextBackground)
+      // 边框是可见的发丝线,与上下文块一致;不再是透明占位。
+      expect(filled.border[3]).toBe(255)
+      expect(filled.border).toEqual(filled.expectedBorder)
+      expect(filled.radius).toBe('8px')
+      for (const contrast of filled.contrasts) expect(contrast, '搜索文字与 placeholder 对填充底色 ≥4.5:1').toBeGreaterThanOrEqual(4.5)
+      await field.hover()
+      await expect.poll(async () => (await measureFilled()).border).not.toEqual(filled.border)
+      const hovered = await measureFilled()
+      expect(hovered.background, '悬停只增强边框,不改变表面').toEqual(filled.background)
+      expect(hovered.border).toEqual(hovered.strongBorder)
+      for (const contrast of hovered.contrasts) expect(contrast, '悬停时搜索文字与 placeholder 对填充底色 ≥4.5:1').toBeGreaterThanOrEqual(4.5)
+      await dialog.locator('.source-block__head').hover({ position: { x: 2, y: 2 } })
+      await page.screenshot({ path: testInfo.outputPath(`source-toolbar-filled-${width}.png`) })
+      await search.focus()
+      await expectInputFocusIndicator(field)
+      const add = dialog.locator('.source-block__add')
+      await expect(add).toHaveAttribute('aria-label', isEnglish ? 'Add source' : '添加来源')
+      const addBox = await add.boundingBox()
+      const fieldBox = await field.boundingBox()
+      expect(fieldBox).not.toBeNull()
+      if (fieldBox !== null && addBox !== null) {
+        expect(addBox.x - fieldBox.x - fieldBox.width).toBeGreaterThanOrEqual(0)
+        expect(addBox.x - fieldBox.x - fieldBox.width).toBeLessThanOrEqual(12)
+      }
+      expect(addBox?.width).toBeGreaterThanOrEqual(44)
+      expect(addBox?.height).toBeGreaterThanOrEqual(44)
+      if (width === 375) {
+        await expect(add.locator('.source-block__add-label')).toBeHidden()
+        expect((await add.innerText()).trim()).toBe('＋')
+      } else await expect(add.locator('.source-block__add-label')).toBeVisible()
+      expect((await search.boundingBox())?.width).toBeGreaterThanOrEqual(80)
+      await search.fill('Claude')
+      await expectSourceToolbarRow(dialog)
+      expect((await search.boundingBox())?.width).toBeGreaterThanOrEqual(44)
+      await expect(dialog.locator('.source-search__count')).toHaveText('2 / 5')
+      const geometry = await dialog.locator('.source-search').evaluate((element) => {
+        const input = element.querySelector('input')?.getBoundingClientRect()
+        const clear = element.querySelector('button')?.getBoundingClientRect()
+        const field = element.querySelector('.source-search__field')?.getBoundingClientRect()
+        const list = document.querySelector('.agent-editor[open] .source-list')?.getBoundingClientRect()
+        return {
+          overflow: element.scrollWidth - element.clientWidth,
+          inputHeight: input?.height ?? 0, clearWidth: clear?.width ?? 0, clearHeight: clear?.height ?? 0,
+          isAboveList: field !== undefined && list !== undefined && field.bottom <= list.top,
+        }
+      })
+      expect(geometry.overflow).toBeLessThanOrEqual(1)
+      expect(geometry.inputHeight).toBeGreaterThanOrEqual(44)
+      expect(geometry.clearWidth).toBeGreaterThanOrEqual(44)
+      expect(geometry.clearHeight).toBeGreaterThanOrEqual(44)
+      expect(geometry.isAboveList).toBe(true)
+      expect((await dialog.boundingBox())?.height).toBe(shell?.height)
+      await page.screenshot({ path: testInfo.outputPath(`source-search-${width}.png`) })
+      await search.fill('no-match-来源')
+      await expect(dialog.locator('.source-search-empty')).toBeVisible()
+      expect(await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      expect((await dialog.boundingBox())?.height).toBe(shell?.height)
+      await page.screenshot({ path: testInfo.outputPath(`source-search-empty-${width}.png`) })
+      const toolbarHeight = (await dialog.locator('.source-block__head').boundingBox())?.height
+      await search.press('Escape')
+      const removedRow = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+      await removedRow.locator('.source-row__menu-trigger').click()
+      const removeName = isEnglish ? 'Remove source' : '移除来源'
+      await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
+      await removedRow.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
+      await expect(dialog.locator('.source-row')).toHaveCount(4)
+      await expectSourceToolbarRow(dialog, false)
+      expect((await dialog.locator('.source-block__head').boundingBox())?.height).toBe(toolbarHeight)
+      await page.screenshot({ path: testInfo.outputPath(`source-toolbar-add-only-${width}.png`) })
+      expect(errors).toEqual([])
+    })
+
+    test(`Agent 设置:来源工具栏吸顶 @${width} ${isEnglish ? 'en' : 'zh'}`, async ({ page }, testInfo) => {
+      const dialog = await openSubscriptionSettings(page, width, isEnglish)
+      // 较矮窗口也必须可用,确保所有宽度都有实际滚动而非只检查 sticky 声明。
+      await page.setViewportSize({ width, height: 700 })
+      const body = dialog.locator('.agent-editor__body')
+      const head = dialog.locator('.source-block__head')
+      const tabs = dialog.locator('.model-subtabs')
+      const search = dialog.getByRole('searchbox')
+      await expectSourceToolbarRow(dialog)
+      await expect.poll(() => head.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
+      const bodyBox = await body.boundingBox()
+      expect(bodyBox).not.toBeNull()
+      if (bodyBox === null) return
+      await page.mouse.move(bodyBox.x + bodyBox.width / 2, bodyBox.y + bodyBox.height - 8)
+      await page.mouse.wheel(0, 160)
+      await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(20)
+
+      async function expectAttachedToolbar(): Promise<void> {
+        await expect.poll(async () => {
+          const tabBox = await tabs.boundingBox()
+          const headBox = await head.boundingBox()
+          return Math.abs((headBox?.y ?? 0) - (tabBox?.y ?? 0) - (tabBox?.height ?? 0))
+        }).toBeLessThanOrEqual(1)
+        const tabBox = await tabs.boundingBox()
+        const headBox = await head.boundingBox()
+        expect(tabBox).not.toBeNull()
+        expect(headBox).not.toBeNull()
+        if (tabBox === null || headBox === null) return
+        expect(headBox.y).toBeGreaterThanOrEqual(tabBox.y + tabBox.height - 0.01)
+        await expect(head).toBeInViewport({ ratio: 1 })
+        const measuredHeight = await body.evaluate((element) => parseFloat(element.style.getPropertyValue('--agent-subtabs-height')))
+        expect(measuredHeight).toBeGreaterThan(0)
+        expect(Math.abs(measuredHeight - tabBox.height)).toBeLessThanOrEqual(1)
+        const styles = await head.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { background: style.backgroundColor, opacity: style.opacity, z: Number(style.zIndex) }
+        })
+        expect(styles.background).toMatch(/^rgb\(/)
+        expect(styles.opacity).toBe('1')
+        expect(styles.z).toBeLessThan(await tabs.evaluate((element) => Number(getComputedStyle(element).zIndex)))
+        // 已滚过的行允许从不透明表头下穿过,首个完整可见行必须位于表头底边以下。
+        const visibleRows = await dialog.locator('.source-row').evaluateAll((rows, bottom) => rows
+          .map((row) => row.getBoundingClientRect())
+          .filter((row) => row.top >= bottom && row.top < window.innerHeight)
+          .map((row) => row.top), headBox.y + headBox.height)
+        expect(visibleRows.length).toBeGreaterThan(0)
+        expect(visibleRows[0]).toBeGreaterThanOrEqual(headBox.y + headBox.height)
+        const isHeadHit = await head.evaluate((element) => {
+          const box = element.getBoundingClientRect()
+          return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+        })
+        expect(isHeadHit).toBe(true)
+      }
+
+      await expectAttachedToolbar()
+      await search.focus()
+      await expect(search).toBeFocused()
+      await expectAttachedToolbar()
+      await expectSourceToolbarRow(dialog)
+      await page.screenshot({ path: testInfo.outputPath(`source-toolbar-sticky-${width}.png`) })
+      // 吸顶后仍可操作添加菜单,菜单不能被表头新建的层叠上下文困在遮罩下。
+      await dialog.locator('.source-block__add').click()
+      const api = dialog.getByRole('menuitem', { name: isEnglish ? /API provider/ : /API 渠道/ })
+      await expect(api).toBeVisible()
+      await api.click()
+      await expect(head).toHaveCount(0)
+      await dialog.locator('.gateway-form__back').click()
+      await expect(head).toBeVisible()
+
+      if (width === 375) {
+        const twoLineHeight = (await tabs.boundingBox())?.height ?? 0
+        for (const resizedWidth of [768, 375]) {
+          await page.setViewportSize({ width: resizedWidth, height: 700 })
+          await expect.poll(async () => {
+            const measured = await body.evaluate((element) => parseFloat(element.style.getPropertyValue('--agent-subtabs-height')))
+            return Math.abs(measured - ((await tabs.boundingBox())?.height ?? 0))
+          }).toBeLessThanOrEqual(1)
+          if (resizedWidth === 768) expect((await tabs.boundingBox())?.height).toBeLessThan(twoLineHeight)
+          else expect((await tabs.boundingBox())?.height).toBe(twoLineHeight)
+        }
+      }
+    })
+  }
+}

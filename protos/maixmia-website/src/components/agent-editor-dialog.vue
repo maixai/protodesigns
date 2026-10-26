@@ -11,10 +11,12 @@ import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionPro
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
 import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS, defaultModelSource, modelById, modelsForSubscription, subscriptionIsReady, subscriptionSourceId, tierDefaultsForSource } from '../data/models'
-import { connectSubscription, probeModelGateway } from '../api/workspace'
+import { checkSubscription as checkSubscriptionConnection, connectSubscription, reauthorizeSubscription, probeModelGateway } from '../api/workspace'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 import SelectField from './select-field.vue'
+import SubscriptionUsage from './subscription-usage.vue'
+import ModelSourceContext from './model-source-context.vue'
 
 const props = defineProps<{
   open: boolean
@@ -58,6 +60,19 @@ const activeTab = ref<'basic' | 'model'>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
 const activeModelSection = ref<ModelSection>('defaults')
 const bodyRef = ref<HTMLElement | null>(null)
+const modelSubtabsRef = ref<HTMLElement | null>(null)
+// 二级 Tab 会随窗口宽度换行;观察实际高度,让来源表头始终紧贴其底边。
+watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
+  if (subtabs === null || body === null) return
+  const measureSubtabs = (): void => {
+    const height = subtabs.getBoundingClientRect().height
+    if (height > 0) body.style.setProperty('--agent-subtabs-height', `${height}px`)
+  }
+  const observer = new ResizeObserver(measureSubtabs)
+  measureSubtabs()
+  observer.observe(subtabs)
+  onCleanup(() => observer.disconnect())
+}, { flush: 'post' })
 const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
 const selectedTemplate = ref('')
@@ -79,6 +94,8 @@ const title = computed(() => (isCreate.value ? t.value.workspace.agentAdmin.crea
 const hint = computed(() => isCreate.value ? t.value.workspace.agentAdmin.createHint : t.value.workspace.agentAdmin.settingsHint)
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净;新建模式不套用。
 const baselineSerialized = ref('')
+const baselineSourceId = ref('')
+const sourceDraftChanged = computed(() => !isCreate.value && modelConfig.value.source.activeSourceId !== baselineSourceId.value)
 const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
@@ -252,9 +269,9 @@ function onModelsUrlKeydown(event: KeyboardEvent): void {
   else void saveModelsUrl()
 }
 const deletingGatewayId = ref('')
-const removingSubscriptionProvider = ref<ModelSubscriptionProviderId | ''>('')
+const removingSubscriptionId = ref('')
 // 订阅的配置页:展示账户事实,并可检查连接或移除来源。
-const editingSubscriptionProvider = ref<ModelSubscriptionProviderId | ''>('')
+const editingSubscriptionId = ref('')
 const subscriptionCheckNotice = ref('')
 const subscriptionCheckOk = ref(true)
 const hasSourceCheck = computed(() => gatewayProbe.value !== null || subscriptionCheckNotice.value !== '')
@@ -276,6 +293,7 @@ const sourceMenuId = ref('')
 // 菜单用 fixed 定位并按视口夹取:既不被 dialog 的滚动容器裁切,也不会盖住首项。
 const sourceMenuPosition = ref({ top: '-9999px', left: '-9999px' })
 let sourceMenuScrollTarget: HTMLElement | null = null
+let sourceMenuScrollTop = 0
 
 const modelSource = computed(() => modelConfig.value.source)
 const subscriptions = computed(() => modelSource.value.subscriptions)
@@ -333,13 +351,47 @@ const allSources = computed<SourceRow[]>(() => {
   const rows: SourceRow[] = []
   const source = effectiveModelSource.value
   for (const subscription of source.subscriptions) {
-    rows.push({ id: subscriptionSourceId(subscription.provider), type: 'subscription', subscription })
+    rows.push({ id: subscriptionSourceId(subscription.id), type: 'subscription', subscription })
   }
   for (const gateway of source.gateways) {
     rows.push({ id: gateway.id, type: 'gateway', gateway })
   }
   return rows
 })
+const sourceQuery = ref('')
+const sourceSearchRef = ref<HTMLInputElement | null>(null)
+const sourceListId = `${dialogId}-source-list`
+const showSourceSearch = computed(() => allSources.value.length >= 5 && editingSubscription.value === undefined && gatewayDraft.value === null)
+// 搜索仅影响列表呈现;阈值以下恢复全部行,避免隐藏的查询继续过滤来源。
+const filteredSources = computed(() => {
+  const query = sourceQuery.value.trim().toLowerCase()
+  if (!showSourceSearch.value || query === '') return allSources.value
+  return allSources.value.filter((row) => {
+    const fields = row.type === 'subscription'
+      ? [SUBSCRIPTION_PROVIDER_LABELS[row.subscription.provider], row.subscription.label, subscriptionLabel(row.subscription), row.subscription.account, row.subscription.plan]
+      : [row.gateway.name, row.gateway.baseUrl]
+    return fields.some((field) => field.toLowerCase().includes(query))
+  })
+})
+const sourceMatchCount = computed(() => t.value.workspace.agentAdmin.sourceSearchCount
+  .replace('{matched}', String(filteredSources.value.length))
+  .replace('{total}', String(allSources.value.length)))
+// 当前生效来源以保存基线为准,不把待保存的选择误报为已经生效。
+const hiddenCurrentSource = computed(() => allSources.value.find((row) => isSourceCurrent(row) && !filteredSources.value.some((match) => match.id === row.id)))
+const sourceStillInUse = computed(() => t.value.workspace.agentAdmin.sourceSearchStillInUse
+  .replace('{name}', hiddenCurrentSource.value === undefined ? '' : sourceName(hiddenCurrentSource.value)))
+function clearSourceSearch(): void {
+  sourceQuery.value = ''
+  sourceSearchRef.value?.focus()
+}
+function onSourceSearchShortcut(event: KeyboardEvent): void {
+  if (event.key !== '/' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+    || activeTab.value !== 'model' || activeModelSection.value !== 'source' || !showSourceSearch.value || sourceMenuId.value !== '') return
+  const target = event.target
+  if (target instanceof Element && target.closest('input, textarea, select, button, [contenteditable]:not([contenteditable="false"])') !== null) return
+  event.preventDefault()
+  sourceSearchRef.value?.focus()
+}
 const activeSource = computed(() => allSources.value.find((row) => row.id === activeSourceId.value))
 function sourceRowReady(row: SourceRow): boolean {
   if (row.type === 'subscription') return subscriptionIsReady(row.subscription)
@@ -351,7 +403,7 @@ const canSubmit = computed(() => isValid.value && !props.busy && (isCreate.value
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
-    return t.value.workspace.agentAdmin.subscriptionSourceTitle.replace('{provider}', SUBSCRIPTION_PROVIDER_LABELS[row.subscription.provider])
+    return subscriptionTitle(row.subscription)
   }
   return row.gateway.name
 }
@@ -361,38 +413,51 @@ function sourceUseLabel(row: SourceRow): string {
 function sourceActionsLabel(row: SourceRow): string {
   return t.value.workspace.agentAdmin.sourceActionsLabel.replace('{name}', sourceName(row))
 }
-function isSourceActive(row: SourceRow): boolean {
-  return activeSourceId.value === row.id
+// 已保存来源与草稿选择独立:选择其它行不会提前移动生效标记。
+function isSourceCurrent(row: SourceRow): boolean {
+  return isCreate.value ? isSourceSelected(row) : row.id === baselineSourceId.value
 }
-const editingSubscription = computed(() => editingSubscriptionProvider.value === ''
+function isSourceSelected(row: SourceRow): boolean {
+  return row.id === modelConfig.value.source.activeSourceId
+}
+function isSourcePending(row: SourceRow): boolean {
+  return !isCreate.value && isSourceSelected(row) && row.id !== baselineSourceId.value
+}
+const editingSubscription = computed(() => editingSubscriptionId.value === ''
   ? undefined
-  : subscriptions.value.find((item) => item.provider === editingSubscriptionProvider.value))
-function providerTitle(provider: ModelSubscriptionProviderId): string {
-  return t.value.workspace.agentAdmin.subscriptionSourceTitle.replace('{provider}', SUBSCRIPTION_PROVIDER_LABELS[provider])
+  : subscriptions.value.find((item) => item.id === editingSubscriptionId.value))
+function subscriptionLabel(subscription: ModelSubscription): string {
+  const copy = t.value.workspace.agentAdmin
+  if (subscription.label === '工作') return copy.subscriptionWork
+  if (subscription.label === '个人') return copy.subscriptionPersonal
+  const numbered = /^账户 (\d+)$/.exec(subscription.label)
+  return numbered === null ? subscription.label : copy.subscriptionAccountNumber.replace('{number}', numbered[1] ?? '')
+}
+function subscriptionTitle(subscription: ModelSubscription): string {
+  return `${SUBSCRIPTION_PROVIDER_LABELS[subscription.provider]} · ${subscriptionLabel(subscription)}`
 }
 function sourceStatusOf(row: SourceRow): string {
   if (row.type === 'subscription') return subscriptionStatusOf(row.subscription)
-  return row.gateway.apiKeySet ? t.value.workspace.agentAdmin.gatewayConfigured : t.value.workspace.agentAdmin.gatewayUnverified
+  return sourceRowReady(row) ? '' : t.value.workspace.agentAdmin.gatewayUnverified
 }
 function sourceToneOf(row: SourceRow): string {
-  if (row.type === 'subscription') return subscriptionToneOf(row.subscription)
-  return row.gateway.baseUrl.trim() !== '' && row.gateway.apiKeySet ? 'ok' : 'muted'
+  return sourceRowReady(row) ? 'ok' : 'warning'
+}
+function subscriptionNeedsAuth(subscription: ModelSubscription): boolean {
+  return !subscriptionIsReady(subscription) || subscription.status === 'error' || subscription.credentialRef === ''
 }
 function subscriptionStatusOf(subscription: ModelSubscription): string {
-  if (!subscription.connected) return t.value.workspace.agentAdmin.subscriptionDisconnected
-  return subscriptionIsReady(subscription)
-    ? t.value.workspace.agentAdmin.subscriptionConnected
-    : t.value.workspace.agentAdmin.subscriptionExpired
+  const copy = t.value.workspace.agentAdmin
+  if (subscription.status === 'expired' || (Number.isFinite(Date.parse(subscription.expiresAt)) && Date.parse(subscription.expiresAt) <= Date.now())) return copy.subscriptionExpired
+  if (subscription.status === 'error' || subscription.credentialRef === '') return copy.subscriptionNeedsAuth
+  if (!subscription.connected) return copy.subscriptionDisconnected
+  return ''
 }
-function subscriptionToneOf(subscription: ModelSubscription): string {
-  if (!subscription.connected) return 'muted'
-  return subscriptionIsReady(subscription) ? 'ok' : 'warning'
-}
-// 一行说完账户事实:套餐 · 账户 · 到期日。
-function subscriptionMetaOf(subscription: ModelSubscription): string {
-  if (!subscription.connected) return ''
-  const expires = subscription.expiresAt.slice(0, 10)
-  return `${subscription.plan} · ${subscription.account} · ${t.value.workspace.agentAdmin.subscriptionExpires} ${expires}`
+function subscriptionAddLabel(provider: ModelSubscriptionProviderId): string {
+  const copy = t.value.workspace.agentAdmin
+  return subscriptions.value.some((item) => item.provider === provider)
+    ? copy.subscriptionAddAnother
+    : copy.subscriptionAddAccount
 }
 const sourceModels = computed<SelectOption[]>(() => {
   const row = activeSource.value
@@ -454,7 +519,7 @@ function gatewayModelCount(gateway: ModelGateway): string {
 
 // 离开订阅子视图时清除反馈,并阻止未完成的检查把旧结果带到其它页面。
 watch([activeTab, activeModelSection], () => {
-  if (editingSubscriptionProvider.value !== '') clearSourceCheck()
+  if (editingSubscriptionId.value !== '') clearSourceCheck()
 })
 
 // 探测结果只对当时的地址 / 密钥 / 模型列表端点有效:任一改变就清空。
@@ -506,7 +571,7 @@ function cloneModelConfig(config: AgentModelConfig): AgentModelConfig {
     ...config,
     source: {
       ...config.source,
-      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription })),
+      subscriptions: config.source.subscriptions.map((subscription) => ({ ...subscription, usage: { ...subscription.usage } })),
       gateways: config.source.gateways.map((gateway) => ({ ...gateway, models: [...gateway.models] })),
     },
     tiers: {
@@ -583,43 +648,42 @@ function modelSelectOptions(current: string): SelectOption[] {
 
 // ---- 来源操作 ----
 function replaceSubscription(next: ModelSubscription): void {
-  const subscriptions = modelSource.value.subscriptions.map((item) => item.provider === next.provider ? next : item)
+  const subscriptions = modelSource.value.subscriptions.map((item) => item.id === next.id ? next : item)
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions } }
-}
-
-function hasSubscription(provider: ModelSubscriptionProviderId): boolean {
-  return subscriptions.value.some((item) => item.provider === provider)
 }
 
 // 添加订阅:连接成功后追加来源。只有完全没有来源时才自动启用它,否则保留用户当前的选择。
 async function addSubscription(provider: ModelSubscriptionProviderId): Promise<void> {
   closeSourceMenu()
-  if (sourceBusy.value || hasSubscription(provider)) return
+  if (sourceBusy.value) return
   sourceBusy.value = true
-  const result = await connectSubscription(provider)
+  const result = await connectSubscription(provider, subscriptions.value)
   sourceBusy.value = false
-  if (!result.ok) return
+  if (!result.ok) { sourceNotice.value = result.error.message; return }
   sourceNotice.value = ''
-  const id = subscriptionSourceId(provider)
+  const id = subscriptionSourceId(result.value.id)
+  const hasSources = modelSource.value.subscriptions.length > 0 || modelSource.value.gateways.length > 0
   const activeSourceId = modelSource.value.activeSourceId
   modelConfig.value = {
     ...modelConfig.value,
     source: {
       ...modelSource.value,
       subscriptions: [...modelSource.value.subscriptions, result.value],
-      activeSourceId: activeSourceId === '' ? id : activeSourceId,
+      activeSourceId: hasSources ? activeSourceId : id,
     },
   }
   void nextTick(() => document.getElementById(sourceMenuTriggerId(id))?.focus())
 }
 
 // 检查连接只刷新凭据状态,不改变当前启用的来源。
-async function checkSubscription(subscription: ModelSubscription): Promise<void> {
+async function checkSubscription(subscription: ModelSubscription, isReauthorization = false): Promise<void> {
   if (sourceBusy.value) return
   clearSourceCheck()
   const requestId = probeRequestId
   sourceBusy.value = true
-  const result = await connectSubscription(subscription.provider)
+  const result = isReauthorization
+    ? await reauthorizeSubscription(subscription)
+    : await checkSubscriptionConnection(subscription)
   sourceBusy.value = false
   if (requestId !== probeRequestId || !props.open) return
   if (!result.ok) {
@@ -630,9 +694,9 @@ async function checkSubscription(subscription: ModelSubscription): Promise<void>
   }
   sourceNotice.value = ''
   replaceSubscription(result.value)
-  subscriptionCheckOk.value = true
-  subscriptionCheckNotice.value = t.value.workspace.agentAdmin.sourceCheckSuccess
-  publishSourceCheck(true, subscriptionCheckNotice.value)
+  subscriptionCheckOk.value = !subscriptionNeedsAuth(result.value)
+  subscriptionCheckNotice.value = subscriptionCheckOk.value ? t.value.workspace.agentAdmin.sourceCheckSuccess : t.value.workspace.agentAdmin.subscriptionNeedsAuth
+  publishSourceCheck(subscriptionCheckOk.value, subscriptionCheckNotice.value)
 }
 
 function useSource(row: SourceRow): void {
@@ -670,7 +734,9 @@ function closeSourceMenu(restoreFocus = false): void {
   if (restoreFocus) void nextTick(() => document.getElementById(sourceMenuTriggerId(id))?.focus())
 }
 
-function onSourceMenuContextChange(): void {
+function onSourceMenuContextChange(event: Event): void {
+  // 聚焦 / 自动滚入可见区产生的滞后 scroll 事件,不应关闭刚打开的菜单。
+  if (event.type === 'scroll' && sourceMenuScrollTarget?.scrollTop === sourceMenuScrollTop) return
   closeSourceMenu()
 }
 
@@ -696,10 +762,11 @@ function toggleSourceMenu(id: string): void {
     const scrollParent = trigger.closest('.agent-editor__body')
     if (scrollParent instanceof HTMLElement) {
       sourceMenuScrollTarget = scrollParent
+      sourceMenuScrollTop = scrollParent.scrollTop
       scrollParent.addEventListener('scroll', onSourceMenuContextChange, { passive: true })
     }
     window.addEventListener('resize', onSourceMenuContextChange)
-    menu.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()
+    menu.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true })
   })
 }
 
@@ -725,16 +792,16 @@ function onSourceMenuKeydown(event: KeyboardEvent, id: string): void {
   items[nextIndex]?.focus()
 }
 
-function editSubscriptionFromMenu(provider: ModelSubscriptionProviderId): void {
+function editSubscriptionFromMenu(id: string): void {
   closeSourceMenu()
   clearSourceCheck()
-  editingSubscriptionProvider.value = provider
+  editingSubscriptionId.value = id
   enterSourceSubview()
 }
-function removeSubscriptionFromMenu(provider: ModelSubscriptionProviderId): void {
+function removeSubscriptionFromMenu(id: string): void {
   closeSourceMenu()
-  removingSubscriptionProvider.value = provider
-  void nextTick(() => document.getElementById(`${dialogId}-subscription-remove-${provider}`)?.focus())
+  removingSubscriptionId.value = id
+  void nextTick(() => document.getElementById(`${dialogId}-subscription-remove-${id}`)?.focus())
 }
 function addSubscriptionFromMenu(provider: ModelSubscriptionProviderId): void {
   void addSubscription(provider)
@@ -757,25 +824,31 @@ function deleteGatewayFromMenu(id: string): void {
   void nextTick(() => document.getElementById(`${dialogId}-gateway-delete-${sourceDomKey(id)}`)?.focus())
 }
 
-function removeSubscription(provider: ModelSubscriptionProviderId): void {
-  const id = subscriptionSourceId(provider)
-  const subscriptions = modelSource.value.subscriptions.filter((item) => item.provider !== provider)
-  const activeSourceId = modelSource.value.activeSourceId === id ? '' : modelSource.value.activeSourceId
+function removeSubscription(subscriptionId: string): void {
+  const id = subscriptionSourceId(subscriptionId)
+  const subscriptions = modelSource.value.subscriptions.filter((item) => item.id !== subscriptionId)
+  const remainingSubscription = subscriptions.find(subscriptionIsReady)
+  const remainingGateway = modelSource.value.gateways.find((item) => item.baseUrl.trim() !== '' && item.apiKeySet)
+  const activeSourceId = modelSource.value.activeSourceId === id
+    ? (remainingSubscription === undefined ? remainingGateway?.id ?? '' : subscriptionSourceId(remainingSubscription.id))
+    : modelSource.value.activeSourceId
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions, activeSourceId } }
-  removingSubscriptionProvider.value = ''
+  // 草稿中移除已生效行后,基线不能继续指向不存在的来源;保存成功再推进基线。
+  if (baselineSourceId.value === id) baselineSourceId.value = ''
+  removingSubscriptionId.value = ''
   clearSourceCheck()
-  editingSubscriptionProvider.value = ''
+  editingSubscriptionId.value = ''
   // 删到空列表时回到顶部,保证空状态的行动按钮可见。
   if (subscriptions.length === 0 && modelSource.value.gateways.length === 0 && bodyRef.value !== null) bodyRef.value.scrollTop = 0
   void nextTick(() => document.getElementById(sourceMenuTriggerId(ADD_SOURCE_MENU))?.focus())
 }
 
 function closeSubscriptionConfig(): void {
-  const provider = editingSubscriptionProvider.value
-  editingSubscriptionProvider.value = ''
+  const id = editingSubscriptionId.value
+  editingSubscriptionId.value = ''
   clearSourceCheck()
-  if (provider === '') return
-  void nextTick(() => document.getElementById(sourceMenuTriggerId(subscriptionSourceId(provider)))?.focus())
+  if (id === '') return
+  void nextTick(() => document.getElementById(sourceMenuTriggerId(subscriptionSourceId(id)))?.focus())
 }
 
 // 进入配置子视图:滚回顶部,避免 sticky 子 tab 盖住「返回来源」;焦点落到返回按钮。
@@ -787,15 +860,15 @@ function enterSourceSubview(): void {
 }
 
 function cancelSubscriptionRemoval(): void {
-  removingSubscriptionProvider.value = ''
+  removingSubscriptionId.value = ''
   void nextTick(() => document.getElementById(`${dialogId}-source-remove-trigger`)?.focus())
 }
 
 // 在配置页移除来源:走与行内菜单相同的两步确认。
 function askRemoveFromConfig(): void {
-  const provider = editingSubscriptionProvider.value
-  if (provider === '') return
-  removingSubscriptionProvider.value = provider
+  const id = editingSubscriptionId.value
+  if (id === '') return
+  removingSubscriptionId.value = id
 }
 
 function startAddGateway(): void {
@@ -880,6 +953,7 @@ function deleteGateway(id: string): void {
     ...modelConfig.value,
     source: { ...modelSource.value, gateways: remaining, activeSourceId },
   }
+  if (baselineSourceId.value === id) baselineSourceId.value = ''
   deletingGatewayId.value = ''
   if (remaining.length === 0 && modelSource.value.subscriptions.length === 0 && bodyRef.value !== null) bodyRef.value.scrollTop = 0
   void nextTick(() => document.getElementById(sourceMenuTriggerId(ADD_SOURCE_MENU))?.focus())
@@ -1100,13 +1174,14 @@ function reset(): void {
   activeTab.value = isCreate.value ? 'basic' : 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
+  sourceQuery.value = ''
   editingGatewayId.value = null
   gatewayDraft.value = null
   isModelsUrlEditing.value = false
   modelsUrlDraft.value = ''
   clearSourceCheck()
-  editingSubscriptionProvider.value = ''
-  removingSubscriptionProvider.value = ''
+  editingSubscriptionId.value = ''
+  removingSubscriptionId.value = ''
   deletingGatewayId.value = ''
   subscriptionCheckNotice.value = ''
   subscriptionCheckOk.value = true
@@ -1115,6 +1190,7 @@ function reset(): void {
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
   // 打开时冻结基线:之后父组件刷新 Agent 也不会在用户编辑中静默改回表单。
   baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
+  baselineSourceId.value = modelConfig.value.source.activeSourceId
   savedAt.value = ''
   savedAnnouncement.value = ''
   seenSavedToken.value = props.savedToken
@@ -1180,6 +1256,7 @@ watch(() => props.savedToken, (token) => {
   seenSavedToken.value = token
   if (isCreate.value) return
   baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
+  baselineSourceId.value = modelConfig.value.source.activeSourceId
   savedAt.value = formatSavedAt()
   savedAnnouncement.value = t.value.workspace.agentAdmin.savedInline
   saveScanKey.value += 1
@@ -1220,7 +1297,7 @@ onBeforeUnmount(() => {
   <dialog
     ref="dialogRef" class="agent-editor" aria-modal="true"
     :aria-labelledby="titleId" :aria-describedby="hint !== '' ? hintId : undefined"
-    @cancel.prevent="finish('cancel')" @click="onBackdropClick"
+    @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
     <div class="agent-editor__head">
       <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
@@ -1307,7 +1384,7 @@ onBeforeUnmount(() => {
         role="tabpanel" :aria-labelledby="`${dialogId}-tab-model`" tabindex="0"
       >
         <!-- 二级分区用分段控件而不是第二层下划线 tab:视觉权重低于主 tab,滚动时吸顶。 -->
-        <div class="model-subtabs">
+        <div ref="modelSubtabsRef" class="model-subtabs">
           <div
             class="model-subtabs__track" role="tablist"
             :aria-label="t.workspace.agentAdmin.modelSubtabsLabel" @keydown="onModelSectionKeydown"
@@ -1333,7 +1410,7 @@ onBeforeUnmount(() => {
 
         <div
           v-show="activeModelSection === 'source'" :id="`${dialogId}-model-panel-source`"
-          class="model-subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`"
+          class="model-subpanel model-subpanel--source" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`"
         >
           <p v-if="sourceNotice !== ''" class="model-source-notice" role="alert">{{ sourceNotice }}</p>
 
@@ -1343,7 +1420,7 @@ onBeforeUnmount(() => {
           <section class="source-block">
             <div v-if="editingSubscription !== undefined" class="gateway-form">
               <button :id="`${dialogId}-source-back`" type="button" class="gateway-form__back" @click="closeSubscriptionConfig">← {{ t.workspace.agentAdmin.gatewayBack }}</button>
-              <h3>{{ providerTitle(editingSubscription.provider) }}</h3>
+              <h3>{{ subscriptionTitle(editingSubscription) }}</h3>
               <dl class="source-config__facts">
                 <dt>{{ t.workspace.agentAdmin.subscriptionAccount }}</dt>
                 <dd>{{ editingSubscription.account }}</dd>
@@ -1351,17 +1428,24 @@ onBeforeUnmount(() => {
                 <dd>{{ editingSubscription.plan }}</dd>
                 <dt>{{ t.workspace.agentAdmin.subscriptionExpires }}</dt>
                 <dd>{{ editingSubscription.expiresAt.slice(0, 10) }}</dd>
-                <dt>{{ t.workspace.agentAdmin.sourceStatusLabel }}</dt>
-                <dd>{{ subscriptionStatusOf(editingSubscription) }}</dd>
+                <dt>{{ t.workspace.agentAdmin.subscriptionCredential }}</dt>
+                <dd :class="{ 'gateway-form__mono': editingSubscription.credentialRef !== '' }">{{ editingSubscription.credentialRef || t.workspace.agentAdmin.subscriptionNeedsAuth }}</dd>
+                <dt>{{ t.workspace.agentAdmin.subscriptionUsage }}</dt>
+                <dd><SubscriptionUsage :usage="editingSubscription.usage" /></dd>
+                <template v-if="subscriptionStatusOf(editingSubscription) !== ''">
+                  <dt>{{ t.workspace.agentAdmin.sourceStatusLabel }}</dt>
+                  <dd>{{ subscriptionStatusOf(editingSubscription) }}</dd>
+                </template>
               </dl>
               <p class="model-section__hint">{{ t.workspace.agentAdmin.subscriptionConfigHint }}</p>
               <div class="gateway-form__actions">
                 <button type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="checkSubscription(editingSubscription)">{{ t.workspace.agentAdmin.subscriptionCheck }}</button>
+                <button v-if="subscriptionNeedsAuth(editingSubscription)" type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="checkSubscription(editingSubscription, true)">{{ t.workspace.agentAdmin.subscriptionReauthorize }}</button>
                 <button :id="`${dialogId}-source-remove-trigger`" type="button" class="dl-btn dl-btn--ghost source-config__danger" @click="askRemoveFromConfig">{{ t.workspace.agentAdmin.sourceRemove }}</button>
               </div>
-              <div v-if="removingSubscriptionProvider === editingSubscription.provider" class="source-row__confirm">
+              <div v-if="removingSubscriptionId === editingSubscription.id" class="source-row__confirm">
                 <span>{{ t.workspace.agentAdmin.sourceRemovePrompt }}</span>
-                <button :id="`${dialogId}-subscription-remove-${editingSubscription.provider}`" type="button" class="danger-confirm" @click="removeSubscription(editingSubscription.provider)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
+                <button :id="`${dialogId}-subscription-remove-${editingSubscription.id}`" type="button" class="danger-confirm" @click="removeSubscription(editingSubscription.id)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
                 <button type="button" @click="cancelSubscriptionRemoval">{{ t.workspace.agentAdmin.gatewayCancel }}</button>
               </div>
             </div>
@@ -1468,7 +1552,24 @@ onBeforeUnmount(() => {
 
             <template v-else>
               <div class="source-block__head">
-                <h3>{{ t.workspace.agentAdmin.sourceListTitle }}</h3>
+                <h3 :id="`${dialogId}-source-title`" class="agent-editor__visually-hidden">{{ t.workspace.agentAdmin.sourceListTitle }}</h3>
+                <div v-if="showSourceSearch" class="source-search">
+                  <div class="source-search__field">
+                    <DliIcon name="search" size="sm" />
+                    <input
+                      ref="sourceSearchRef" v-model="sourceQuery" type="search" class="source-search__input"
+                      :aria-label="t.workspace.agentAdmin.sourceSearch" :aria-controls="sourceListId"
+                      :placeholder="t.workspace.agentAdmin.sourceSearch" :title="t.workspace.agentAdmin.sourceSearchShortcut"
+                      @keydown.esc.stop.prevent="clearSourceSearch"
+                    >
+                  </div>
+                  <div v-if="sourceQuery !== ''" class="source-search__feedback">
+                    <span class="source-search__count" aria-live="polite" aria-atomic="true">{{ sourceMatchCount }}</span>
+                    <button type="button" class="source-search__clear" :aria-label="t.workspace.agentAdmin.sourceSearchClear" @click="clearSourceSearch">
+                      <DliIcon name="close" size="sm" />
+                    </button>
+                  </div>
+                </div>
                 <div class="source-add-wrap">
                   <button
                     :id="sourceMenuTriggerId(ADD_SOURCE_MENU)" type="button" class="source-block__add"
@@ -1476,31 +1577,32 @@ onBeforeUnmount(() => {
                     :aria-controls="sourceMenuId === ADD_SOURCE_MENU ? sourceMenuDomId(ADD_SOURCE_MENU) : undefined"
                     :aria-label="t.workspace.agentAdmin.sourceAddLabel"
                     @click="toggleSourceMenu(ADD_SOURCE_MENU)"
-                  ><span aria-hidden="true">＋</span> {{ t.workspace.agentAdmin.sourceAdd }}</button>
-                  <div
-                    v-if="sourceMenuId === ADD_SOURCE_MENU" :id="sourceMenuDomId(ADD_SOURCE_MENU)"
-                    class="source-menu source-menu--types" role="menu" :style="sourceMenuPosition"
-                    :aria-label="t.workspace.agentAdmin.sourceAddLabel"
-                    @keydown="onSourceMenuKeydown($event, ADD_SOURCE_MENU)"
-                  >
-                    <button type="button" role="menuitem" class="source-type" :disabled="hasSubscription('claude')" @click="addSubscriptionFromMenu('claude')">
-                      <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeClaude }}</span>
-                      <span class="source-type__hint">{{ hasSubscription('claude') ? t.workspace.agentAdmin.sourceAdded : t.workspace.agentAdmin.sourceTypeClaudeHint }}</span>
-                    </button>
-                    <button type="button" role="menuitem" class="source-type" :disabled="hasSubscription('chatgpt')" @click="addSubscriptionFromMenu('chatgpt')">
-                      <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeChatgpt }}</span>
-                      <span class="source-type__hint">{{ hasSubscription('chatgpt') ? t.workspace.agentAdmin.sourceAdded : t.workspace.agentAdmin.sourceTypeChatgptHint }}</span>
-                    </button>
-                    <div class="source-menu__divider" role="separator" />
-                    <button type="button" role="menuitem" class="source-type" @click="addApiFromMenu">
-                      <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeApi }}</span>
-                      <span class="source-type__hint">{{ t.workspace.agentAdmin.sourceTypeApiHint }}</span>
-                    </button>
-                  </div>
+                  ><span aria-hidden="true">＋</span> <span class="source-block__add-label">{{ t.workspace.agentAdmin.sourceAdd }}</span></button>
                 </div>
               </div>
+              <!-- fixed 菜单留在吸顶表头的层叠上下文之外,避免被全屏菜单遮罩盖住。 -->
+              <div
+                v-if="sourceMenuId === ADD_SOURCE_MENU" :id="sourceMenuDomId(ADD_SOURCE_MENU)"
+                class="source-menu source-menu--types" role="menu" :style="sourceMenuPosition"
+                :aria-label="t.workspace.agentAdmin.sourceAddLabel"
+                @keydown="onSourceMenuKeydown($event, ADD_SOURCE_MENU)"
+              >
+                <button type="button" role="menuitem" class="source-type" :disabled="sourceBusy" @click="addSubscriptionFromMenu('claude')">
+                  <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeClaude }}</span>
+                  <span class="source-type__hint">{{ subscriptionAddLabel('claude') }}</span>
+                </button>
+                <button type="button" role="menuitem" class="source-type" :disabled="sourceBusy" @click="addSubscriptionFromMenu('chatgpt')">
+                  <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeChatgpt }}</span>
+                  <span class="source-type__hint">{{ subscriptionAddLabel('chatgpt') }}</span>
+                </button>
+                <div class="source-menu__divider" role="separator" />
+                <button type="button" role="menuitem" class="source-type" @click="addApiFromMenu">
+                  <span class="source-type__name">{{ t.workspace.agentAdmin.sourceTypeApi }}</span>
+                  <span class="source-type__hint">{{ t.workspace.agentAdmin.sourceTypeApiHint }}</span>
+                </button>
+              </div>
 
-              <div v-if="allSources.length === 0" class="gateway-empty">
+              <div v-if="allSources.length === 0" :id="sourceListId" class="gateway-empty">
                 <div class="gateway-empty__head">
                   <p class="gateway-empty__title">{{ t.workspace.agentAdmin.sourceEmpty }}</p>
                   <button
@@ -1513,32 +1615,52 @@ onBeforeUnmount(() => {
                 <p class="model-section__hint">{{ t.workspace.agentAdmin.sourceEmptyBody }}</p>
               </div>
 
-              <ul v-else class="source-list">
+              <div v-else-if="filteredSources.length === 0" :id="sourceListId" class="source-search-empty" role="status">
+                <div class="source-search-empty__head">
+                  <p>{{ t.workspace.agentAdmin.sourceSearchEmpty }}</p>
+                  <button type="button" class="dl-btn dl-btn--ghost" @click="clearSourceSearch">{{ t.workspace.agentAdmin.sourceSearchClear }}</button>
+                </div>
+                <p v-if="hiddenCurrentSource !== undefined" class="model-section__hint">{{ sourceStillInUse }}</p>
+              </div>
+
+              <ul v-else :id="sourceListId" class="source-list" :aria-labelledby="`${dialogId}-source-title`">
                 <li
-                  v-for="row in allSources" :key="row.id"
+                  v-for="row in filteredSources" :key="row.id"
                   class="source-row" :class="`source-row--${row.type}`"
-                  :data-active="isSourceActive(row) ? 'true' : undefined"
-                  :aria-current="isSourceActive(row) ? 'true' : undefined"
+                  :data-current="isSourceCurrent(row) ? 'true' : undefined"
+                  :data-pending="isSourcePending(row) ? 'true' : undefined"
+                  :data-selected="isSourceSelected(row) ? 'true' : undefined"
+                  :data-source-id="row.id" :data-state="row.type === 'subscription' ? row.subscription.usage.state : undefined"
+                  :aria-current="isSourceCurrent(row) ? 'true' : undefined"
                 >
                   <button
-                    type="button" class="source-row__main"
-                    :aria-pressed="isSourceActive(row)" :aria-label="sourceUseLabel(row)"
+                    :id="`${sourceMenuDomId(row.id)}-select`" type="button" class="source-row__main"
+                    :aria-pressed="isSourceSelected(row)" :aria-label="sourceUseLabel(row)"
+                    :aria-current="isSourceCurrent(row) ? 'true' : undefined"
+                    :aria-describedby="`${dialogId}-source-facts-${sourceDomKey(row.id)}${isSourcePending(row) ? ` ${dialogId}-source-pending-${sourceDomKey(row.id)}` : ''}`"
                     :disabled="sourceBusy" @click="useSource(row)"
                   >
-                    <span class="source-row__radio" :data-active="isSourceActive(row) ? 'true' : undefined" aria-hidden="true" />
+                    <span class="source-row__radio" aria-hidden="true" />
                     <span class="source-row__body">
                       <span class="source-row__title">
                         {{ sourceName(row) }}
-                        <span v-if="isSourceActive(row)" class="source-row__badge">{{ t.workspace.agentAdmin.gatewayCurrent }}</span>
-                        <span class="source-row__status" :data-tone="sourceToneOf(row)">{{ sourceStatusOf(row) }}</span>
+                        <span v-if="isSourceCurrent(row)" class="source-row__badge">{{ t.workspace.agentAdmin.gatewayCurrent }}</span>
+                        <span v-else-if="isSourcePending(row)" :id="`${dialogId}-source-pending-${sourceDomKey(row.id)}`" class="source-row__badge source-row__badge--pending">{{ t.workspace.agentAdmin.sourceDraft }}</span>
+                        <span v-if="sourceStatusOf(row) !== ''" class="source-row__status" :data-tone="sourceToneOf(row)">{{ sourceStatusOf(row) }}</span>
                       </span>
-                      <template v-if="row.type === 'subscription'">
-                        <span v-if="subscriptionMetaOf(row.subscription) !== ''" class="source-row__meta">{{ subscriptionMetaOf(row.subscription) }}</span>
-                      </template>
-                      <template v-else>
-                        <span class="source-row__meta source-row__meta--mono">{{ row.gateway.baseUrl }}</span>
-                        <span class="source-row__meta">{{ gatewayModelCount(row.gateway) }}</span>
-                      </template>
+                      <span :id="`${dialogId}-source-facts-${sourceDomKey(row.id)}`" class="source-row__facts">
+                        <template v-if="row.type === 'subscription'">
+                          <span class="source-row__meta">
+                            {{ row.subscription.account }} · {{ row.subscription.plan }} ·
+                            <span class="source-row__expires">{{ t.workspace.agentAdmin.subscriptionExpires }} {{ row.subscription.expiresAt.slice(0, 10) }}</span>
+                          </span>
+                          <SubscriptionUsage :usage="row.subscription.usage" />
+                        </template>
+                        <template v-else>
+                          <span class="source-row__meta source-row__meta--mono">{{ row.gateway.baseUrl }}</span>
+                          <span class="source-row__meta">{{ gatewayModelCount(row.gateway) }}</span>
+                        </template>
+                      </span>
                     </span>
                   </button>
 
@@ -1556,9 +1678,9 @@ onBeforeUnmount(() => {
                       @keydown="onSourceMenuKeydown($event, row.id)"
                     >
                       <template v-if="row.type === 'subscription'">
-                        <button type="button" role="menuitem" @click="editSubscriptionFromMenu(row.subscription.provider)">{{ t.workspace.agentAdmin.sourceEditConfig }}</button>
+                        <button type="button" role="menuitem" @click="editSubscriptionFromMenu(row.subscription.id)">{{ t.workspace.agentAdmin.sourceEditConfig }}</button>
                         <div class="source-menu__divider" role="separator" />
-                        <button type="button" role="menuitem" class="source-menu__danger" @click="removeSubscriptionFromMenu(row.subscription.provider)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
+                        <button type="button" role="menuitem" class="source-menu__danger" @click="removeSubscriptionFromMenu(row.subscription.id)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
                       </template>
                       <template v-else>
                         <button type="button" role="menuitem" @click="editGatewayFromMenu(row.gateway)">{{ t.workspace.agentAdmin.sourceEditConfig }}</button>
@@ -1573,9 +1695,9 @@ onBeforeUnmount(() => {
                     <button :id="`${dialogId}-gateway-delete-${sourceDomKey(row.gateway.id)}`" type="button" class="danger-confirm" @click="deleteGateway(row.gateway.id)">{{ t.workspace.agentAdmin.gatewayDeleteConfirm }}</button>
                     <button type="button" @click="deletingGatewayId = ''">{{ t.workspace.agentAdmin.gatewayCancel }}</button>
                   </div>
-                  <div v-else-if="row.type === 'subscription' && removingSubscriptionProvider === row.subscription.provider" class="source-row__confirm">
+                  <div v-else-if="row.type === 'subscription' && removingSubscriptionId === row.subscription.id" class="source-row__confirm">
                     <span>{{ t.workspace.agentAdmin.sourceRemovePrompt }}</span>
-                    <button :id="`${dialogId}-subscription-remove-${row.subscription.provider}`" type="button" class="danger-confirm" @click="removeSubscription(row.subscription.provider)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
+                    <button :id="`${dialogId}-subscription-remove-${row.subscription.id}`" type="button" class="danger-confirm" @click="removeSubscription(row.subscription.id)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
                     <button type="button" @click="cancelSubscriptionRemoval">{{ t.workspace.agentAdmin.gatewayCancel }}</button>
                   </div>
                 </li>
@@ -1586,8 +1708,14 @@ onBeforeUnmount(() => {
 
         <div
           v-show="activeModelSection === 'defaults'" :id="`${dialogId}-model-panel-defaults`"
-          class="model-subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-defaults`"
+          class="model-subpanel model-subpanel--source-context" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-defaults`"
         >
+          <ModelSourceContext
+            :name="activeSource === undefined ? '' : sourceName(activeSource)"
+            :account="activeSource?.type === 'subscription' ? activeSource.subscription.account : ''"
+            :is-draft-changed="sourceDraftChanged" :disabled="busy"
+            @change="activateModelSection('source', true)"
+          />
           <p class="model-section__hint">{{ t.workspace.agentAdmin.modelDefaultHint }}</p>
           <p v-if="sourceModels.length === 0" class="model-section__hint model-section__hint--warning">{{ t.workspace.agentAdmin.modelSourceEmpty }}</p>
           <div class="model-matrix">
@@ -1642,8 +1770,14 @@ onBeforeUnmount(() => {
 
         <div
           v-show="activeModelSection === 'tiers'" :id="`${dialogId}-model-panel-tiers`"
-          class="model-subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-tiers`"
+          class="model-subpanel model-subpanel--source-context" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-tiers`"
         >
+          <ModelSourceContext
+            :name="activeSource === undefined ? '' : sourceName(activeSource)"
+            :account="activeSource?.type === 'subscription' ? activeSource.subscription.account : ''"
+            :is-draft-changed="sourceDraftChanged" :disabled="busy"
+            @change="activateModelSection('source', true)"
+          />
           <p class="model-section__hint">{{ t.workspace.agentAdmin.modelTierHint }}</p>
           <p v-if="sourceModels.length === 0" class="model-section__hint model-section__hint--warning">{{ t.workspace.agentAdmin.modelSourceEmpty }}</p>
           <div class="model-matrix model-matrix--tiers">
@@ -1828,7 +1962,8 @@ onBeforeUnmount(() => {
   --agent-matrix-label: 140px;
   --agent-matrix-control: 132px;
   width: min(720px, calc(100% - 2 * var(--dl-space-6)));
-  max-height: calc(100dvh - 2 * var(--dl-space-6));
+  block-size: min(720px, calc(100dvh - 2 * var(--dl-space-6)));
+  max-block-size: min(720px, calc(100dvh - 2 * var(--dl-space-6)));
   margin: auto;
   padding: var(--dl-space-6);
   border: var(--dl-border-width) solid var(--dl-border-strong);
@@ -1857,12 +1992,27 @@ onBeforeUnmount(() => {
 .agent-editor__reset { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .agent-editor__reset:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .agent-editor__reset:disabled { background: transparent; color: var(--dl-text-disabled); cursor: not-allowed; }
-.agent-editor__body { min-width: 0; min-inline-size: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
+/* 限定辅助文本的绝对定位参照,长内容的静态位置不能撑出外壳滚动条。 */
+.agent-editor__body { position: relative; flex: 1; min-width: 0; min-inline-size: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
 .agent-editor__body::-webkit-scrollbar { width: var(--dl-space-1); }
 .agent-editor__body::-webkit-scrollbar-thumb { background: var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
 .agent-editor__body::-webkit-scrollbar-track { background: transparent; }
 .agent-editor__panel { display: grid; gap: var(--dl-space-6); min-inline-size: 0; }
 .agent-editor__panel--model { gap: var(--dl-space-3); }
+/* 动效只落在实际内容上:模型外层保留吸顶 tab,来源子视图也不叠加父级位移。
+   v-show 恢复显示时自动重播;不保留 transform,避免改变来源菜单的 fixed 定位参照。 */
+.agent-editor__panel:not(.agent-editor__panel--model),
+.model-subpanel:not(.model-subpanel--source),
+.source-block > .gateway-form,
+.source-block__head,
+.source-list,
+.gateway-empty {
+  animation: agent-editor-page-enter var(--dl-duration-base) var(--dl-ease-standard);
+}
+@keyframes agent-editor-page-enter {
+  from { opacity: 0; transform: translateY(var(--dl-space-1)); }
+  to { opacity: 1; transform: translateY(0); }
+}
 /* 二级分区:分段控件而非第二层下划线 tab,视觉权重低于主 tab;滚动时吸顶。
    吸顶偏移吃到 body 的 4px 内边距,避免滚动内容从上方缝隙透出半行。 */
 .model-subtabs { min-inline-size: 0; position: sticky; inset-block-start: calc(-1 * var(--dl-space-1)); z-index: var(--dl-z-sticky); padding-block: var(--dl-space-1); background: var(--dl-bg-elevated); }
@@ -1874,30 +2024,56 @@ onBeforeUnmount(() => {
 .model-subtabs__track button[data-locked='true']:hover { background: transparent; color: var(--dl-text-disabled); }
 .model-subtabs__warn { display: inline-flex; align-items: center; color: var(--dl-warning); }
 .model-matrix select[aria-invalid='true'] { border-color: color-mix(in srgb, var(--dl-warning) 55%, transparent); }
-/* 来源分区:订阅与网关共用「标题 + 行列表」,不再把订阅裹进独立卡片。 */
+/* 来源分区:订阅与网关共用工具栏与行列表,不再把订阅裹进独立卡片。 */
 .source-block { display: grid; gap: var(--dl-space-2); }
+.gateway-form__actions { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); }
 .source-block + .source-block { margin-block-start: var(--dl-space-4); }
-.source-block__head { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
-.source-block__head h3 { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; }
-.source-add-wrap { position: relative; }
-.source-block__add { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
+/* 来源工具栏与二级 Tab 共用一个滚动容器,高度偏移来自实际测量而非断点猜测。 */
+.source-block__head { position: sticky; inset-block-start: calc(var(--agent-subtabs-height, 0px) - var(--dl-space-1)); z-index: calc(var(--dl-z-sticky) - 1); display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); min-inline-size: 0; min-block-size: calc(var(--dl-target-size) + var(--dl-space-1) + var(--dl-border-width) * 3); padding-block: calc(var(--dl-space-1) / 2); border-block-end: var(--dl-border-width) solid var(--dl-border-subtle); background: var(--dl-bg-elevated); }
+.source-add-wrap { position: relative; flex: none; margin-inline-start: auto; }
+.source-block__add { min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-accent); font-size: var(--dl-font-size-xs); white-space: nowrap; }
 .source-block__add:hover { background: var(--dl-bg-hover); }
+.source-block__add:active { background: var(--dl-bg-sunken); color: var(--dl-accent-active); }
+.source-search { display: flex; flex: 1 1 auto; align-items: center; gap: var(--dl-space-2); min-inline-size: calc(var(--dl-target-size) * 2 + var(--dl-space-8)); }
+/* 搜索槽与来源上下文块共用同一表面:bg-base + 发丝边框 + md 圆角。
+   深色下不再用比所在表面更暗的 sunken —— 那会读成凹陷的黑洞。 */
+.source-search__field { display: flex; flex: 1 1 calc(var(--dl-target-size) * 3); align-items: center; gap: var(--dl-space-2); min-inline-size: 0; padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-tertiary); }
+.source-search__field:hover { border-color: var(--dl-border-strong); }
+.source-search__field:focus-within { border-color: var(--dl-focus-border); box-shadow: var(--dl-focus-halo); }
+.source-search__input { flex: 1; inline-size: 0; min-inline-size: 0; min-block-size: var(--dl-target-size); padding: 0; border: none; background: transparent; color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
+.source-search__input::placeholder { color: var(--dl-text-tertiary); }
+.source-search__input:focus-visible { outline: none; box-shadow: none; border-radius: inherit; }
+.source-search__input::-webkit-search-cancel-button { appearance: none; }
+.source-search__feedback { display: flex; flex: none; align-items: center; gap: var(--dl-space-1); margin-inline-start: auto; }
+.source-search__count { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); white-space: nowrap; }
+.source-search__clear { display: grid; place-items: center; flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); }
+.source-search__clear:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.source-search__clear:active { background: var(--dl-bg-sunken); color: var(--dl-accent-active); }
+.source-search-empty { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
+.source-search-empty__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
+.source-search-empty__head .dl-btn { min-block-size: var(--dl-target-size); }
 .source-list { display: grid; margin: 0; padding: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); list-style: none; }
 .source-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-2); padding: var(--dl-space-2) var(--dl-space-3); }
 .source-row + .source-row { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 .source-row:first-child { border-start-start-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); border-start-end-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); }
 .source-row:last-child { border-end-start-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); border-end-end-radius: calc(var(--dl-radius-lg) - var(--dl-border-width)); }
-.source-row[data-active='true'] { background: var(--dl-accent-soft); }
+.source-row[data-current='true'] { background: var(--dl-accent-soft); }
 .source-row:hover { background: var(--dl-bg-hover); }
-.source-row[data-active='true']:hover { background: var(--dl-accent-soft); box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-border-strong); }
+.source-row[data-current='true']:hover { background: var(--dl-accent-soft); box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-border-strong); }
+.source-row[data-pending='true'] { background: transparent; box-shadow: inset 0 0 0 var(--dl-border-width) var(--dl-accent); }
+.source-row[data-pending='true']:hover { background: var(--dl-accent-soft); }
 .source-row__main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--dl-space-2); min-inline-size: 0; min-block-size: var(--dl-target-size); padding-block: var(--dl-space-1); text-align: left; }
-.source-row__radio { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); flex: none; border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
-.source-row__radio[data-active='true'] { border-color: var(--dl-accent); background: var(--dl-accent); box-shadow: inset 0 0 0 var(--agent-row-gap) var(--dl-bg-elevated); }
-.source-row__body { display: grid; gap: var(--agent-hairline); min-inline-size: 0; }
+.source-row__radio { display: grid; place-items: center; inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); flex: none; border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
+.source-row[data-current='true'] .source-row__radio { border-color: var(--dl-accent); background: var(--dl-accent); box-shadow: inset 0 0 0 var(--agent-row-gap) var(--dl-bg-elevated); }
+.source-row[data-pending='true'] .source-row__radio { border-color: var(--dl-accent); }
+.source-row[data-pending='true'] .source-row__radio::after { content: ''; inline-size: var(--dl-space-1); block-size: var(--dl-space-1); border-radius: var(--dl-radius-pill); background: var(--dl-accent); }
+.source-row__body, .source-row__facts { display: grid; gap: var(--agent-hairline); min-inline-size: 0; }
 .source-row__title { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; }
 .source-row__badge { padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
+.source-row__badge--pending { border-color: color-mix(in srgb, var(--dl-warning) 35%, transparent); color: var(--dl-warning); }
 .source-row__meta { min-inline-size: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: break-word; }
 .source-row__meta--mono { overflow: hidden; font-family: var(--dl-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.source-row__expires { display: inline-block; white-space: nowrap; }
 .source-row__status { display: inline-flex; flex: none; align-items: center; min-block-size: var(--dl-space-6); padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-tight); white-space: nowrap; }
 .source-row__status[data-tone='ok'] { border-color: color-mix(in srgb, var(--dl-success) 35%, transparent); color: var(--dl-success); }
 .source-row__status[data-tone='warning'] { border-color: color-mix(in srgb, var(--dl-warning) 35%, transparent); color: var(--dl-warning); }
@@ -1970,7 +2146,7 @@ onBeforeUnmount(() => {
 .gateway-form__url-action--save:hover:not(:disabled), .gateway-form__url-action--save:focus-visible { color: var(--dl-accent-hover); }
 .gateway-form__url-action:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
 .gateway-form__endpoint-input:hover:not(:disabled) { border-color: var(--dl-border-strong); }
-.gateway-form__endpoint-input:focus-visible { border-color: var(--dl-border-strong); outline: none; box-shadow: var(--dl-focus-ring); }
+.gateway-form__endpoint-input:focus-visible { border-color: var(--dl-focus-border); outline: none; box-shadow: var(--dl-focus-halo); border-radius: var(--dl-radius-md); }
 .gateway-form__endpoint-input:active:not(:disabled) { border-color: var(--dl-accent); }
 .gateway-form__endpoint-input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
 .source-config__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--dl-space-2) var(--dl-space-4); margin: 0; font-size: var(--dl-font-size-sm); }
@@ -1979,8 +2155,8 @@ onBeforeUnmount(() => {
 .source-config__danger { color: var(--dl-error); }
 /* 窄对话框里四个二级 tab 放不下:改为横向滚动,避免标签越出自身按钮盒。 */
 @media (max-width: 560px) {
-  /* 窄屏靠选中底色与实心圆点表达当前来源,角标让位给标题与状态。 */
-  .source-row__badge { display: none; }
+  .source-config__facts { grid-template-columns: minmax(0, 1fr); gap: var(--dl-space-1); }
+  .source-config__facts dd { margin-block-end: var(--dl-space-2); }
   /* 四个二级 tab 排不下时改成两行两列,所有标签完整可见,不做隐藏滚动。 */
   .model-subtabs__track { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -1988,6 +2164,7 @@ onBeforeUnmount(() => {
 @media (max-width: 640px) {
 }
 .model-subpanel { display: grid; gap: var(--dl-space-3); min-inline-size: 0; }
+.model-subpanel--source-context { gap: var(--dl-space-2); }
 .agent-editor__panel:focus-visible, button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
 button:active:not(:disabled) { transform: translateY(var(--dl-lift-press)); }
 button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
@@ -2051,8 +2228,8 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .field__label { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .field__input { inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .field__input::placeholder { color: var(--dl-text-tertiary); }
-.field__input:focus-visible { border-color: var(--dl-border-strong); outline: none; box-shadow: var(--dl-focus-ring); }
 .field__input:hover:not(:disabled) { border-color: var(--dl-border-strong); }
+.field__input:focus-visible:not(:disabled) { border-color: var(--dl-focus-border); outline: none; box-shadow: var(--dl-focus-halo); border-radius: var(--dl-radius-md); }
 .field__input:active:not(:disabled) { border-color: var(--dl-accent); }
 .field__input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
 .field__select { appearance: none; min-inline-size: 0; max-inline-size: 100%; padding-inline-end: var(--dl-space-8); }
@@ -2118,12 +2295,24 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .agent-editor__buttons { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: var(--dl-space-2); margin-inline-start: auto; }
 .agent-editor__visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) {
+  .agent-editor__panel:not(.agent-editor__panel--model),
+  .model-subpanel:not(.model-subpanel--source),
+  .source-block > .gateway-form,
+  .source-block__head,
+  .source-list,
+  .gateway-empty { animation: none; }
   .agent-editor__save-scan { animation: none; opacity: 0; }
   .gateway-form__refresh[data-busy='true'] :deep(.dl-icon) { animation: none; }
 }
 
 /* 触屏 / 窄屏:模板卡与输入框仍保持 44 的可点高度(默认已是 44)。 */
 @media (max-width: 560px) {
+  .source-block__add-label { display: none; }
+  .source-block__add { inline-size: var(--dl-target-size); padding-inline: 0; }
+  .source-search { gap: var(--dl-space-1); }
+  .source-search__field { padding-inline: var(--dl-space-1); gap: var(--dl-space-1); }
+  /* 查询时给计数与清除按钮让位,装饰图标不挤占可输入区域。 */
+  .source-search:has(.source-search__feedback) .source-search__field > :deep(.dl-icon) { display: none; }
   .template-grid, .model-row { grid-template-columns: minmax(0, 1fr); }
   .agent-editor__buttons .dl-btn { min-inline-size: var(--dl-target-size); padding-inline: var(--dl-space-2); white-space: nowrap; }
   /* 回退链的控制钮换到第二行,保持 44×44 的独立触达尺寸。 */

@@ -411,20 +411,39 @@ model ModelTierMap {
 
 // 模型来源:Claude 订阅、ChatGPT 订阅与 API 渠道都是「来源类型」;
 // 运行时只启用一个来源,但所有来源配置都保存在 Agent 里,以便显式切换。
-// 订阅服务商:同一时间只能启用一个订阅,两套连接配置常驻。
+// 订阅实例可来自同一服务商,通过实例 id 显式选择当前来源。
 enum ModelSubscriptionProviderId {
   claude,
   chatgpt,
 }
 
-// 订阅登录态:原型只展示与模拟,不实现真实 OAuth。
+scalar SubscriptionId extends string;
+
+enum SubscriptionUsageState {
+  ok,
+  warning,
+  exhausted,
+  `unknown`,
+}
+
+model SubscriptionUsage {
+  state: SubscriptionUsageState;
+  usedPercent: int32; // 0–100;-1 表示未知
+  resetsAt: string; // ISO 时间;空串表示未知
+}
+
+// 仅保存系统钥匙串引用,不保存凭据本身;原型不实现真实授权。
 model ModelSubscription {
+  id: SubscriptionId;
   provider: ModelSubscriptionProviderId;
+  label: string;
   connected: boolean;
   account: string;
   plan: string;
   expiresAt: string; // ISO 时间;空串 = 无到期信息
   status: string;    // ok / expired / error / unchecked
+  usage: SubscriptionUsage;
+  credentialRef: string; // 空串表示需要重新授权,不得保存 token 本身
 }
 
 // 自定义模型网关。apiKey 只以掩码返回,isSet 表示已保存;保存时留空表示保持原值。
@@ -443,7 +462,7 @@ model ModelGateway {
 }
 
 // 所有已配置的来源放在一起,activeSourceId 指向当前启用的那一个。
-// id 约定:订阅为 subscription:<provider>,API 渠道为 gateway:<name/id>。
+// id 约定:订阅为 subscription:<id>,API 渠道为 gateway:<name/id>。
 // 同样被内联进 AgentModelConfig,不单独产出入口类型。
 model ModelSource {
   subscriptions: ModelSubscription[];

@@ -1695,6 +1695,66 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await expect(page.locator('.workspace-projects')).toContainText(PROJECT_NAMES.research[0])
 })
 
+for (const width of [375, 768, 1280]) {
+  test(`Agent 设置:打开焦点与档位键盘视觉顺序 @${width}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await login(page)
+    await waitForStable(page)
+    if (width < 1024) await page.getByRole('button', { name: '打开侧栏', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+    const sourceTab = dialog.getByRole('tab', { name: /^模型来源/ })
+    const mainTabs = dialog.locator('.agent-editor__tabs')
+    const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
+    await expect(sourceTab).toBeFocused()
+    await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(sourceTab).toHaveAttribute('tabindex', '0')
+    await expect(sectionTabs.locator('[tabindex="0"]')).toHaveCount(1)
+    await expect(mainTabs.getByRole('tab', { name: '基本', exact: true })).toHaveAttribute('tabindex', '-1')
+    await expect(mainTabs.locator('[tabindex="0"]')).toHaveCount(1)
+    await expect(mainTabs.getByRole('tab', { name: '模型', exact: true })).toHaveAttribute('tabindex', '0')
+    await page.screenshot({ path: testInfo.outputPath(`agent-settings-opening-focus-${width}.png`), animations: 'disabled' })
+    await mainTabs.getByRole('tab', { name: '模型', exact: true }).focus()
+    await expect(mainTabs.getByRole('tab', { name: '模型', exact: true })).toBeFocused()
+    await page.keyboard.press('ArrowLeft')
+    await expect(mainTabs.getByRole('tab', { name: '基本', exact: true })).toBeFocused()
+    await expect(mainTabs.getByRole('tab', { name: '基本', exact: true })).toHaveAttribute('tabindex', '0')
+    await expect(mainTabs.getByRole('tab', { name: '模型', exact: true })).toHaveAttribute('tabindex', '-1')
+    await page.keyboard.press('ArrowRight')
+    await dialog.getByRole('tab', { name: /^档位映射/ }).click()
+    for (const tier of ['Fable', 'Opus', 'Sonnet', 'Haiku']) {
+      const model = dialog.getByRole('combobox', { name: `${tier} · 模型`, exact: true })
+      const effort = dialog.getByRole('combobox', { name: `${tier} · 思考`, exact: true })
+      await model.focus()
+      await model.press('Tab')
+      await expect(effort).toBeFocused()
+      const modelBox = await model.boundingBox()
+      const effortBox = await effort.boundingBox()
+      expect(modelBox).not.toBeNull()
+      expect(effortBox).not.toBeNull()
+      if (modelBox !== null && effortBox !== null) {
+        if (width <= 560) expect(effortBox.y).toBeGreaterThanOrEqual(modelBox.y + modelBox.height)
+        else {
+          expect(Math.abs(modelBox.y - effortBox.y)).toBeLessThanOrEqual(1)
+          expect(effortBox.x).toBeGreaterThanOrEqual(modelBox.x + modelBox.width)
+        }
+      }
+    }
+    expect(await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+    await page.screenshot({ path: testInfo.outputPath(`agent-settings-tier-tab-order-${width}.png`), animations: 'disabled' })
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: '新建 Agent', exact: true }).click()
+    const createDialog = page.getByRole('dialog', { name: '新建 Agent' })
+    const name = createDialog.getByRole('textbox', { name: '名称', exact: true })
+    await expect(name).toBeVisible()
+    await expect(name).toBeFocused()
+    await expect(createDialog.locator('.agent-editor__tabs [tabindex="0"]')).toHaveCount(1)
+    await expect(createDialog.getByRole('tab', { name: '基本', exact: true })).toHaveAttribute('tabindex', '0')
+  })
+}
+
 test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回显', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
@@ -1729,9 +1789,9 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(dialog.getByRole('tabpanel')).toHaveCount(2)
 
   // 首屏只显示默认模型分区;档位与高级面板不进入可访问树。
-  const conversationModel = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  const conversationModel = dialog.getByRole('combobox', { name: '对话默认模型 · 模型', exact: true })
   const conversationEffort = dialog.getByRole('combobox', { name: '对话默认模型 · 思考', exact: true })
-  const subagentModel = dialog.getByRole('combobox', { name: '子 Agent 默认模型', exact: true })
+  const subagentModel = dialog.getByRole('combobox', { name: '子 Agent 默认模型 · 模型', exact: true })
   const subagentEffort = dialog.getByRole('combobox', { name: '子 Agent 默认模型 · 思考', exact: true })
   await expect(conversationModel).toHaveValue('claude-sonnet-5-5')
   await expect(conversationEffort).toHaveValue('')
@@ -1872,7 +1932,7 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await litellmRow.getByRole('button', { name: '使用「公司 LiteLLM」作为模型来源' }).click()
   await expect(litellmRow).toHaveAttribute('data-selected', 'true')
   await defaultsTab.click()
-  const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  const model = dialog.getByRole('combobox', { name: '对话默认模型 · 模型', exact: true })
   await expect(model).toHaveValue('claude-sonnet-5-5')
   // 渠道来源下,模型选项来自该渠道配置的模型列表。
   await model.selectOption('claude-opus-5-5')
@@ -1886,7 +1946,7 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toHaveCount(0)
   await expect(defaultsTab.locator('.model-subtabs__warn')).toHaveCount(1)
   await expect(sectionTabs.getByRole('tab', { name: /^档位映射/ }).locator('.model-subtabs__warn')).toHaveCount(1)
-  await expect(dialog.locator('select[aria-label="对话默认模型"]')).toHaveAttribute('aria-invalid', 'true')
+  await expect(dialog.locator('select[aria-label="对话默认模型 · 模型"]')).toHaveAttribute('aria-invalid', 'true')
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(dialog.locator('.agent-editor__save-state')).toContainText('部分模型需重新选择')
 
@@ -1982,7 +2042,7 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await expect(chatgptRow).toHaveAttribute('data-selected', 'true')
   await expect(claudeRow).not.toHaveAttribute('data-selected', 'true')
   await sectionTabs.getByRole('tab', { name: /^默认模型/ }).click()
-  const model = dialog.getByRole('combobox', { name: '对话默认模型', exact: true })
+  const model = dialog.getByRole('combobox', { name: '对话默认模型 · 模型', exact: true })
   expect((await model.locator('option').allTextContents()).some((text) => text.includes('GPT-5.5'))).toBe(true)
   await model.selectOption('gpt-5.5')
   await expect(dialog.locator('.model-subtabs__warn')).toHaveCount(0)
@@ -2013,7 +2073,7 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   const selectWidths = await firstMatrixRow.locator('select').evaluateAll((selects) => selects.map((select) => select.getBoundingClientRect().width))
   expect(selectWidths.every((width) => width > 150), '窄屏 select 必须接近整行宽').toBe(true)
   // 造一个非默认选择;tab 上不再显示自定义项数量。
-  await dialog.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption('claude-opus-5-5')
+  await dialog.getByRole('combobox', { name: 'Conversation · Model', exact: true }).selectOption('claude-opus-5-5')
   await expect(dialog.locator('.model-subtabs__count')).toHaveCount(0)
 
   const body = dialog.locator('.agent-editor__body')
@@ -2746,6 +2806,17 @@ for (const language of ['中文', 'English'] satisfies ('中文' | 'English')[])
     if (readRow !== null && editRow !== null) expect(Math.abs(readRow.height - editRow.height), '375 中英文原位编辑不改变行高').toBeLessThanOrEqual(1)
     expect(await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollHeight), '切换编辑态不改变内容高度').toBe(contentHeight)
     await expect(cancelUrlButton).toBeVisible()
+    const apiBox = await modelsApi.boundingBox()
+    const saveBox = await saveUrlButton.boundingBox()
+    const cancelBox = await cancelUrlButton.boundingBox()
+    expect(apiBox?.width, '375 下 URL 输入独占首行且宽度至少 200').toBeGreaterThanOrEqual(200)
+    if (apiBox !== null && saveBox !== null && cancelBox !== null && editRow !== null) {
+      expect(saveBox.y).toBeGreaterThanOrEqual(apiBox.y + apiBox.height)
+      expect(cancelBox.y).toBeGreaterThanOrEqual(apiBox.y + apiBox.height)
+      expect(saveBox.x + saveBox.width).toBeLessThanOrEqual(cancelBox.x)
+      expect(Math.abs(cancelBox.x + cancelBox.width - editRow.x - editRow.width), '操作区右对齐').toBeLessThanOrEqual(1)
+    }
+    await testInfo.attach('models-api-input-width', { body: String(apiBox?.width), contentType: 'text/plain' })
     await expect(modelsApi).toHaveAccessibleDescription(methodHint)
     for (const button of [saveUrlButton, cancelUrlButton]) {
       await expect(button).toHaveText('')
@@ -10463,7 +10534,7 @@ for (const isEnglish of [false, true]) {
     await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
     await expect(context.locator('.model-source-context__account')).toHaveText('yizhou.lin@studio.example.com')
     await expect(draft).toHaveCount(0)
-    await dialog.getByRole('combobox', { name: isEnglish ? 'Conversation' : '对话默认模型', exact: true }).selectOption('claude-opus-5-5')
+    await dialog.getByRole('combobox', { name: isEnglish ? 'Conversation · Model' : '对话默认模型 · 模型', exact: true }).selectOption('claude-opus-5-5')
     await expect(draft).toHaveCount(0)
     await change.click()
     await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
@@ -10729,6 +10800,11 @@ for (const provider of ['Claude', 'ChatGPT']) {
         expect(new Set(titles).size).toBe(titles.length)
         expect(names.every((name) => name !== null && name !== '')).toBe(true)
         expect(new Set(names).size).toBe(names.length)
+        const subscriptionTitles = await dialog.locator('.source-row--subscription .source-row__title').allTextContents()
+        const claudeTitles = subscriptionTitles.filter((title) => title.startsWith('Claude'))
+        const chatgptTitles = subscriptionTitles.filter((title) => title.startsWith('ChatGPT'))
+        expect(subscriptionTitles, '新增账户紧邻同 provider 分组,Claude 组始终在 ChatGPT 之前').toEqual([...claudeTitles, ...chatgptTitles])
+        await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
       }
       for (const number of [initialCount + 1, initialCount + 2]) {
         await addAccount()
@@ -10736,6 +10812,8 @@ for (const provider of ['Claude', 'ChatGPT']) {
         await expect(dialog.getByRole('button', { name: isEnglish
           ? `Use ${accountName(number)} as the model source`
           : `使用「${accountName(number)}」作为模型来源`, exact: true })).toBeVisible()
+        const providerTitles = (await dialog.locator('.source-row--subscription .source-row__title').allTextContents()).filter((title) => title.startsWith(provider))
+        expect(providerTitles[providerTitles.length - 1]?.trim(), '新账户位于同 provider 组末尾').toBe(accountName(number))
         await expectUniqueNames()
       }
       const removed = dialog.locator('.source-row--subscription', { hasText: accountName(initialCount + 1) })

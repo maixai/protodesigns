@@ -655,7 +655,7 @@ function replaceSubscription(next: ModelSubscription): void {
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions } }
 }
 
-// 添加订阅:连接成功后追加来源。只有完全没有来源时才自动启用它,否则保留用户当前的选择。
+// 添加订阅:连接成功后插入同服务商分组末尾。只有完全没有来源时才自动启用它,否则保留当前选择。
 async function addSubscription(provider: ModelSubscriptionProviderId): Promise<void> {
   closeSourceMenu()
   if (sourceBusy.value) return
@@ -667,11 +667,14 @@ async function addSubscription(provider: ModelSubscriptionProviderId): Promise<v
   const id = subscriptionSourceId(result.value.id)
   const hasSources = modelSource.value.subscriptions.length > 0 || modelSource.value.gateways.length > 0
   const activeSourceId = modelSource.value.activeSourceId
+  const nextSubscriptions = [...modelSource.value.subscriptions]
+  const lastProviderIndex = nextSubscriptions.reduce((last, item, index) => item.provider === provider ? index : last, -1)
+  nextSubscriptions.splice(lastProviderIndex < 0 ? nextSubscriptions.length : lastProviderIndex + 1, 0, result.value)
   modelConfig.value = {
     ...modelConfig.value,
     source: {
       ...modelSource.value,
-      subscriptions: [...modelSource.value.subscriptions, result.value],
+      subscriptions: nextSubscriptions,
       activeSourceId: hasSources ? activeSourceId : id,
     },
   }
@@ -1285,8 +1288,9 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   reset()
   await nextTick()
   dialog.showModal()
-  // 初始焦点落在名称:模板只是快捷填充,确认与修改都从名称开始。
-  nameRef.value?.focus()
+  // 新建从可见名称开始;编辑从当前模型分区开始,不聚焦隐藏的基本页控件。
+  if (isCreate.value) nameRef.value?.focus()
+  else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -1731,7 +1735,7 @@ onBeforeUnmount(() => {
               <span class="model-matrix__label">{{ t.workspace.agentAdmin.modelConversationLabel }}</span>
               <span class="model-matrix__field-label">{{ t.workspace.agentAdmin.modelColumn }}</span>
               <SelectField>
-                <select v-model="modelConfig.defaultModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelConversationLabel" :aria-invalid="defaultModelUnavailable ? 'true' : undefined">
+                <select v-model="modelConfig.defaultModelId" class="field__input field__select" :disabled="busy" :aria-label="`${t.workspace.agentAdmin.modelConversationLabel} · ${t.workspace.agentAdmin.modelColumn}`" :aria-invalid="defaultModelUnavailable ? 'true' : undefined">
                   <option v-for="option in modelSelectOptions(modelConfig.defaultModelId)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </SelectField>
@@ -1751,7 +1755,7 @@ onBeforeUnmount(() => {
               <span class="model-matrix__label">{{ t.workspace.agentAdmin.modelSubagentLabel }}</span>
               <span class="model-matrix__field-label">{{ t.workspace.agentAdmin.modelColumn }}</span>
               <SelectField>
-                <select v-model="modelConfig.subagentModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelSubagentLabel" :aria-invalid="subagentModelUnavailable ? 'true' : undefined">
+                <select v-model="modelConfig.subagentModelId" class="field__input field__select" :disabled="busy" :aria-label="`${t.workspace.agentAdmin.modelSubagentLabel} · ${t.workspace.agentAdmin.modelColumn}`" :aria-invalid="subagentModelUnavailable ? 'true' : undefined">
                   <option value="">{{ t.workspace.agentAdmin.modelSubagentInherit }}</option>
                   <option v-for="option in modelSelectOptions(modelConfig.subagentModelId)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
@@ -2322,19 +2326,24 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .source-search__field { padding-inline: var(--dl-space-1); gap: var(--dl-space-1); }
   /* 查询时给计数与清除按钮让位,装饰图标不挤占可输入区域。 */
   .source-search:has(.source-search__feedback) .source-search__field > :deep(.dl-icon) { display: none; }
+  /* URL 独占首行,操作区固定在第二行;读写态共享行高,隐藏刷新不再挤压输入框。 */
+  .gateway-form__discovery-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: repeat(2, var(--dl-target-size)); }
+  .gateway-form__endpoint, .gateway-form .gateway-form__endpoint-input { grid-column: 1 / -1; grid-row: 1; inline-size: 100%; }
+  .gateway-form__url-actions { grid-column: 2; grid-row: 2; }
+  .gateway-form__refresh { grid-column: 1; grid-row: 2; justify-self: start; }
   .template-grid, .model-row { grid-template-columns: minmax(0, 1fr); }
   .agent-editor__buttons .dl-btn { min-inline-size: var(--dl-target-size); padding-inline: var(--dl-space-2); white-space: nowrap; }
   /* 回退链的控制钮换到第二行,保持 44×44 的独立触达尺寸。 */
   .fallback-row { grid-template-columns: auto minmax(0, 1fr); }
   .fallback-row__actions { grid-column: 2; justify-content: flex-end; }
-  /* 矩阵在窄屏压成两行:标签与思考同排,模型占满下一行;两档矩阵共用。 */
+  /* 档位矩阵在窄屏压成两行:标签与模型同排,思考占满下一行,视觉顺序与 Tab 顺序一致。 */
   .model-matrix__head { display: none; }
   .model-matrix__row, .model-matrix--tiers .model-matrix__row { grid-template-columns: minmax(0, 1fr) var(--agent-matrix-control); gap: var(--dl-space-2); }
   .model-matrix__label { grid-column: 1; grid-row: 1; }
   .model-matrix--tiers .model-matrix__tier-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-1) var(--dl-space-2); grid-column: 1; grid-row: 1; }
   /* 档位矩阵:tier-info div + 两个 select 包裹层。 */
-  .model-matrix--tiers .model-matrix__row > .select-field:nth-of-type(1) { grid-column: 1 / -1; grid-row: 2; }
-  .model-matrix--tiers .model-matrix__row > .select-field:nth-of-type(2) { grid-column: 2; grid-row: 1; }
+  .model-matrix--tiers .model-matrix__row > .select-field:nth-of-type(1) { grid-column: 2; grid-row: 1; }
+  .model-matrix--tiers .model-matrix__row > .select-field:nth-of-type(2) { grid-column: 1 / -1; grid-row: 2; }
   /* 默认矩阵在窄屏改为单列,并给两个控件补可见列名,避免标签指向错误的控件。 */
   .model-matrix:not(.model-matrix--tiers) .model-matrix__row { grid-template-columns: minmax(0, 1fr); }
   .model-matrix:not(.model-matrix--tiers) .model-matrix__label,

@@ -268,6 +268,7 @@ export const workspace = {
     modelEffortDefault: 'default',
     modelEffortInherit: 'inherit',
     modelEffortUnsupported: '该模型不支持思考强度',
+    modelEffortUnsupportedHint: '部分档位模型不支持思考强度，对应的思考列已禁用。',
     modelTierColumn: '档位',
     modelTierNoteLabel: '说明',
     modelTierHint: 'Skill 与 SubAgent 中声明的模型档位（Haiku / Sonnet / Opus / Fable）在这里解析为实际模型与思考强度。',

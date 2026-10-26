@@ -265,6 +265,7 @@ export const workspace = {
     modelEffortDefault: 'default',
     modelEffortInherit: 'inherit',
     modelEffortUnsupported: 'This model does not support thinking effort.',
+    modelEffortUnsupportedHint: 'Some tier models do not support thinking effort; their thinking controls are disabled.',
     modelTierColumn: 'Tier',
     modelTierNoteLabel: 'Notes',
     modelTierHint: 'Model tiers declared in Skills and subagents (Haiku, Sonnet, Opus, Fable) resolve to a concrete model and thinking effort here.',

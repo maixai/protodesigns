@@ -143,6 +143,9 @@ const tiers = computed(() => [
   { id: 'sonnet', label: t.value.workspace.agentAdmin.modelTierSonnet, note: t.value.workspace.agentAdmin.modelTierSonnetNote },
   { id: 'haiku', label: t.value.workspace.agentAdmin.modelTierHaiku, note: t.value.workspace.agentAdmin.modelTierHaikuNote },
 ] satisfies { id: ModelTierId; label: string; note: string }[])
+// 档位思考列是否因模型能力被禁用:用于矩阵下方的一行说明与 aria-describedby。
+const hasUnsupportedTierEffort = computed(() => tiers.value.some((tier) => !supportsEffortOf(tierModelOf(tier.id))))
+const tierEffortHintId = `${dialogId}-tier-effort-hint`
 
 // ---- 模型来源 ----
 interface GatewayDraft {
@@ -1797,17 +1800,23 @@ onBeforeUnmount(() => {
                   <option v-for="option in tierModelSelectOptions(tier.id)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </SelectField>
-              <SelectField>
+              <SelectField :title="!supportsEffortOf(tierModelOf(tier.id)) ? t.workspace.agentAdmin.modelEffortUnsupported : undefined">
                 <select
                   v-model="modelConfig.tiers[tier.id].effortLevel" class="field__input field__select model-effort-select"
                   :disabled="busy || !supportsEffortOf(tierModelOf(tier.id))"
                   :aria-label="`${tier.label} · ${t.workspace.agentAdmin.modelEffortLabel}`"
+                  :aria-describedby="!supportsEffortOf(tierModelOf(tier.id)) ? tierEffortHintId : undefined"
                 >
                   <option v-for="level in EFFORT_LEVELS" :key="level" :value="level">{{ level }}</option>
                 </select>
               </SelectField>
             </div>
           </div>
+          <!-- 禁用原因不能只靠 tooltip:disabled 控件不触发 hover/focus。这里给一行可见说明,
+               并通过 aria-describedby 关联到每个被禁用的思考下拉。 -->
+          <p v-if="hasUnsupportedTierEffort" :id="tierEffortHintId" class="model-section__hint">
+            {{ t.workspace.agentAdmin.modelEffortUnsupportedHint }}
+          </p>
         </div>
 
         <div

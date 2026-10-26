@@ -10635,6 +10635,40 @@ async function openSubscriptionSettings(page: Page, width = 1280, isEnglish = fa
   return dialog
 }
 
+// 档位模型的思考列因模型不支持 effort 被禁用时,必须给出可见原因:
+// disabled 控件不触发 hover/focus,tooltip 不能作为唯一说明。
+test('Agent 设置:档位思考禁用时显示可读原因并可恢复', async ({ page }) => {
+  const dialog = await openSubscriptionSettings(page)
+  const chatgpt = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
+  await chatgpt.getByRole('button', { name: '使用「ChatGPT · 个人」作为模型来源' }).click()
+  await dialog.getByRole('tab', { name: /^档位映射/ }).click()
+
+  const hintText = '部分档位模型不支持思考强度，对应的思考列已禁用。'
+  const hint = dialog.getByText(hintText)
+  await expect(hint).toBeVisible()
+  const hintId = await hint.getAttribute('id')
+  expect(hintId).toBeTruthy()
+
+  const effortSelects = dialog.locator('.model-matrix--tiers .model-effort-select')
+  await expect(effortSelects).toHaveCount(4)
+  for (let index = 0; index < 4; index += 1) {
+    const select = effortSelects.nth(index)
+    await expect(select).toBeDisabled()
+    await expect(select).toHaveAttribute('aria-describedby', hintId ?? '')
+  }
+  // 鼠标 hover 时由 SelectField 外壳给出 tooltip;读屏走 aria-describedby。
+  await expect(dialog.locator('.model-matrix--tiers .select-field[title="该模型不支持思考强度"]')).toHaveCount(4)
+
+  // 切回 Claude 来源后,思考列恢复可编辑,说明消失。
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+  await dialog.locator('[data-source-id="subscription:claude-work"]')
+    .getByRole('button', { name: '使用「Claude · 工作」作为模型来源' }).click()
+  await dialog.getByRole('tab', { name: /^档位映射/ }).click()
+  await expect(hint).toHaveCount(0)
+  for (let index = 0; index < 4; index += 1) await expect(effortSelects.nth(index)).toBeEnabled()
+  await expect(dialog.locator('.model-matrix--tiers .select-field[title="该模型不支持思考强度"]')).toHaveCount(0)
+})
+
 test('Agent 设置:多订阅额度用尽时手动切换,保存并重开保留实例', async ({ page }, testInfo) => {
   const dialog = await openSubscriptionSettings(page)
   const work = dialog.locator('[data-source-id="subscription:claude-work"]')

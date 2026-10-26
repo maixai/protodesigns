@@ -103,14 +103,14 @@ export function mockConnectSubscription(provider: ModelSubscriptionProviderId): 
   }
 }
 
-// 网关探测:合法地址返回成功(自动发现时带模型列表);地址含 invalid 时模拟 401。
-export function mockProbeModelGateway(baseUrl: string, discoverModels: boolean): GatewayProbe {
+// 网关探测:合法地址返回成功并带回模型列表;地址含 invalid 时模拟 401。
+export function mockProbeModelGateway(baseUrl: string, modelsUrl: string): GatewayProbe {
   const latencyMs = 120 + Math.floor(Math.random() * 300)
   if (baseUrl.toLowerCase().includes('invalid')) {
     return { connected: false, models: [], latencyMs, statusCode: 401, message: t.value.workspace.agentAdmin.probeUnauthorized }
   }
-  if (!discoverModels) {
-    return { connected: true, models: [], latencyMs, statusCode: 200, message: t.value.workspace.agentAdmin.probeNoModels }
+  if (modelsUrl !== '' && !/^https?:\/\//i.test(modelsUrl)) {
+    return { connected: false, models: [], latencyMs, statusCode: 0, message: t.value.workspace.agentAdmin.probeFailed }
   }
   return { connected: true, models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'], latencyMs, statusCode: 200, message: t.value.workspace.agentAdmin.probeSuccess }
 }

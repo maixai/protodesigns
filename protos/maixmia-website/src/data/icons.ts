@@ -184,10 +184,24 @@ export const ICONS = {
     paths: ['M12 3v9', 'M7.05 6.05a7 7 0 1 0 9.9 0'],
     circles: [],
   },
+  // 警示:圆环 + 感叹号。用于 tab 上的轻量提示,不承担主行动语义。
+  alert: { paths: ['M12 7.5v5.5', 'M12 16.5h.01'], circles: [{ cx: 12, cy: 12, r: 9 }] },
+  // 显示 / 隐藏密钥:眼睛轮廓,关闭态叠一道斜线。
+  eye: { paths: ['M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0'], circles: [{ cx: 12, cy: 12, r: 3 }] },
+  eyeOff: { paths: ['M2 2l20 20', 'M10.73 5.08a10.74 10.74 0 0 1 11.21 6.57 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-1.44 2.49', 'M14.08 14.16a3 3 0 0 1-4.24-4.24', 'M17.48 17.5a10.75 10.75 0 0 1-15.42-5.15 1 1 0 0 1 0-.7 10.75 10.75 0 0 1 4.45-5.14'], circles: [] },
   // 自动换行:两行文字,第二行向右绕回来并带一个左向箭头(业界通行的 wrap-text 几何)。
   // 只在文件面板的**最窄容器档**用它替代可见文字,故它不经 toIconName(那条路走的是契约里的图标字符串)。
   wrap: {
     paths: ['M4 6h16', 'M4 11h12a3.5 3.5 0 0 1 0 7h-3', 'M16 15l-3 3 3 3', 'M4 18h4'],
+    circles: [],
+  },
+  // 原位编辑:铅笔;取消编辑:叉号。尺寸与描边由图标组件统一控制。
+  pencil: {
+    paths: ['M15 5l4 4', 'M4 20l1-5L16 4a2.8 2.8 0 0 1 4 4L9 19l-5 1Z'],
+    circles: [],
+  },
+  close: {
+    paths: ['M6 6l12 12', 'M18 6L6 18'],
     circles: [],
   },
 } as const satisfies Record<string, IconShape>
@@ -209,6 +223,9 @@ export function toIconName(icon: string): IconName {
     case 'chip':
     case 'plug':
     case 'sparkles':
+    case 'alert':
+    case 'eye':
+    case 'eyeOff':
     case 'download':
     case 'badge':
     case 'fileText':

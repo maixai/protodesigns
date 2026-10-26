@@ -7,7 +7,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
-import type { ModelGateway, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
+import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
 import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS, defaultModelSource, modelById, modelsForSubscription, subscriptionIsReady, subscriptionSourceId, tierDefaultsForSource } from '../data/models'
@@ -40,7 +40,6 @@ const MODEL_SECTIONS = ['source', 'defaults', 'tiers', 'advanced'] as const
 interface ModelSectionOption {
   id: ModelSection
   label: string
-  count: number
 }
 
 interface SelectOption {
@@ -84,15 +83,17 @@ const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
-const isDirty = computed(() => !isCreate.value && JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value)
-const isValid = computed(() => name.value.trim() !== '' && note.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value)
-type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'dirty' | 'clean'
+const isDirty = computed(() => !isCreate.value && (gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
+const isValid = computed(() => name.value.trim() !== '' && note.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
+type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'attention' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
   if (props.busy) return 'saving'
   if (props.error !== '') return 'error'
   if (!isCreate.value && !isDirty.value && savedAt.value !== '') return 'saved'
   // 来源不可用时保存被拦下,页脚必须直接说明原因,不能只说「有未保存的更改」。
   if (!sourceReady.value) return 'blocked'
+  // 有模型不在当前来源时,页脚给出一句轻量原因;具体位置由 tab 上的警示图标指出。
+  if (hasUnavailableSourceModels.value) return 'attention'
   if (!isValid.value) return 'incomplete'
   if (!isCreate.value) return isDirty.value ? 'dirty' : 'clean'
   return 'incomplete'
@@ -103,6 +104,7 @@ const saveStateLabel = computed(() => {
   if (saveStateKind.value === 'error') return copy.saveStateFailed
   if (saveStateKind.value === 'saved') return copy.savedInline
   if (saveStateKind.value === 'blocked') return activeSource.value === undefined ? copy.saveStateNoSource : copy.saveStateBlocked
+  if (saveStateKind.value === 'attention') return copy.saveStateNeedsModels
   if (saveStateKind.value === 'incomplete') return copy.saveStateIncomplete
   if (saveStateKind.value === 'dirty') return copy.saveStateDirty
   return copy.saveStateClean
@@ -130,14 +132,31 @@ interface GatewayDraft {
   id: string
   name: string
   baseUrl: string
-  protocol: ModelGateway['protocol']
-  authMode: ModelGateway['authMode']
+  modelsUrl: string
   apiKeyInput: string
   apiKeyMasked: string
   apiKeySet: boolean
-  discoverModels: boolean
   modelsText: string
 }
+
+// 网关表单是 Agent 配置的一部分:与底部「保存」共用同一次提交,不再有局部保存按钮。
+const gatewayDraftBaseline = ref('')
+function serializeGatewayDraft(draft: GatewayDraft): string {
+  return JSON.stringify({
+    name: draft.name.trim(), baseUrl: draft.baseUrl.trim(), modelsUrl: draft.modelsUrl.trim(), apiKeyInput: draft.apiKeyInput.trim(),
+    apiKeySet: draft.apiKeySet, apiKeyMasked: draft.apiKeyMasked,
+    modelsText: draft.modelsText,
+  })
+}
+const gatewayDraftDirty = computed(() => gatewayDraft.value !== null && serializeGatewayDraft(gatewayDraft.value) !== gatewayDraftBaseline.value)
+function gatewayDraftError(draft: GatewayDraft): string {
+  const copy = t.value.workspace.agentAdmin
+  if (draft.name.trim() === '') return copy.gatewayNameRequired
+  if (draft.baseUrl.trim() === '') return copy.gatewayUrlRequired
+  if (!draft.apiKeySet && draft.apiKeyInput.trim() === '') return copy.gatewayKeyRequired
+  return ''
+}
+const gatewayDraftValid = computed(() => gatewayDraft.value === null || gatewayDraftError(gatewayDraft.value) === '')
 
 const sourceBusy = ref(false)
 const sourceNotice = ref('')
@@ -145,15 +164,111 @@ const editingGatewayId = ref<string | null>(null)
 const gatewayDraft = ref<GatewayDraft | null>(null)
 const gatewayProbe = ref<GatewayProbe | null>(null)
 const gatewayProbeBusy = ref(false)
+const probeAnnouncement = ref('')
+const probeScanKey = ref(0)
+const PROBE_SUCCESS_DURATION_MS = 5_000
+let probeTimer: ReturnType<typeof setTimeout> | undefined
+let probeRequestId = 0
+
+function clearSourceCheck(): void {
+  clearTimeout(probeTimer)
+  probeTimer = undefined
+  probeRequestId += 1
+  gatewayProbe.value = null
+  subscriptionCheckNotice.value = ''
+  gatewayProbeBusy.value = false
+  probeAnnouncement.value = ''
+}
 const showGatewayKey = ref(false)
+const gatewayModelsRef = ref<HTMLTextAreaElement | null>(null)
+const isModelsUrlEditing = ref(false)
+const modelsUrlDraft = ref('')
+const modelsUrlInputRef = ref<HTMLInputElement | null>(null)
+const modelsUrlEditRef = ref<HTMLButtonElement | null>(null)
+const gatewayModels = computed(() => modelsFromText(gatewayDraft.value?.modelsText ?? ''))
+const isSavedGatewayKey = computed(() => gatewayDraft.value?.apiKeySet === true && gatewayDraft.value.apiKeyInput.trim() === '')
+const gatewayKeyPlaceholder = computed(() => isSavedGatewayKey.value
+  ? t.value.workspace.agentAdmin.gatewayApiKeyKeepPlaceholder.replace('{masked}', gatewayDraft.value?.apiKeyMasked ?? '')
+  : t.value.workspace.agentAdmin.gatewayApiKeyPlaceholder)
+// 高度由实际行高、padding 与边框测量得出;CSS 将其约束在 3–8 行。
+async function resizeGatewayModels(): Promise<void> {
+  await nextTick()
+  const textarea = gatewayModelsRef.value
+  if (textarea === null || textarea.clientWidth === 0) return
+  const style = getComputedStyle(textarea)
+  textarea.style.blockSize = 'auto'
+  textarea.style.blockSize = `${textarea.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)}px`
+}
+
+watch([() => gatewayDraft.value?.modelsText, gatewayModelsRef, activeTab, activeModelSection], () => {
+  void resizeGatewayModels()
+}, { flush: 'post' })
+
+// 窗口变窄时长 ID 会折行,宽度变化后重新测量,高度变化本身不触发循环。
+watch(gatewayModelsRef, (textarea, _previous, onCleanup) => {
+  if (textarea === null) return
+  let previousWidth = 0
+  const observer = new ResizeObserver(() => {
+    if (textarea.clientWidth === previousWidth) return
+    previousWidth = textarea.clientWidth
+    void resizeGatewayModels()
+  })
+  observer.observe(textarea)
+  onCleanup(() => observer.disconnect())
+}, { flush: 'post' })
+
+async function startModelsUrlEdit(): Promise<void> {
+  if (props.busy) return
+  modelsUrlDraft.value = effectiveModelsUrl.value
+  isModelsUrlEditing.value = true
+  await nextTick()
+  modelsUrlInputRef.value?.focus()
+  modelsUrlInputRef.value?.select()
+}
+
+async function cancelModelsUrlEdit(): Promise<void> {
+  isModelsUrlEditing.value = false
+  modelsUrlDraft.value = ''
+  await nextTick()
+  modelsUrlEditRef.value?.focus()
+}
+
+async function saveModelsUrl(): Promise<void> {
+  if (props.busy || gatewayDraft.value === null) return
+  const url = modelsUrlDraft.value.trim()
+  // 空值与当前惯用地址都归一为空串,继续跟随请求地址推导。
+  gatewayDraft.value.modelsUrl = url === '' || url === gatewayModelsEndpoint.value ? '' : url
+  await cancelModelsUrlEdit()
+}
+
+function onModelsUrlKeydown(event: KeyboardEvent): void {
+  if (!isModelsUrlEditing.value || event.isComposing) return
+  if (event.key !== 'Escape' && event.key !== 'Enter') return
+  if (event.key === 'Enter' && event.target !== modelsUrlInputRef.value) return
+  // 阻止 Esc 关闭外层 dialog,输入框 Enter 提交 URL,按钮保留各自的键盘动作。
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.key === 'Escape') void cancelModelsUrlEdit()
+  else void saveModelsUrl()
+}
 const deletingGatewayId = ref('')
 const removingSubscriptionProvider = ref<ModelSubscriptionProviderId | ''>('')
 // 订阅的配置页:展示账户事实,并可检查连接或移除来源。
 const editingSubscriptionProvider = ref<ModelSubscriptionProviderId | ''>('')
 const subscriptionCheckNotice = ref('')
 const subscriptionCheckOk = ref(true)
-const checkNoticeRef = ref<HTMLElement | null>(null)
-const probeRef = ref<HTMLElement | null>(null)
+const hasSourceCheck = computed(() => gatewayProbe.value !== null || subscriptionCheckNotice.value !== '')
+const sourceCheckOk = computed(() => gatewayProbe.value?.connected ?? subscriptionCheckOk.value)
+
+// 两类来源只占同一个反馈槽:新的结果接管计时器,成功限时,失败保留。
+function publishSourceCheck(isOk: boolean, announcement: string): void {
+  clearTimeout(probeTimer)
+  probeTimer = undefined
+  probeAnnouncement.value = announcement
+  if (!isOk) return
+  probeScanKey.value += 1
+  probeTimer = setTimeout(clearSourceCheck, PROBE_SUCCESS_DURATION_MS)
+}
 // 从来源列表进入子视图后,返回时焦点应回到打开它的 ⋯。
 const gatewayReturnFocusId = ref('')
 // 当前展开的行内操作菜单:订阅用固定键,网关用自身 id;同一时间只开一个。
@@ -166,18 +281,61 @@ const modelSource = computed(() => modelConfig.value.source)
 const subscriptions = computed(() => modelSource.value.subscriptions)
 const tierDefaults = computed(() => tierDefaultsForSource(modelSource.value))
 
+// 从多行文本解析模型 id:去空行、去首尾空格、保序去重。
+function modelsFromText(text: string): string[] {
+  return [...new Set(text.split('\n').map((line) => line.trim()).filter((line) => line !== ''))]
+}
+
+// 把表单草稿转成来源对象。id 由调用方给出:保存时生成真实 id,预览时用固定占位。
+function gatewayFromDraft(draft: GatewayDraft, id: string): ModelGateway {
+  const keyInput = draft.apiKeyInput.trim()
+  return {
+    id,
+    name: draft.name.trim(),
+    baseUrl: draft.baseUrl.trim(),
+    modelsUrl: draft.modelsUrl.trim(),
+    apiKeyMasked: keyInput === '' ? draft.apiKeyMasked : maskKey(keyInput),
+    apiKeySet: keyInput !== '' || draft.apiKeySet,
+    models: modelsFromText(draft.modelsText),
+  }
+}
+
+// 保存校验必须以表单草稿为准:编辑中的来源还没写回 modelConfig,
+// 否则补全地址 / 密钥后,底部「保存」仍按旧状态判定为不可用。
+const DRAFT_GATEWAY_ID = 'gateway:draft'
+const gatewayDraftAsGateway = computed<ModelGateway | null>(() => {
+  const draft = gatewayDraft.value
+  if (draft === null) return null
+  return gatewayFromDraft(draft, draft.id === '' ? DRAFT_GATEWAY_ID : draft.id)
+})
+const effectiveModelSource = computed<ModelSource>(() => {
+  const source = modelSource.value
+  const draftGateway = gatewayDraftAsGateway.value
+  if (draftGateway === null) return source
+  const exists = source.gateways.some((item) => item.id === draftGateway.id)
+  const gateways = exists
+    ? source.gateways.map((item) => item.id === draftGateway.id ? draftGateway : item)
+    : [...source.gateways, draftGateway]
+  // 没有任何来源时,新建的草稿就是唯一候选;与 applyGatewayDraft 的自动启用规则一致。
+  const activeSourceId = source.activeSourceId === '' && draftGateway.id === DRAFT_GATEWAY_ID
+    ? draftGateway.id
+    : source.activeSourceId
+  return { ...source, gateways, activeSourceId }
+})
+
 // 订阅与 API 渠道都是「来源」:合并成一份列表,用 activeSourceId 选出运行时启用项。
 type SourceRow =
   | { id: string; type: 'subscription'; subscription: ModelSubscription }
   | { id: string; type: 'gateway'; gateway: ModelGateway }
 const ADD_SOURCE_MENU = 'add-source'
-const activeSourceId = computed(() => modelSource.value.activeSourceId)
+const activeSourceId = computed(() => effectiveModelSource.value.activeSourceId)
 const allSources = computed<SourceRow[]>(() => {
   const rows: SourceRow[] = []
-  for (const subscription of subscriptions.value) {
+  const source = effectiveModelSource.value
+  for (const subscription of source.subscriptions) {
     rows.push({ id: subscriptionSourceId(subscription.provider), type: 'subscription', subscription })
   }
-  for (const gateway of modelSource.value.gateways) {
+  for (const gateway of source.gateways) {
     rows.push({ id: gateway.id, type: 'gateway', gateway })
   }
   return rows
@@ -260,6 +418,29 @@ const configuredModelIds = computed(() => {
 })
 const hasUnavailableSourceModels = computed(() => sourceReady.value
   && configuredModelIds.value.some((id) => !sourceModelIds.value.has(id)))
+// 只在对应分区提示:默认模型 / 子 Agent,以及四档映射。
+const unavailableDefaultModels = computed(() => sourceReady.value
+  && [modelConfig.value.defaultModelId, modelConfig.value.subagentModelId]
+    .filter((id) => id !== '')
+    .some((id) => !sourceModelIds.value.has(id)))
+const unavailableTierModels = computed(() => sourceReady.value
+  && TIER_IDS.some((tierId) => !sourceModelIds.value.has(modelConfig.value.tiers[tierId].modelId || tierDefaults.value[tierId])))
+const defaultModelUnavailable = computed(() => sourceReady.value
+  && sceneSafeModelUnavailable(modelConfig.value.defaultModelId))
+const subagentModelUnavailable = computed(() => sourceReady.value
+  && sceneSafeModelUnavailable(modelConfig.value.subagentModelId))
+function sceneSafeModelUnavailable(id: string): boolean {
+  return id !== '' && !sourceModelIds.value.has(id)
+}
+function tierModelUnavailable(tierId: ModelTierId): boolean {
+  if (!sourceReady.value) return false
+  return !sourceModelIds.value.has(modelConfig.value.tiers[tierId].modelId || tierDefaults.value[tierId])
+}
+function sectionNeedsAttention(section: ModelSection): boolean {
+  if (section === 'defaults') return unavailableDefaultModels.value
+  if (section === 'tiers') return unavailableTierModels.value
+  return false
+}
 
 function modelCountLabel(count: number): string {
   const template = count === 1
@@ -270,19 +451,14 @@ function modelCountLabel(count: number): string {
 function gatewayModelCount(gateway: ModelGateway): string {
   return modelCountLabel(gateway.models.length)
 }
-const gatewayRequestPreview = computed(() => {
-  const draft = gatewayDraft.value
-  if (draft === null || draft.baseUrl.trim() === '') return ''
-  const base = draft.baseUrl.trim().replace(/\/+$/, '')
-  // 用户常直接把带 /v1 的 base URL 粘进来,只在缺失时补版本段,避免 /v1/v1。
-  const versioned = base.endsWith('/v1') ? base : `${base}/v1`
-  return draft.protocol === 'anthropic' ? `${versioned}/messages` : `${versioned}/chat/completions`
+
+// 离开订阅子视图时清除反馈,并阻止未完成的检查把旧结果带到其它页面。
+watch([activeTab, activeModelSection], () => {
+  if (editingSubscriptionProvider.value !== '') clearSourceCheck()
 })
 
-// 探测结果只对当时的 URL / 发现模式有效:任一改变就清空,避免展示过期结果。
-watch([() => gatewayDraft.value?.baseUrl, () => gatewayDraft.value?.discoverModels], () => {
-  gatewayProbe.value = null
-})
+// 探测结果只对当时的地址 / 密钥 / 模型列表端点有效:任一改变就清空。
+watch([() => gatewayDraft.value?.baseUrl, () => gatewayDraft.value?.apiKeyInput, () => gatewayDraft.value?.modelsUrl], clearSourceCheck)
 
 watch(sourceReady, (ready) => {
   if (!ready && activeModelSection.value !== 'source') activeModelSection.value = 'source'
@@ -391,10 +567,8 @@ function tierModelSelectOptions(tierId: ModelTierId): SelectOption[] {
   const current = modelConfig.value.tiers[tierId].modelId
   // 默认项直接给出解析到的模型名,四个档位不再共用同一句模糊的「内置默认」。
   const defaultModelId = tierDefaults.value[tierId]
-  // 默认模型在来源中才显示模型名;不在来源时只报「不可用」,避免整句被原生 select 裁掉。
-  const defaultLabel = sourceModelIds.value.has(defaultModelId)
-    ? `${t.value.workspace.agentAdmin.modelTierDefault} · ${compactModelLabel(defaultModelId)}`
-    : `${t.value.workspace.agentAdmin.modelTierDefault} · ${t.value.workspace.agentAdmin.modelUnavailableShort}`
+  // 默认项直接显示解析到的模型名;「内置默认」前缀对用户没有信息价值。
+  const defaultLabel = compactModelLabel(defaultModelId)
   const base: SelectOption[] = [{ value: '', label: defaultLabel }, ...options]
   return current !== '' && !options.some((option) => option.value === current)
     ? [{ value: current, label: compactModelLabel(current) }, ...base]
@@ -442,21 +616,23 @@ async function addSubscription(provider: ModelSubscriptionProviderId): Promise<v
 // 检查连接只刷新凭据状态,不改变当前启用的来源。
 async function checkSubscription(subscription: ModelSubscription): Promise<void> {
   if (sourceBusy.value) return
-  subscriptionCheckNotice.value = ''
+  clearSourceCheck()
+  const requestId = probeRequestId
   sourceBusy.value = true
   const result = await connectSubscription(subscription.provider)
   sourceBusy.value = false
+  if (requestId !== probeRequestId || !props.open) return
   if (!result.ok) {
     subscriptionCheckOk.value = false
     subscriptionCheckNotice.value = t.value.workspace.agentAdmin.sourceCheckFailed
-    void nextTick(() => checkNoticeRef.value?.scrollIntoView({ block: 'nearest' }))
+    publishSourceCheck(false, subscriptionCheckNotice.value)
     return
   }
   sourceNotice.value = ''
   replaceSubscription(result.value)
   subscriptionCheckOk.value = true
   subscriptionCheckNotice.value = t.value.workspace.agentAdmin.sourceCheckSuccess
-  void nextTick(() => checkNoticeRef.value?.scrollIntoView({ block: 'nearest' }))
+  publishSourceCheck(true, subscriptionCheckNotice.value)
 }
 
 function useSource(row: SourceRow): void {
@@ -551,7 +727,7 @@ function onSourceMenuKeydown(event: KeyboardEvent, id: string): void {
 
 function editSubscriptionFromMenu(provider: ModelSubscriptionProviderId): void {
   closeSourceMenu()
-  subscriptionCheckNotice.value = ''
+  clearSourceCheck()
   editingSubscriptionProvider.value = provider
   enterSourceSubview()
 }
@@ -587,6 +763,7 @@ function removeSubscription(provider: ModelSubscriptionProviderId): void {
   const activeSourceId = modelSource.value.activeSourceId === id ? '' : modelSource.value.activeSourceId
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions, activeSourceId } }
   removingSubscriptionProvider.value = ''
+  clearSourceCheck()
   editingSubscriptionProvider.value = ''
   // 删到空列表时回到顶部,保证空状态的行动按钮可见。
   if (subscriptions.length === 0 && modelSource.value.gateways.length === 0 && bodyRef.value !== null) bodyRef.value.scrollTop = 0
@@ -596,7 +773,7 @@ function removeSubscription(provider: ModelSubscriptionProviderId): void {
 function closeSubscriptionConfig(): void {
   const provider = editingSubscriptionProvider.value
   editingSubscriptionProvider.value = ''
-  subscriptionCheckNotice.value = ''
+  clearSourceCheck()
   if (provider === '') return
   void nextTick(() => document.getElementById(sourceMenuTriggerId(subscriptionSourceId(provider)))?.focus())
 }
@@ -624,30 +801,37 @@ function askRemoveFromConfig(): void {
 function startAddGateway(): void {
   sourceNotice.value = ''
   editingGatewayId.value = ''
-  gatewayProbe.value = null
+  clearSourceCheck()
   showGatewayKey.value = false
+  isModelsUrlEditing.value = false
+  modelsUrlDraft.value = ''
   gatewayDraft.value = {
-    id: '', name: '', baseUrl: '', protocol: 'anthropic', authMode: 'bearer',
-    apiKeyInput: '', apiKeyMasked: '', apiKeySet: false, discoverModels: true, modelsText: '',
+    id: '', name: '', baseUrl: '', modelsUrl: '',
+    apiKeyInput: '', apiKeyMasked: '', apiKeySet: false, modelsText: '',
   }
+  gatewayDraftBaseline.value = serializeGatewayDraft(gatewayDraft.value)
 }
 
 function startEditGateway(gateway: ModelGateway): void {
   sourceNotice.value = ''
   editingGatewayId.value = gateway.id
-  gatewayProbe.value = null
+  clearSourceCheck()
   showGatewayKey.value = false
+  isModelsUrlEditing.value = false
+  modelsUrlDraft.value = ''
   gatewayDraft.value = {
-    id: gateway.id, name: gateway.name, baseUrl: gateway.baseUrl, protocol: gateway.protocol,
-    authMode: gateway.authMode, apiKeyInput: '', apiKeyMasked: gateway.apiKeyMasked,
-    apiKeySet: gateway.apiKeySet, discoverModels: gateway.discoverModels, modelsText: gateway.models.join('\n'),
+    id: gateway.id, name: gateway.name, baseUrl: gateway.baseUrl, modelsUrl: gateway.modelsUrl, apiKeyInput: '', apiKeyMasked: gateway.apiKeyMasked,
+    apiKeySet: gateway.apiKeySet, modelsText: gateway.models.join('\n'),
   }
+  gatewayDraftBaseline.value = serializeGatewayDraft(gatewayDraft.value)
 }
 
+// 返回列表:有改动且合法时先写回内存中的 Agent 配置,再由底部「保存」统一提交。
 function cancelGatewayEdit(): void {
+  if (gatewayDraft.value !== null && gatewayDraftDirty.value && !applyGatewayDraft()) return
   editingGatewayId.value = null
   gatewayDraft.value = null
-  gatewayProbe.value = null
+  clearSourceCheck()
   sourceNotice.value = ''
   // 表单退回列表后,把焦点交还给打开它的 ⋯(新建时是「添加来源」)。
   const target = gatewayReturnFocusId.value === '' ? sourceMenuTriggerId(ADD_SOURCE_MENU) : gatewayReturnFocusId.value
@@ -659,39 +843,33 @@ function maskKey(key: string): string {
   return `${key.slice(0, 3)}••••••••${key.slice(-4)}`
 }
 
-function saveGatewayDraft(): void {
+function applyGatewayDraft(): boolean {
   const draft = gatewayDraft.value
-  if (draft === null) return
-  const copy = t.value.workspace.agentAdmin
-  if (draft.name.trim() === '') { sourceNotice.value = copy.gatewayNameRequired; return }
-  if (draft.baseUrl.trim() === '') { sourceNotice.value = copy.gatewayUrlRequired; return }
-  if (!draft.apiKeySet && draft.apiKeyInput.trim() === '') { sourceNotice.value = copy.gatewayKeyRequired; return }
-  const keyInput = draft.apiKeyInput.trim()
-  const gateway: ModelGateway = {
-    id: draft.id === '' ? `gateway:${Date.now()}` : draft.id,
-    name: draft.name.trim(),
-    baseUrl: draft.baseUrl.trim(),
-    protocol: draft.protocol,
-    authMode: draft.authMode,
-    apiKeyMasked: keyInput === '' ? draft.apiKeyMasked : maskKey(keyInput),
-    apiKeySet: keyInput !== '' || draft.apiKeySet,
-    discoverModels: draft.discoverModels,
-    models: [...new Set(draft.modelsText.split('\n').map((line) => line.trim()).filter((line) => line !== ''))],
-  }
+  if (draft === null) return true
+  const error = gatewayDraftError(draft)
+  if (error !== '') { sourceNotice.value = error; return false }
   const isNew = draft.id === ''
+  const gateway = gatewayFromDraft(draft, isNew ? `gateway:${Date.now()}` : draft.id)
   const gateways = isNew
     ? [...modelSource.value.gateways, gateway]
     : modelSource.value.gateways.map((item) => item.id === gateway.id ? gateway : item)
-  // 保存只更新配置;只有完全没有可用来源时才自动启用它,否则保留用户当前的选择。
+  // 改动先落到内存配置;只有完全没有可用来源时才自动启用新建渠道。
   const activeSourceId = isNew && modelSource.value.activeSourceId === ''
     ? gateway.id
     : modelSource.value.activeSourceId
-  modelConfig.value = {
-    ...modelConfig.value,
-    source: { ...modelSource.value, gateways, activeSourceId },
-  }
-  cancelGatewayEdit()
-  if (isNew) void nextTick(() => document.getElementById(sourceMenuTriggerId(gateway.id))?.focus())
+  modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, gateways, activeSourceId } }
+  gatewayDraftBaseline.value = serializeGatewayDraft(draft)
+  sourceNotice.value = ''
+  return true
+}
+
+// 提交时把表单写回配置并收起表单,真正的持久化仍由对话框底部「保存」完成。
+function commitGatewayDraft(): boolean {
+  if (!applyGatewayDraft()) return false
+  editingGatewayId.value = null
+  gatewayDraft.value = null
+  clearSourceCheck()
+  return true
 }
 
 function deleteGateway(id: string): void {
@@ -707,19 +885,69 @@ function deleteGateway(id: string): void {
   void nextTick(() => document.getElementById(sourceMenuTriggerId(ADD_SOURCE_MENU))?.focus())
 }
 
+// 模型列表端点从完整请求地址推导:主流协议都把列表放在同一版本段的 /models 下。
+// 例:/v1/messages → /v1/models,/api/v1/chat/completions → /api/v1/models。
+// 推导失败时不猜测,由用户手动填写模型。
+const MODEL_ENDPOINT_SUFFIXES = ['/chat/completions', '/messages', '/responses', '/completions'] as const
+function modelsEndpointFor(requestUrl: string): string {
+  const trimmed = requestUrl.trim()
+  if (trimmed === '') return ''
+  let url: URL
+  try {
+    url = new URL(trimmed)
+  } catch {
+    return ''
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+  const path = url.pathname.replace(/\/+$/, '')
+  if (/\/models$/i.test(path)) {
+    url.pathname = path
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  }
+  const suffix = MODEL_ENDPOINT_SUFFIXES.find((item) => path.toLowerCase().endsWith(item))
+  const basePath = suffix === undefined ? path : path.slice(0, -suffix.length)
+  url.pathname = `${basePath === '' ? '/v1' : basePath}/models`
+  url.search = ''
+  url.hash = ''
+  return url.toString()
+}
+
+const gatewayModelsEndpoint = computed(() => modelsEndpointFor(gatewayDraft.value?.baseUrl ?? ''))
+const effectiveModelsUrl = computed(() => gatewayDraft.value?.modelsUrl.trim() || gatewayModelsEndpoint.value)
+const gatewayModelsHint = computed(() => {
+  const copy = t.value.workspace.agentAdmin
+  if (effectiveModelsUrl.value === '') return copy.gatewayModelsHintManual
+  const template = gatewayDraft.value?.modelsUrl.trim() ? copy.gatewayModelsHintCustom : copy.gatewayModelsHint
+  return template.replace('{url}', effectiveModelsUrl.value)
+})
+const gatewayRefreshTitle = computed(() => {
+  const copy = t.value.workspace.agentAdmin
+  return effectiveModelsUrl.value === ''
+    ? copy.gatewayRefreshHint
+    : `${copy.gatewayRefreshHint} · GET ${effectiveModelsUrl.value}`
+})
+
 async function testGateway(): Promise<void> {
   const draft = gatewayDraft.value
   if (draft === null || gatewayProbeBusy.value) return
   if (draft.baseUrl.trim() === '') { sourceNotice.value = t.value.workspace.agentAdmin.gatewayUrlRequired; return }
+  if (effectiveModelsUrl.value === '') { sourceNotice.value = t.value.workspace.agentAdmin.gatewayUrlRequired; return }
+  clearSourceCheck()
+  const requestId = probeRequestId
   sourceNotice.value = ''
   gatewayProbeBusy.value = true
-  gatewayProbe.value = null
-  const result = await probeModelGateway(draft.baseUrl.trim(), draft.discoverModels)
+  const result = await probeModelGateway(draft.baseUrl.trim(), effectiveModelsUrl.value)
+  // 编辑、关闭或切换来源后,不让旧请求把结果写回新草稿。
+  if (requestId !== probeRequestId || !props.open) return
   gatewayProbeBusy.value = false
   if (!result.ok) return
   gatewayProbe.value = result.value
-  void nextTick(() => probeRef.value?.scrollIntoView({ block: 'nearest' }))
-  if (result.value.connected && result.value.models.length > 0) draft.modelsText = result.value.models.join('\n')
+  const probe = result.value
+  publishSourceCheck(probe.connected, `${probe.message} · ${probe.latencyMs}ms${probe.models.length > 0 ? ` · ${modelCountLabel(probe.models.length)}` : ''}`)
+  if (!probe.connected) return
+  if (probe.models.length > 0) draft.modelsText = probe.models.join('\n')
 }
 
 function supportsEffortOf(modelId: string): boolean {
@@ -731,30 +959,17 @@ function effortAriaLabel(label: string): string {
 }
 
 // 分区角标只报「改过几项」:默认模型按两行计,档位按四档计,高级按三组配置计。
-const customizedTierCount = computed(() => Object.values(modelConfig.value.tiers).filter((tier) => tier.modelId !== '' || tier.effortLevel !== DEFAULT_TIER_EFFORT).length)
-const defaultCustomCount = computed(() => {
-  const config = modelConfig.value
-  const conversationCustom = config.defaultModelId !== defaultModelIdInSource.value || config.defaultEffortLevel !== ''
-  const subagentCustom = config.subagentModelId !== '' || config.subagentEffortLevel !== ''
-  return (conversationCustom ? 1 : 0) + (subagentCustom ? 1 : 0)
-})
-const advancedCustomCount = computed(() => (modelConfig.value.fallbackModelIds.length > 0 ? 1 : 0)
-  + (modelConfig.value.autoCompactWindowTokens !== 0 ? 1 : 0)
-  + (modelConfig.value.maxThinkingTokens !== 0 ? 1 : 0))
-
 const modelSections = computed<ModelSectionOption[]>(() => [
-  { id: 'source', label: t.value.workspace.agentAdmin.modelSubtabSource, count: 0 },
-  { id: 'defaults', label: t.value.workspace.agentAdmin.modelSubtabDefaults, count: defaultCustomCount.value },
-  { id: 'tiers', label: t.value.workspace.agentAdmin.modelSubtabTiers, count: customizedTierCount.value },
-  { id: 'advanced', label: t.value.workspace.agentAdmin.modelSubtabAdvanced, count: advancedCustomCount.value },
+  { id: 'source', label: t.value.workspace.agentAdmin.modelSubtabSource },
+  { id: 'defaults', label: t.value.workspace.agentAdmin.modelSubtabDefaults },
+  { id: 'tiers', label: t.value.workspace.agentAdmin.modelSubtabTiers },
+  { id: 'advanced', label: t.value.workspace.agentAdmin.modelSubtabAdvanced },
 ])
 
-// 角标数字单独读没有语义,无障碍名称里补一句「N 项自定义」。
 function modelSectionAriaLabel(section: ModelSectionOption): string {
-  const base = section.count === 0
-    ? section.label
-    : `${section.label} · ${t.value.workspace.agentAdmin.modelCustomCount.replace('{count}', String(section.count))}`
+  const base = section.label
   if (section.id !== 'source' && !sourceReady.value) return `${base} · ${t.value.workspace.agentAdmin.modelSourceRequiredHint}`
+  if (sectionNeedsAttention(section.id)) return `${base} · ${t.value.workspace.agentAdmin.modelNeedsAttention}`
   return base
 }
 
@@ -885,7 +1100,9 @@ function reset(): void {
   sourceNotice.value = ''
   editingGatewayId.value = null
   gatewayDraft.value = null
-  gatewayProbe.value = null
+  isModelsUrlEditing.value = false
+  modelsUrlDraft.value = ''
+  clearSourceCheck()
   editingSubscriptionProvider.value = ''
   removingSubscriptionProvider.value = ''
   deletingGatewayId.value = ''
@@ -916,6 +1133,8 @@ function applyTemplate(id: TemplateId): void {
 function finish(action: 'submit' | 'cancel' | 'delete'): void {
   if (props.busy) return
   if (action === 'submit') {
+    // 表单草稿属于本次保存:先写回配置,再统一校验来源与模型。
+    if (gatewayDraft.value !== null && !commitGatewayDraft()) return
     // 先给出失败原因,再判断是否可提交:来源缺失与模型不属于来源都要有可见反馈。
     if (!sourceReady.value) {
       void activateModelSection('source')
@@ -975,6 +1194,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   const dialog = dialogRef.value
   if (dialog === null) return
   if (!isOpen) {
+    clearSourceCheck()
     if (dialog.open) dialog.close()
     return
   }
@@ -988,6 +1208,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  clearSourceCheck()
   closeSourceMenu()
   dialogRef.value?.close()
 })
@@ -1101,18 +1322,17 @@ onBeforeUnmount(() => {
               @click="activateModelSection(section.id)"
             >
               <span>{{ section.label }}</span>
-              <span v-if="section.count > 0" class="model-subtabs__count" aria-hidden="true">{{ section.count }}</span>
+              <span v-if="sectionNeedsAttention(section.id)" class="model-subtabs__warn" :title="t.workspace.agentAdmin.modelNeedsAttention" aria-hidden="true">
+                <DliIcon name="alert" size="sm" />
+              </span>
             </button>
           </div>
         </div>
-        <!-- 来源可用但已选模型不在其中:横幅在所有分区可见,并阻止保存。 -->
-        <p v-if="hasUnavailableSourceModels" class="model-source-notice" role="alert">{{ t.workspace.agentAdmin.modelUnavailable }}</p>
 
         <div
           v-show="activeModelSection === 'source'" :id="`${dialogId}-model-panel-source`"
           class="model-subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`"
         >
-          <p class="model-section__hint">{{ t.workspace.agentAdmin.modelSourceHint }}</p>
           <p v-if="sourceNotice !== ''" class="model-source-notice" role="alert">{{ sourceNotice }}</p>
 
           <div v-if="sourceMenuId !== ''" class="source-menu__scrim" aria-hidden="true" @click.stop="closeSourceMenu()" />
@@ -1137,7 +1357,6 @@ onBeforeUnmount(() => {
                 <button type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="checkSubscription(editingSubscription)">{{ t.workspace.agentAdmin.subscriptionCheck }}</button>
                 <button :id="`${dialogId}-source-remove-trigger`" type="button" class="dl-btn dl-btn--ghost source-config__danger" @click="askRemoveFromConfig">{{ t.workspace.agentAdmin.sourceRemove }}</button>
               </div>
-              <p v-if="subscriptionCheckNotice !== ''" ref="checkNoticeRef" class="gateway-probe" :data-ok="subscriptionCheckOk ? 'true' : 'false'" role="status">{{ subscriptionCheckOk ? '✓' : '×' }} {{ subscriptionCheckNotice }}</p>
               <div v-if="removingSubscriptionProvider === editingSubscription.provider" class="source-row__confirm">
                 <span>{{ t.workspace.agentAdmin.sourceRemovePrompt }}</span>
                 <button :id="`${dialogId}-subscription-remove-${editingSubscription.provider}`" type="button" class="danger-confirm" @click="removeSubscription(editingSubscription.provider)">{{ t.workspace.agentAdmin.sourceRemove }}</button>
@@ -1148,56 +1367,100 @@ onBeforeUnmount(() => {
             <div v-else-if="gatewayDraft !== null" class="gateway-form">
               <button :id="`${dialogId}-source-back`" type="button" class="gateway-form__back" @click="cancelGatewayEdit">← {{ t.workspace.agentAdmin.gatewayBack }}</button>
               <h3>{{ gatewayDraft.id === '' ? t.workspace.agentAdmin.gatewayFormNew : t.workspace.agentAdmin.gatewayFormEdit }}</h3>
-              <div class="gateway-form__grid">
+              <section class="gateway-form__group" :aria-labelledby="`${dialogId}-gateway-connection-title`">
+                <h4 :id="`${dialogId}-gateway-connection-title`" class="gateway-form__group-title">{{ t.workspace.agentAdmin.gatewayConnectionGroup }}</h4>
                 <label class="field">
                   <span class="field__label">{{ t.workspace.agentAdmin.gatewayName }}</span>
                   <input :id="`${dialogId}-gateway-name`" v-model="gatewayDraft.name" type="text" class="field__input" :placeholder="t.workspace.agentAdmin.gatewayNamePlaceholder" maxlength="40">
                 </label>
+                <label class="field">
+                  <span class="field__label">{{ t.workspace.agentAdmin.gatewayBaseUrl }}</span>
+                  <input v-model="gatewayDraft.baseUrl" type="url" class="field__input gateway-form__mono" :placeholder="t.workspace.agentAdmin.gatewayBaseUrlPlaceholder" spellcheck="false">
+                </label>
                 <div class="field">
-                  <span class="field__label">{{ t.workspace.agentAdmin.gatewayProtocol }}</span>
-                  <div class="source-segment" role="group" :aria-label="t.workspace.agentAdmin.gatewayProtocol">
-                    <button type="button" :aria-pressed="gatewayDraft.protocol === 'anthropic'" @click="gatewayDraft.protocol = 'anthropic'">{{ t.workspace.agentAdmin.gatewayProtocolAnthropic }}</button>
-                    <button type="button" :aria-pressed="gatewayDraft.protocol === 'openaiCompatible'" @click="gatewayDraft.protocol = 'openaiCompatible'">{{ t.workspace.agentAdmin.gatewayProtocolOpenai }}</button>
+                  <div class="gateway-form__label-row">
+                    <label :for="`${dialogId}-gateway-key`" class="field__label">{{ t.workspace.agentAdmin.gatewayApiKey }}</label>
+                    <span v-if="isSavedGatewayKey" class="gateway-form__badge" data-tone="ok">{{ t.workspace.agentAdmin.gatewayKeySaved }}</span>
                   </div>
-                </div>
-              </div>
-              <label class="field">
-                <span class="field__label">{{ t.workspace.agentAdmin.gatewayBaseUrl }}</span>
-                <input v-model="gatewayDraft.baseUrl" type="url" class="field__input gateway-form__mono" :placeholder="t.workspace.agentAdmin.gatewayBaseUrlPlaceholder" spellcheck="false">
-              </label>
-              <p v-if="gatewayRequestPreview !== ''" class="gateway-form__preview">{{ t.workspace.agentAdmin.gatewayRequestPreview }} <code>{{ gatewayRequestPreview }}</code></p>
-              <div class="gateway-form__grid">
-                <div class="field">
-                  <span class="field__label">{{ t.workspace.agentAdmin.gatewayAuth }}</span>
-                  <div class="source-segment" role="group" :aria-label="t.workspace.agentAdmin.gatewayAuth">
-                    <button type="button" :aria-pressed="gatewayDraft.authMode === 'bearer'" @click="gatewayDraft.authMode = 'bearer'">{{ t.workspace.agentAdmin.gatewayAuthBearer }}</button>
-                    <button type="button" :aria-pressed="gatewayDraft.authMode === 'apiKey'" @click="gatewayDraft.authMode = 'apiKey'">{{ t.workspace.agentAdmin.gatewayAuthKey }}</button>
-                  </div>
-                </div>
-                <div class="field">
-                  <label :for="`${dialogId}-gateway-key`" class="field__label">{{ t.workspace.agentAdmin.gatewayApiKey }}</label>
                   <div class="gateway-form__key">
-                    <input :id="`${dialogId}-gateway-key`" v-model="gatewayDraft.apiKeyInput" :type="showGatewayKey ? 'text' : 'password'" class="field__input gateway-form__mono" :placeholder="t.workspace.agentAdmin.gatewayApiKeyPlaceholder" autocomplete="off" spellcheck="false">
-                    <button type="button" class="gateway-form__reveal" :aria-label="showGatewayKey ? t.workspace.agentAdmin.gatewayHideKey : t.workspace.agentAdmin.gatewayShowKey" @click="showGatewayKey = !showGatewayKey">{{ showGatewayKey ? t.workspace.agentAdmin.gatewayHideKey : t.workspace.agentAdmin.gatewayShowKey }}</button>
+                    <input :id="`${dialogId}-gateway-key`" v-model="gatewayDraft.apiKeyInput" :type="showGatewayKey ? 'text' : 'password'" class="field__input gateway-form__mono" :placeholder="gatewayKeyPlaceholder" :aria-describedby="gatewayDraft.apiKeySet ? `${dialogId}-gateway-key-keep` : undefined" autocomplete="off" spellcheck="false">
+                    <button
+                      type="button" class="gateway-form__reveal"
+                      :aria-label="showGatewayKey ? t.workspace.agentAdmin.gatewayHideKey : t.workspace.agentAdmin.gatewayShowKey"
+                      :title="showGatewayKey ? t.workspace.agentAdmin.gatewayHideKey : t.workspace.agentAdmin.gatewayShowKey"
+                      :aria-controls="`${dialogId}-gateway-key`"
+                      @click="showGatewayKey = !showGatewayKey"
+                    >
+                      <DliIcon :name="showGatewayKey ? 'eyeOff' : 'eye'" size="sm" />
+                    </button>
                   </div>
+                  <span v-if="gatewayDraft.apiKeySet" :id="`${dialogId}-gateway-key-keep`" class="agent-editor__visually-hidden">{{ t.workspace.agentAdmin.gatewayApiKeyKeep }}</span>
                 </div>
-              </div>
-              <p v-if="gatewayDraft.apiKeySet" class="model-section__hint">{{ t.workspace.agentAdmin.gatewayApiKeyKeep }} · <code>{{ gatewayDraft.apiKeyMasked }}</code></p>
-              <label class="gateway-form__check"><input v-model="gatewayDraft.discoverModels" type="checkbox"> {{ t.workspace.agentAdmin.gatewayDiscover }}</label>
-              <p class="model-section__hint">{{ t.workspace.agentAdmin.gatewayDiscoverHint }}</p>
-              <label class="field">
-                <span class="field__label">{{ t.workspace.agentAdmin.gatewayModelsLabel }}</span>
-                <textarea v-model="gatewayDraft.modelsText" class="field__input gateway-form__models" rows="4" :placeholder="t.workspace.agentAdmin.gatewayModelsPlaceholder" spellcheck="false" />
-              </label>
-              <div class="gateway-form__actions">
-                <button type="button" class="dl-btn dl-btn--ghost" :disabled="gatewayProbeBusy" @click="testGateway">{{ gatewayProbeBusy ? t.workspace.agentAdmin.gatewayTesting : t.workspace.agentAdmin.gatewayTest }}</button>
-                <button type="button" class="dl-btn dl-btn--primary" @click="saveGatewayDraft">{{ t.workspace.agentAdmin.gatewaySave }}</button>
-              </div>
-              <p class="model-section__hint">{{ t.workspace.agentAdmin.gatewayProbeHint }}</p>
-              <p v-if="gatewayProbe !== null" ref="probeRef" class="gateway-probe" :data-ok="gatewayProbe.connected ? 'true' : 'false'" role="status">
-                {{ gatewayProbe.connected ? '✓' : '×' }} {{ gatewayProbe.message }} · <span class="gateway-form__mono">{{ gatewayProbe.latencyMs }}ms</span>
-                <span v-if="gatewayProbe.models.length > 0"> · {{ modelCountLabel(gatewayProbe.models.length) }}</span>
-              </p>
+              </section>
+              <section class="gateway-form__group gateway-form__group--models" :aria-labelledby="`${dialogId}-gateway-models-title`">
+                <div class="gateway-form__models-head">
+                  <div class="gateway-form__label-row">
+                    <h4 :id="`${dialogId}-gateway-models-title`" class="gateway-form__group-title">{{ t.workspace.agentAdmin.gatewayModelsGroup }}</h4>
+                    <span class="gateway-form__badge gateway-form__mono" :aria-label="modelCountLabel(gatewayModels.length)">{{ gatewayModels.length }}</span>
+                  </div>
+                  <span :id="`${dialogId}-gateway-models-helper`" class="gateway-form__models-helper">{{ t.workspace.agentAdmin.gatewayModelsHelper }}</span>
+                </div>
+                <textarea
+                  ref="gatewayModelsRef" v-model="gatewayDraft.modelsText" class="field__input gateway-form__models"
+                  :aria-labelledby="`${dialogId}-gateway-models-title`" :aria-describedby="`${dialogId}-gateway-models-helper`"
+                  :aria-busy="gatewayProbeBusy ? 'true' : 'false'" :placeholder="t.workspace.agentAdmin.gatewayModelsPlaceholder"
+                  :disabled="busy" rows="3" spellcheck="false" @input="resizeGatewayModels"
+                />
+                <div class="gateway-form__discovery" role="group" :aria-label="t.workspace.agentAdmin.gatewayModelsApi" :title="gatewayModelsHint" @keydown="onModelsUrlKeydown">
+                  <div class="gateway-form__discovery-summary">
+                    <input
+                      v-if="isModelsUrlEditing"
+                      :id="`${dialogId}-gateway-models-api`" ref="modelsUrlInputRef" v-model="modelsUrlDraft"
+                      type="text" inputmode="url" class="field__input gateway-form__mono gateway-form__endpoint-input"
+                      :aria-label="t.workspace.agentAdmin.gatewayModelsApi" :aria-describedby="`${dialogId}-gateway-models-hint`"
+                      :disabled="busy" spellcheck="false"
+                    >
+                    <code
+                      v-else class="gateway-form__endpoint"
+                      :title="`${effectiveModelsUrl || t.workspace.agentAdmin.gatewayModelsNoUrl} · ${t.workspace.agentAdmin.gatewayModelsMethodHint}`"
+                    >{{ effectiveModelsUrl || t.workspace.agentAdmin.gatewayModelsNoUrl }}</code>
+                    <div class="gateway-form__url-actions">
+                      <template v-if="isModelsUrlEditing">
+                        <button
+                          type="button" class="gateway-form__url-action gateway-form__url-action--save" :disabled="busy"
+                          :aria-label="t.workspace.agentAdmin.gatewayModelsSaveApi" :title="t.workspace.agentAdmin.gatewayModelsSaveApi"
+                          @click="saveModelsUrl"
+                        ><DliIcon name="check" size="sm" /></button>
+                        <button
+                          type="button" class="gateway-form__url-action" :disabled="busy"
+                          :aria-label="t.workspace.agentAdmin.gatewayModelsCancelEdit" :title="t.workspace.agentAdmin.gatewayModelsCancelEdit"
+                          @click="cancelModelsUrlEdit"
+                        ><DliIcon name="close" size="sm" /></button>
+                      </template>
+                      <button
+                        v-else :id="`${dialogId}-gateway-models-edit`" ref="modelsUrlEditRef" type="button"
+                        class="gateway-form__url-action" :disabled="busy"
+                        :aria-label="t.workspace.agentAdmin.gatewayModelsEditApi" :title="t.workspace.agentAdmin.gatewayModelsEditApi"
+                        @click="startModelsUrlEdit"
+                      ><DliIcon name="pencil" size="sm" /></button>
+                    </div>
+                    <!-- 刷新是模型列表的整体动作:放在底栏右端;编辑端点时隐藏,避免与未保存的输入冲突。 -->
+                    <button
+                      v-if="!isModelsUrlEditing"
+                      type="button" class="gateway-form__refresh"
+                      :disabled="busy || gatewayProbeBusy || effectiveModelsUrl === ''"
+                      :data-busy="gatewayProbeBusy ? 'true' : undefined"
+                      :aria-label="t.workspace.agentAdmin.gatewayRefreshModels"
+                      :title="gatewayRefreshTitle"
+                      @click="testGateway"
+                    >
+                      <DliIcon name="sync" size="sm" />
+                      {{ t.workspace.agentAdmin.gatewayRefresh }}
+                    </button>
+                  </div>
+                  <span :id="`${dialogId}-gateway-models-hint`" class="agent-editor__visually-hidden">{{ t.workspace.agentAdmin.gatewayModelsMethodHint }}</span>
+                </div>
+              </section>
             </div>
 
             <template v-else>
@@ -1334,7 +1597,7 @@ onBeforeUnmount(() => {
               <span class="model-matrix__label">{{ t.workspace.agentAdmin.modelConversationLabel }}</span>
               <span class="model-matrix__field-label">{{ t.workspace.agentAdmin.modelColumn }}</span>
               <SelectField>
-                <select v-model="modelConfig.defaultModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelConversationLabel">
+                <select v-model="modelConfig.defaultModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelConversationLabel" :aria-invalid="defaultModelUnavailable ? 'true' : undefined">
                   <option v-for="option in modelSelectOptions(modelConfig.defaultModelId)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </SelectField>
@@ -1354,7 +1617,7 @@ onBeforeUnmount(() => {
               <span class="model-matrix__label">{{ t.workspace.agentAdmin.modelSubagentLabel }}</span>
               <span class="model-matrix__field-label">{{ t.workspace.agentAdmin.modelColumn }}</span>
               <SelectField>
-                <select v-model="modelConfig.subagentModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelSubagentLabel">
+                <select v-model="modelConfig.subagentModelId" class="field__input field__select" :disabled="busy" :aria-label="t.workspace.agentAdmin.modelSubagentLabel" :aria-invalid="subagentModelUnavailable ? 'true' : undefined">
                   <option value="">{{ t.workspace.agentAdmin.modelSubagentInherit }}</option>
                   <option v-for="option in modelSelectOptions(modelConfig.subagentModelId)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
@@ -1393,7 +1656,7 @@ onBeforeUnmount(() => {
                 <span class="model-matrix__note">{{ tier.note }}</span>
               </div>
               <SelectField>
-                <select v-model="modelConfig.tiers[tier.id].modelId" class="field__input field__select" :disabled="busy" :aria-label="`${tier.label} · ${t.workspace.agentAdmin.modelColumn}`">
+                <select v-model="modelConfig.tiers[tier.id].modelId" class="field__input field__select" :disabled="busy" :aria-label="`${tier.label} · ${t.workspace.agentAdmin.modelColumn}`" :aria-invalid="tierModelUnavailable(tier.id) ? 'true' : undefined">
                   <option v-for="option in tierModelSelectOptions(tier.id)" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </SelectField>
@@ -1514,22 +1777,35 @@ onBeforeUnmount(() => {
 
     <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
     <div class="agent-editor__actions">
-      <!-- 常驻状态行:无变更 / 有变更 / 保存中 / 已保存 / 失败都写在同一位置,不弹 toast。 -->
-      <p v-if="!isCreate" :id="saveStateId" class="agent-editor__save-state" :data-state="saveStateKind">
-        <DliIcon v-if="saveStateKind === 'saved'" name="check" size="sm" />
-        <span class="agent-editor__save-label">{{ saveStateLabel }}</span>
-        <time v-if="saveStateKind === 'saved'" class="agent-editor__save-time">{{ savedAt }}</time>
-        <span v-if="saveStateKind === 'saved'" :key="saveScanKey" class="agent-editor__save-scan" aria-hidden="true" />
+      <!-- 探测与保存共用底部状态槽,不撑高滚动内容;成功探测短暂优先,失败保留。 -->
+      <p v-if="!isCreate || hasSourceCheck" :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
+        <template v-if="hasSourceCheck">
+          <DliIcon v-if="sourceCheckOk" name="check" size="sm" />
+          <span v-else class="agent-editor__probe-fail-icon" aria-hidden="true">×</span>
+          <span class="agent-editor__save-label">
+            {{ gatewayProbe?.message ?? subscriptionCheckNotice }}
+            <span v-if="gatewayProbe !== null" class="agent-editor__probe-meta"><span class="gateway-form__mono">{{ gatewayProbe.latencyMs }}ms</span><span v-if="gatewayProbe.models.length > 0"> · {{ modelCountLabel(gatewayProbe.models.length) }}</span></span>
+          </span>
+          <span v-if="sourceCheckOk" :key="`probe-${probeScanKey}`" class="agent-editor__save-scan" aria-hidden="true" />
+        </template>
+        <template v-else>
+          <DliIcon v-if="saveStateKind === 'saved'" name="check" size="sm" />
+          <span class="agent-editor__save-label">{{ saveStateLabel }}</span>
+          <time v-if="saveStateKind === 'saved'" class="agent-editor__save-time">{{ savedAt }}</time>
+          <span v-if="saveStateKind === 'saved'" :key="saveScanKey" class="agent-editor__save-scan" aria-hidden="true" />
+        </template>
       </p>
       <!-- 结果专用 live region:只播报保存结果,不把每次 dirty 变化都读出来。
            只在对话框打开时挂载,避免关闭状态给页面多加一个 status 地标。 -->
       <span v-if="open" class="agent-editor__visually-hidden" role="status" aria-live="polite" aria-atomic="true">{{ savedAnnouncement }}</span>
+      <span v-if="open" class="agent-editor__visually-hidden" role="status" aria-live="polite" aria-atomic="true">{{ probeAnnouncement }}</span>
+      <span v-if="hasUnavailableSourceModels" class="agent-editor__visually-hidden" role="status" aria-live="polite">{{ t.workspace.agentAdmin.modelNeedsAttention }}</span>
       <div class="agent-editor__buttons">
         <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish('cancel')">{{ t.workspace.agentAdmin.cancel }}</button>
         <button
           type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
           :aria-disabled="!canSubmit ? 'true' : undefined" :aria-busy="busy ? 'true' : undefined"
-          :aria-describedby="isCreate ? undefined : saveStateId"
+          :aria-describedby="!isCreate || hasSourceCheck ? saveStateId : undefined"
           @click="finish('submit')"
         >
           {{ busy ? (isCreate ? t.workspace.agentAdmin.creating : t.workspace.agentAdmin.saving) : (isCreate ? t.workspace.agentAdmin.create : t.workspace.agentAdmin.save) }}
@@ -1593,8 +1869,8 @@ onBeforeUnmount(() => {
 .model-subtabs__track button[aria-selected='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
 .model-subtabs__track button[data-locked='true'] { color: var(--dl-text-disabled); cursor: not-allowed; }
 .model-subtabs__track button[data-locked='true']:hover { background: transparent; color: var(--dl-text-disabled); }
-.model-subtabs__track button[data-locked='true'] .model-subtabs__count { border-color: var(--dl-border-base); color: var(--dl-text-disabled); }
-.model-subtabs__count { min-inline-size: var(--dl-space-4); padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; line-height: var(--dl-line-tight); text-align: center; }
+.model-subtabs__warn { display: inline-flex; align-items: center; color: var(--dl-warning); }
+.model-matrix select[aria-invalid='true'] { border-color: color-mix(in srgb, var(--dl-warning) 55%, transparent); }
 /* 来源分区:订阅与网关共用「标题 + 行列表」,不再把订阅裹进独立卡片。 */
 .source-block { display: grid; gap: var(--dl-space-2); }
 .source-block + .source-block { margin-block-start: var(--dl-space-4); }
@@ -1648,32 +1924,54 @@ onBeforeUnmount(() => {
 .gateway-empty__head .dl-btn { min-block-size: var(--dl-target-size); }
 .gateway-empty__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
 .gateway-empty__title { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); }
-.gateway-form { display: grid; gap: var(--dl-space-3); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
+.gateway-form { display: grid; min-inline-size: 0; gap: var(--dl-space-4); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
 .gateway-form__back { justify-self: start; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .gateway-form__back:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .gateway-form h3 { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 500; }
-.gateway-form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--dl-space-3); }
 .gateway-form__mono { font-family: var(--dl-font-mono); }
 .gateway-form__preview { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
 .gateway-form__preview code { color: var(--dl-text-secondary); font-family: var(--dl-font-mono); }
-.gateway-form__key { display: flex; gap: var(--dl-space-1); min-inline-size: 0; }
-.gateway-form__key .field__input { min-inline-size: 0; }
-.gateway-form__reveal { flex: none; min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.gateway-form__reveal:hover { border-color: var(--dl-border-strong); background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.gateway-form__check { display: flex; align-items: center; gap: var(--dl-space-2); min-block-size: var(--dl-target-size); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); }
-.gateway-form__models { min-block-size: calc(6 * var(--dl-space-6)); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); resize: vertical; }
+.gateway-form__key { position: relative; min-inline-size: 0; }
+.gateway-form__key .field__input { min-inline-size: 0; min-block-size: var(--dl-target-size); padding-inline-end: var(--dl-space-12); }
+.gateway-form__reveal { position: absolute; inset-block-start: 0; inset-inline-end: 0; display: grid; place-items: center; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); }
+.gateway-form__reveal:hover { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.gateway-form .field__input { min-block-size: var(--dl-target-size); }
+.gateway-form__models-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-1) var(--dl-space-2); min-inline-size: 0; }
+.gateway-form__refresh { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: var(--dl-space-1); min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.gateway-form__refresh:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.gateway-form__refresh:disabled { color: var(--dl-text-disabled); }
+.gateway-form__refresh[data-busy='true'] :deep(.dl-icon) { animation: gateway-refresh-spin calc(4 * var(--dl-duration-base)) linear infinite; }
+@keyframes gateway-refresh-spin { to { transform: rotate(360deg); } }
+.gateway-form__group { display: grid; min-inline-size: 0; gap: var(--dl-space-2); }
+.gateway-form__group--models { gap: var(--dl-space-1); padding-block-start: var(--dl-space-6); border-block-start: var(--dl-border-width) solid var(--dl-border-subtle); }
+.gateway-form__group-title { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); font-weight: 500; letter-spacing: var(--dl-tracking-label); }
+.gateway-form__label-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-1) var(--dl-space-2); min-inline-size: 0; }
+.gateway-form__badge { flex: none; padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gateway-form__badge[data-tone='ok'] { border-color: color-mix(in srgb, var(--dl-success) 35%, transparent); color: var(--dl-success); }
+.gateway-form__badge:hover { background: var(--dl-bg-hover); }
+.gateway-form .gateway-form__models { box-sizing: border-box; inline-size: 100%; min-inline-size: 0; min-block-size: calc(3 * var(--dl-font-size-sm) * var(--dl-line-snug) + 2 * var(--dl-space-3) + 2 * var(--dl-border-width)); max-block-size: calc(8 * var(--dl-font-size-sm) * var(--dl-line-snug) + 2 * var(--dl-space-3) + 2 * var(--dl-border-width)); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-snug); resize: none; overflow-y: auto; }
+.gateway-form__models-helper { min-inline-size: 0; margin-inline-start: auto; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); text-align: end; overflow-wrap: anywhere; }
+.gateway-form__discovery { min-inline-size: 0; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.gateway-form__discovery-summary { display: flex; align-items: center; gap: var(--dl-space-1); min-inline-size: 0; min-block-size: var(--dl-target-size); }
+.gateway-form__endpoint, .gateway-form .gateway-form__endpoint-input { box-sizing: border-box; flex: 1 1 0; inline-size: 0; min-inline-size: 0; block-size: var(--dl-target-size); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+.gateway-form__endpoint { padding: 0; border: 0; background: none; color: var(--dl-text-tertiary); overflow: hidden; line-height: var(--dl-target-size); text-overflow: ellipsis; white-space: nowrap; }
+.gateway-form__discovery-summary:hover .gateway-form__endpoint { color: var(--dl-text-secondary); }
+.gateway-form .gateway-form__endpoint-input { padding-inline: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-secondary); }
+/* 两态预留同宽操作区,增加取消按钮也不挤动 URL。 */
+.gateway-form__url-actions { display: flex; flex: none; justify-content: flex-end; gap: var(--dl-space-1); inline-size: calc(2 * var(--dl-target-size) + var(--dl-space-1)); }
+.gateway-form__url-action { display: grid; place-items: center; flex: none; inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); padding: 0; border-radius: var(--dl-radius-md); color: var(--dl-text-tertiary); }
+.gateway-form__url-action:hover:not(:disabled), .gateway-form__url-action:focus-visible { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
+.gateway-form__url-action--save { color: var(--dl-accent); }
+.gateway-form__url-action--save:hover:not(:disabled), .gateway-form__url-action--save:focus-visible { color: var(--dl-accent-hover); }
+.gateway-form__url-action:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
+.gateway-form__endpoint-input:hover:not(:disabled) { border-color: var(--dl-border-strong); }
+.gateway-form__endpoint-input:focus-visible { border-color: var(--dl-border-strong); outline: none; box-shadow: var(--dl-focus-ring); }
+.gateway-form__endpoint-input:active:not(:disabled) { border-color: var(--dl-accent); }
+.gateway-form__endpoint-input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
 .source-config__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--dl-space-2) var(--dl-space-4); margin: 0; font-size: var(--dl-font-size-sm); }
 .source-config__facts dt { color: var(--dl-text-secondary); }
 .source-config__facts dd { margin: 0; color: var(--dl-text-primary); overflow-wrap: anywhere; }
 .source-config__danger { color: var(--dl-error); }
-.gateway-form__actions { display: flex; justify-content: flex-end; gap: var(--dl-space-2); }
-.gateway-form__actions .dl-btn { min-block-size: var(--dl-target-size); }
-.gateway-probe { padding: var(--dl-space-2); border-inline-start: var(--agent-row-gap) solid var(--dl-success); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
-.gateway-probe[data-ok='false'] { border-inline-start-color: var(--dl-error); color: var(--dl-error); }
-.source-segment { display: flex; gap: var(--dl-space-1); padding: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); }
-.source-segment button { flex: 1 1 0; min-inline-size: 0; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1); border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); white-space: nowrap; }
-.source-segment button:hover:not([aria-pressed='true']) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.source-segment button[aria-pressed='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
 /* 窄对话框里四个二级 tab 放不下:改为横向滚动,避免标签越出自身按钮盒。 */
 @media (max-width: 560px) {
   /* 窄屏靠选中底色与实心圆点表达当前来源,角标让位给标题与状态。 */
@@ -1683,7 +1981,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
-  .gateway-form__grid { grid-template-columns: minmax(0, 1fr); }
 }
 .model-subpanel { display: grid; gap: var(--dl-space-3); min-inline-size: 0; }
 .agent-editor__panel:focus-visible, button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
@@ -1777,14 +2074,24 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .agent-editor__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); }
 .agent-editor__actions .dl-btn { min-block-size: var(--dl-target-size); }
 /* 状态行是「当前保存状态」的常驻指示,不进 Tab 顺序,也不抢焦点。 */
-.agent-editor__save-state { position: relative; display: inline-flex; align-items: center; gap: var(--dl-space-2); min-block-size: var(--dl-space-6); margin-inline-end: auto; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+.agent-editor__save-state { overflow-wrap: anywhere; position: relative; display: inline-flex; flex: 1 1 0; min-inline-size: 0; align-items: center; gap: var(--dl-space-2); min-block-size: var(--dl-space-6); margin-inline-end: auto; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .agent-editor__save-state[data-state='dirty'],
 .agent-editor__save-state[data-state='saving'],
-.agent-editor__save-state[data-state='saved'] { color: var(--dl-text-secondary); }
+.agent-editor__save-state[data-state='saved'],
+.agent-editor__save-state[data-state='probe-ok'] { color: var(--dl-text-secondary); }
 .agent-editor__save-state[data-state='incomplete'],
-.agent-editor__save-state[data-state='blocked'] { color: var(--dl-warning); }
-.agent-editor__save-state[data-state='error'] { color: var(--dl-error); }
-.agent-editor__save-state .dl-icon { color: var(--dl-success); }
+.agent-editor__save-state[data-state='blocked'],
+.agent-editor__save-state[data-state='attention'] { color: var(--dl-warning); }
+.agent-editor__save-state[data-state='error'],
+.agent-editor__save-state[data-state='probe-fail'] { color: var(--dl-error); }
+.agent-editor__save-state[data-state='saved'] .dl-icon,
+.agent-editor__save-state[data-state='probe-ok'] .dl-icon { color: var(--dl-success); }
+/* 探测结果仍留在按钮撑起的同一行,窄屏允许元信息在状态槽内换行。 */
+.agent-editor__save-state[data-state^='probe-'] { flex: 1 1 0; min-inline-size: 0; gap: var(--dl-space-1); }
+.agent-editor__save-state[data-state^='probe-'] .dl-icon { flex: none; }
+.agent-editor__probe-fail-icon { flex: none; color: var(--dl-error); }
+.agent-editor__probe-meta { display: inline-block; margin-inline-start: var(--dl-space-1); white-space: nowrap; }
+.agent-editor__save-label { min-inline-size: 0; overflow-wrap: anywhere; }
 .agent-editor__save-time { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }
 /* 保存成功时 1px 强调色细线从左扫过一次:动效只碰 transform / opacity。 */
 .agent-editor__save-scan { position: absolute; inset-block-end: 0; inset-inline: 0; block-size: var(--dl-border-width); background: var(--dl-accent); transform-origin: left center; animation: agent-save-scan var(--dl-duration-slow) var(--dl-ease-standard) both; }
@@ -1803,15 +2110,17 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   color: color-mix(in srgb, var(--dl-accent) 30%, color-mix(in srgb, var(--dl-text-secondary) 65%, var(--dl-text-tertiary)));
   transform: none;
 }
-.agent-editor__buttons { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); margin-inline-start: auto; }
+.agent-editor__buttons { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: var(--dl-space-2); margin-inline-start: auto; }
 .agent-editor__visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) {
   .agent-editor__save-scan { animation: none; opacity: 0; }
+  .gateway-form__refresh[data-busy='true'] :deep(.dl-icon) { animation: none; }
 }
 
 /* 触屏 / 窄屏:模板卡与输入框仍保持 44 的可点高度(默认已是 44)。 */
 @media (max-width: 560px) {
   .template-grid, .model-row { grid-template-columns: minmax(0, 1fr); }
+  .agent-editor__buttons .dl-btn { min-inline-size: var(--dl-target-size); padding-inline: var(--dl-space-2); white-space: nowrap; }
   /* 回退链的控制钮换到第二行,保持 44×44 的独立触达尺寸。 */
   .fallback-row { grid-template-columns: auto minmax(0, 1fr); }
   .fallback-row__actions { grid-column: 2; justify-content: flex-end; }

@@ -411,18 +411,6 @@ model ModelTierMap {
 
 // 模型来源:Claude 订阅、ChatGPT 订阅与 API 渠道都是「来源类型」;
 // 运行时只启用一个来源,但所有来源配置都保存在 Agent 里,以便显式切换。
-// 网关协议:决定请求路径与鉴权头的默认规则。
-enum ModelGatewayProtocolId {
-  anthropic,
-  openaiCompatible,
-}
-
-// 网关鉴权方式。
-enum ModelGatewayAuthId {
-  bearer,
-  apiKey,
-}
-
 // 订阅服务商:同一时间只能启用一个订阅,两套连接配置常驻。
 enum ModelSubscriptionProviderId {
   claude,
@@ -440,16 +428,17 @@ model ModelSubscription {
 }
 
 // 自定义模型网关。apiKey 只以掩码返回,isSet 表示已保存;保存时留空表示保持原值。
+// 模型列表是一次性获取的结果,不保存「是否自动获取」这类运行模式。
 // 被 AgentModelConfig 引用,不加 @jsonSchema:由入口类型的 schema 内联,保持自包含。
 model ModelGateway {
   id: string;
   name: string;
-  baseUrl: string;
-  protocol: ModelGatewayProtocolId;
-  authMode: ModelGatewayAuthId;
+  baseUrl: string; // 完整请求地址:发请求时原样使用,不再拼接版本段
+  // 模型列表端点:空串 = 从 baseUrl 自动推导(主流协议为同一版本段的 /models)。
+  // 非空时原样使用,供 Ollama 原生 /api/tags、带子路径的代理等非惯用端点覆盖。
+  modelsUrl: string;
   apiKeyMasked: string;
   apiKeySet: boolean;
-  discoverModels: boolean;
   models: string[];
 }
 

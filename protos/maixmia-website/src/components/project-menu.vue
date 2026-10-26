@@ -7,7 +7,7 @@
 //
 // 触发钮平时不显示(见页面里 .project-row:hover / :focus-within 的规则),但仍在 DOM、
 // 可被 Tab 到达 —— 键盘操作者聚焦它时同样可见。
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../i18n'
 
 defineProps<{ projectName: string }>()
@@ -72,7 +72,18 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown))
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+  syncRowStacking(false)
+})
+
+// 项目行是 sticky + z-index,各自形成层叠上下文;菜单的 z-index 只在行内有效,
+// 越不过 DOM 更靠后的同级项目行。打开时给所在行抬一层,关闭即还原。
+function syncRowStacking(open: boolean): void {
+  const row = rootRef.value?.closest('.project-row')
+  if (row instanceof HTMLElement) row.classList.toggle('project-row--menu-open', open)
+}
+watch(isOpen, syncRowStacking)
 </script>
 
 <template>

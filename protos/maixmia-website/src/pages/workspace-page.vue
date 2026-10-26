@@ -2955,6 +2955,10 @@ onBeforeUnmount(() => {
    祖先 .project-scroll 有 overflow-y:auto;.workspace-sidebar 现为 overflow:visible(让侧栏头部的
    Agent 浮层不被裁切)—— sticky 相对滚动容器定位,注意别被裁:行本身不超出滚动容器,故不受影响。 */
 .project-row { position: sticky; inset-block-start: 0; z-index: var(--dl-z-sticky); display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: var(--dl-space-2); background: var(--dl-bg-elevated); border-radius: var(--dl-radius-sm); }
+/* 菜单打开的项目行必须压在其它 sticky 项目行之上:每个 .project-row 都因 sticky + z-index
+   形成自己的层叠上下文,菜单的 --dl-z-overlay 只在行内有效,越不过 DOM 更靠后的同级行。
+   类由 ProjectMenu 在开合时挂到所在行;只抬高这一行,其余行仍按 --dl-z-sticky 叠放。 */
+.project-row--menu-open { z-index: calc(var(--dl-z-sticky) + 1); }
 .project-row__button { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--dl-space-2); padding-inline-start: var(--dl-space-1); min-height: var(--dl-target-size); text-align: left; border-radius: var(--dl-radius-sm); }
 /* 项目色点:归属的**颜色通道**(第二通道)。只作图形,不填整块区域、不作文字色 ——
    var(--dl-identity) 由所在元素的 .dl-identity-N 绑定类给出(见 style.css 与 design-language ④)。 */

@@ -178,10 +178,11 @@ export async function connectSubscription(provider: ModelSubscriptionProviderId)
   return { ok: true, value: mockConnectSubscription(provider) }
 }
 
-// 网关连接测试:成功只代表凭据/地址可用,不代表每个模型都可用。
-export async function probeModelGateway(baseUrl: string, discoverModels: boolean): Promise<Result<GatewayProbe>> {
+// 网关探测:一次请求同时验证凭据/地址并取回模型列表。
+// 成功只代表列表可取,不代表每个模型都能完成对话。
+export async function probeModelGateway(baseUrl: string, modelsUrl: string): Promise<Result<GatewayProbe>> {
   await delay()
-  return { ok: true, value: mockProbeModelGateway(baseUrl, discoverModels) }
+  return { ok: true, value: mockProbeModelGateway(baseUrl, modelsUrl) }
 }
 
 // 删除 Agent:它的项目连接、对话与插件配置一并移除。至少保留一个 Agent —— 没有 Agent

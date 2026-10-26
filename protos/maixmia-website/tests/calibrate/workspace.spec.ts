@@ -1741,7 +1741,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await subagentModel.selectOption('claude-haiku-5-5')
   await subagentEffort.selectOption('low')
   await expect(dialog.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible()
-  await expect(defaultsTab).toHaveAttribute('aria-label', /2 项自定义/)
+  await expect(defaultsTab).toHaveAttribute('aria-label', '默认模型')
 
   // 切到档位分区,改 Sonnet 档的模型与思考。
   await tierTab.click()
@@ -1754,7 +1754,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   }
   await dialog.getByRole('combobox', { name: 'Sonnet · 模型', exact: true }).selectOption('claude-sonnet-5-5-1m')
   await dialog.getByRole('combobox', { name: 'Sonnet · 思考', exact: true }).selectOption('xhigh')
-  await expect(tierTab).toHaveAttribute('aria-label', /1 项自定义/)
+  await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
 
   // 切到高级分区:回退链 + 上下文。
   await advancedTab.click()
@@ -1778,7 +1778,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(fallback2).toHaveValue('claude-sonnet-5-5')
   await dialog.getByRole('combobox', { name: '自动压缩窗口', exact: true }).selectOption('500000')
   await dialog.getByRole('combobox', { name: '对话思考预算', exact: true }).selectOption('16384')
-  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+  await expect(advancedTab).toHaveAttribute('aria-label', '高级')
 
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(dialog).toBeVisible()
@@ -1797,8 +1797,8 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(subagentEffort).toHaveValue('low')
   // 重开后回到默认分区;角标反映保存时的自定义项数量。
   await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
-  await expect(tierTab).toHaveAttribute('aria-label', /1 项自定义/)
-  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+  await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
+  await expect(advancedTab).toHaveAttribute('aria-label', '高级')
   await tierTab.click()
   await expect(dialog.getByRole('combobox', { name: 'Sonnet · 模型', exact: true })).toHaveValue('claude-sonnet-5-5-1m')
   await expect(dialog.getByRole('combobox', { name: 'Sonnet · 思考', exact: true })).toHaveValue('xhigh')
@@ -1813,7 +1813,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await advancedTab.click()
   await expect(fallback1).toHaveValue('claude-haiku-5-5')
   await expect(fallback2).toHaveCount(0)
-  await expect(advancedTab).toHaveAttribute('aria-label', /3 项自定义/)
+  await expect(advancedTab).toHaveAttribute('aria-label', '高级')
   // 恢复默认:模型与上下文全部回到推荐值,按钮与角标随之清空。
   await dialog.getByRole('button', { name: '恢复默认', exact: true }).click()
   await expect(dialog.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0)
@@ -1871,8 +1871,13 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await sourceTab.click()
   const openRouterRow = dialog.locator('.source-row--gateway', { hasText: 'OpenRouter' })
   await openRouterRow.getByRole('button', { name: '使用「OpenRouter」作为模型来源' }).click()
-  await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toBeVisible()
+  // 不再用横幅:问题只落在对应的两个子 tab 上。
+  await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toHaveCount(0)
+  await expect(defaultsTab.locator('.model-subtabs__warn')).toHaveCount(1)
+  await expect(sectionTabs.getByRole('tab', { name: /^档位映射/ }).locator('.model-subtabs__warn')).toHaveCount(1)
+  await expect(dialog.locator('select[aria-label="对话默认模型"]')).toHaveAttribute('aria-invalid', 'true')
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await expect(dialog.locator('.agent-editor__save-state')).toContainText('部分模型需重新选择')
 
   // 窄列里的原生 select 关闭态也不能把「不可用」裁掉:实测文本宽不得超过可用宽度。
   await sectionTabs.getByRole('tab', { name: /^档位映射/ }).click()
@@ -1889,6 +1894,7 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
     return context.measureText(text).width - available
   }))
   expect(tierSelectOverflows.every((value) => value <= 1), '档位下拉的关闭态文本不得被裁掉').toBe(true)
+  await expect(dialog.locator('.model-matrix--tiers select[aria-invalid="true"]')).toHaveCount(4)
 
   // 移除当前来源后没有启用项:后三个分区锁定,页脚给出可见原因。
   await sourceTab.click()
@@ -1965,12 +1971,12 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   expect(options.some((text) => text.includes('GPT-5.5'))).toBe(true)
   // 旧的 Claude 默认值会保留并标注不可用,选择一个 GPT 模型后它从选项里消失。
   await model.selectOption('gpt-5.5')
-  await expect(dialog.locator('.model-source-notice', { hasText: '不在当前来源' })).toHaveCount(0)
+  await expect(dialog.locator('.model-subtabs__warn')).toHaveCount(0)
   const optionsAfter = await model.locator('option').allTextContents()
   expect(optionsAfter.some((text) => text.includes('Claude'))).toBe(false)})
 
 // 375px 英文 + 自定义角标是最坏宽度:tab 条必须内部横向滚动,不能把整个对话框撑宽。
-test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可见,body 不横向溢出', async ({ page }) => {
+test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢出', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 })
   await login(page)
   await waitForStable(page)
@@ -1992,9 +1998,9 @@ test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可�
   expect(labelBox?.width ?? 0).toBeGreaterThan(80)
   const selectWidths = await firstMatrixRow.locator('select').evaluateAll((selects) => selects.map((select) => select.getBoundingClientRect().width))
   expect(selectWidths.every((width) => width > 150), '窄屏 select 必须接近整行宽').toBe(true)
-  // 造一个非默认选择,让 Defaults 带角标。
+  // 造一个非默认选择;tab 上不再显示自定义项数量。
   await dialog.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption('claude-opus-5-5')
-  await expect(defaultsTab.locator('.model-subtabs__count')).toHaveText('1')
+  await expect(dialog.locator('.model-subtabs__count')).toHaveCount(0)
 
   const body = dialog.locator('.agent-editor__body')
   const overflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
@@ -2024,6 +2030,14 @@ test('Agent 设置 @375 英文:模型页有角标时二级 tab 两行完整可�
   await expect(dialog.locator('.source-row')).toHaveCount(3)
   const rowOverflow = await dialog.locator('.source-row').evaluateAll((rows) => rows.map((row) => row.scrollWidth - row.clientWidth))
   expect(rowOverflow.every((value) => value <= 1), '来源行内容不得越出自身').toBe(true)
+
+  // 切到只有 1 个模型的渠道,触发 tab 警示图标后仍不得撑破两行两列。
+  await dialog.locator('.source-row--gateway', { hasText: 'OpenRouter' }).getByRole('button', { name: 'Use OpenRouter as the model source' }).click()
+  await expect(dialog.locator('.model-subtabs__warn')).toHaveCount(2)
+  const warnedOverflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
+  expect(warnedOverflow, '带警示图标时内容区仍不得横向溢出').toBeLessThanOrEqual(1)
+  const warnedTabOverflows = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => button.scrollWidth - button.clientWidth))
+  expect(warnedTabOverflows.every((value) => value <= 1), '警示图标不得把 tab 文字挤出按钮').toBe(true)
 })
 
 // 子视图:进入时滚回顶部(避免 sticky tab 盖住返回),检查连接有结果反馈,重开回到列表。
@@ -2052,15 +2066,23 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
   await claude.getByRole('button', { name: '「Claude 订阅」的操作' }).click()
   await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
   await dialog.getByRole('button', { name: '检查连接' }).click()
-  const checkNotice = dialog.locator('.gateway-probe[role="status"]')
+  const checkNotice = dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')
   await expect(checkNotice).toContainText('连接正常')
+  await expect(body.locator('.gateway-probe')).toHaveCount(0)
+  await expect(dialog.locator('[role="status"]', { hasText: '连接正常' })).toHaveCount(1)
   const noticeBox = await checkNotice.boundingBox()
   const noticeBodyBox = await body.boundingBox()
   expect(noticeBox).not.toBeNull()
   expect(noticeBodyBox).not.toBeNull()
   if (noticeBox !== null && noticeBodyBox !== null) {
-    expect(noticeBox.y + noticeBox.height, '检查结果无需额外滚动即可完整可见').toBeLessThanOrEqual(noticeBodyBox.y + noticeBodyBox.height + 1)
+    expect(noticeBox.y, '检查结果显示在滚动内容区下方的 footer').toBeGreaterThanOrEqual(noticeBodyBox.y + noticeBodyBox.height)
   }
+  await expect(dialog.locator('.agent-editor__save-state')).not.toHaveAttribute('data-state', 'probe-ok', { timeout: 6_500 })
+  await expect(dialog.locator('[role="status"]', { hasText: '连接正常' })).toHaveCount(0)
+  await dialog.getByRole('button', { name: '检查连接' }).click()
+  await expect(checkNotice).toContainText('连接正常')
+  await dialog.getByRole('button', { name: '返回来源' }).click()
+  await expect(checkNotice).toHaveCount(0)
 
   // 关闭后重开:子视图状态被清空,回到来源列表。
   await dialog.getByRole('button', { name: '取消' }).click()
@@ -2132,10 +2154,23 @@ test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ pa
     expect(firstBox.y + firstBox.height).toBeLessThanOrEqual(700)
   }
   await expect(firstItem).toContainText('Claude 订阅')
+
+  // 空状态下新建来源:表单草稿本身就是候选来源,补全配置后底部「保存」应立即可用。
+  await menu.getByRole('menuitem', { name: /^API 渠道/ }).click()
+  await dialog.getByRole('textbox', { name: '名称' }).fill('首个渠道')
+  await dialog.getByRole('textbox', { name: '请求地址' }).fill('https://gateway.example.com/v1/chat/completions')
+  await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-test-123456789')
+  await dialog.getByRole('button', { name: '刷新模型列表' }).click()
+  await expect(dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')).toContainText('连接成功')
+  await expect(dialog.locator('.agent-editor__body .gateway-probe')).toHaveCount(0)
+  // 探测只返回三个常用模型;补齐现有 Fable 档位所需模型,再验证来源草稿可保存。
+  const models = dialog.getByRole('textbox', { name: '模型', exact: true })
+  await models.fill(`${await models.inputValue()}\nclaude-fable-5-1`)
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
 })
 
-// 网关:添加 → 测试连接(自动发现模型) → 保存;保存不隐式切换来源,需显式点选。
-test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', async ({ page }) => {
+// 网关:添加 → 刷新模型列表 → 保存;保存不隐式切换来源,需显式点选。
+test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -2147,12 +2182,167 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   await dialog.getByRole('button', { name: '添加来源' }).click()
   await dialog.getByRole('menuitem', { name: /^API 渠道/ }).click()
   await dialog.getByRole('textbox', { name: '名称' }).fill('测试网关')
-  await dialog.getByRole('textbox', { name: 'Base URL' }).fill('https://gateway.example.com')
+  await dialog.getByRole('textbox', { name: '请求地址' }).fill('https://gateway.example.com/v1/chat/completions')
   await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-test-123456789')
-  await dialog.getByRole('button', { name: '测试连接', exact: true }).click()
-  await expect(dialog.locator('.gateway-probe')).toContainText('连接成功')
-  await expect(dialog.getByRole('textbox', { name: '模型（每行一个）' })).toHaveValue(/claude-sonnet-5-5/)
-  await dialog.getByRole('button', { name: '保存 API 渠道', exact: true }).click()
+  // 显示/隐藏是输入框内的眼睛图标,切换的是 input type,按钮不改变布局。
+  const keyInput = dialog.locator('.gateway-form__key input')
+  await expect(keyInput).toHaveAttribute('type', 'password')
+  await dialog.getByRole('button', { name: '显示 API Key' }).click()
+  await expect(keyInput).toHaveAttribute('type', 'text')
+  await dialog.getByRole('button', { name: '隐藏 API Key' }).click()
+  await expect(keyInput).toHaveAttribute('type', 'password')
+  const revealBox = await dialog.getByRole('button', { name: '显示 API Key' }).boundingBox()
+  const keyBox = await keyInput.boundingBox()
+  expect(revealBox).not.toBeNull()
+  expect(keyBox).not.toBeNull()
+  if (revealBox !== null && keyBox !== null) {
+    expect(revealBox.x, '眼睛按钮位于输入框内部右侧').toBeGreaterThanOrEqual(keyBox.x)
+    expect(revealBox.x + revealBox.width).toBeLessThanOrEqual(keyBox.x + keyBox.width + 1)
+    expect(revealBox.height).toBeGreaterThanOrEqual(44)
+  }
+  await expect(dialog.getByRole('heading', { name: '连接', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: '模型', exact: true })).toBeVisible()
+  const models = dialog.getByRole('textbox', { name: '模型', exact: true })
+  await expect(models).toHaveJSProperty('tagName', 'TEXTAREA')
+  await expect(models).toHaveValue('')
+  await expect(models).toHaveAttribute('aria-describedby', /gateway-models-helper$/)
+  await expect(models).toHaveAttribute('placeholder', 'claude-sonnet-5-5')
+  // URL 在原位切换读写态,没有状态徽标或额外展开区域。
+  const refresh = dialog.getByRole('button', { name: '刷新模型列表' })
+  const modelsApiInput = dialog.getByRole('textbox', { name: '模型列表 API', exact: true })
+  const discovery = dialog.getByRole('group', { name: '模型列表 API', exact: true })
+  const editModelsUrl = discovery.getByRole('button', { name: '修改模型列表 API', exact: true })
+  const saveModelsUrl = discovery.getByRole('button', { name: '保存模型列表 API', exact: true })
+  const cancelModelsUrl = discovery.getByRole('button', { name: '取消编辑', exact: true })
+  await expect(refresh).toBeVisible()
+  await expect(refresh).toHaveText('刷新')
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(discovery.getByText(/^(自动|自定义|恢复自动)$/)).toHaveCount(0)
+  await expect(discovery.locator('.gateway-form__badge')).toHaveCount(0)
+  await expect(discovery.locator('.gateway-form__method')).toHaveCount(0)
+  await expect(discovery.getByText(/^(获取方式|GET|修改|保存)$/)).toHaveCount(0)
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/v1/models')
+  const readStyle = await discovery.locator('code').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { border: style.borderWidth, background: style.backgroundColor, padding: style.padding }
+  })
+  expect(readStyle).toEqual({ border: '0px', background: 'rgba(0, 0, 0, 0)', padding: '0px' })
+  await expect(editModelsUrl).toHaveAttribute('title', '修改模型列表 API')
+  await expect(editModelsUrl).toHaveText('')
+  await expect(editModelsUrl.locator('svg')).toHaveAttribute('aria-hidden', 'true')
+  const editButtonBox = await editModelsUrl.boundingBox()
+  expect(editButtonBox).not.toBeNull()
+  if (editButtonBox !== null) {
+    expect(editButtonBox.width).toBeGreaterThanOrEqual(44)
+    expect(editButtonBox.height).toBeGreaterThanOrEqual(44)
+  }
+  const readRow = await discovery.boundingBox()
+  const readUrl = await discovery.locator('code').boundingBox()
+  await editModelsUrl.click()
+  await expect(modelsApiInput).toHaveValue('https://gateway.example.com/v1/models')
+  await expect(modelsApiInput).toBeFocused()
+  await expect(saveModelsUrl).toBeVisible()
+  await expect(cancelModelsUrl).toBeVisible()
+  await expect(modelsApiInput).toHaveAccessibleDescription('将以 GET 请求此地址')
+  expect(await modelsApiInput.evaluate((element) => element instanceof HTMLInputElement && element.selectionStart === 0 && element.selectionEnd === element.value.length), '进入编辑态全选地址').toBe(true)
+  for (const button of [saveModelsUrl, cancelModelsUrl]) {
+    await expect(button).toHaveText('')
+    await expect(button.locator('svg')).toHaveAttribute('aria-hidden', 'true')
+    const box = await button.boundingBox()
+    expect(box).not.toBeNull()
+    if (box !== null) {
+      expect(box.width).toBeGreaterThanOrEqual(44)
+      expect(box.height).toBeGreaterThanOrEqual(44)
+    }
+  }
+  const editRow = await discovery.boundingBox()
+  const editUrl = await modelsApiInput.boundingBox()
+  expect(readRow).not.toBeNull()
+  expect(editRow).not.toBeNull()
+  expect(readUrl).not.toBeNull()
+  expect(editUrl).not.toBeNull()
+  if (readRow !== null && editRow !== null) expect(Math.abs(readRow.height - editRow.height), '原位编辑不改变行高').toBeLessThanOrEqual(1)
+  if (readUrl !== null && editUrl !== null) {
+    expect(Math.abs(readUrl.x - editUrl.x), '输入框位于原 URL 位置').toBeLessThanOrEqual(1)
+    expect(Math.abs(readUrl.width - editUrl.width), 'URL 读写态同宽').toBeLessThanOrEqual(1)
+  }
+  await modelsApiInput.fill('  https://gateway.example.com/custom/models  ')
+  await expect(refresh).toHaveAttribute('title', /GET https:\/\/gateway\.example\.com\/v1\/models/)
+  // 失焦不提交或取消,保存按钮是唯一的鼠标提交入口。
+  await refresh.focus()
+  await expect(modelsApiInput).toBeVisible()
+  await saveModelsUrl.click()
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(editModelsUrl).toBeFocused()
+  await expect(refresh).toHaveAttribute('title', /GET https:\/\/gateway\.example\.com\/custom\/models/)
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/custom/models')
+  await expect(discovery.locator('code')).toHaveAttribute('title', 'https://gateway.example.com/custom/models · 将以 GET 请求此地址')
+  await editModelsUrl.click()
+  await modelsApiInput.fill('https://discarded.example.com/models')
+  await cancelModelsUrl.click()
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(editModelsUrl).toBeFocused()
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/custom/models')
+  // 取消按钮的 Enter 保留取消语义,不会被行内保存的快捷键拦截。
+  await editModelsUrl.click()
+  await modelsApiInput.fill('https://keyboard-discarded.example.com/models')
+  await cancelModelsUrl.focus()
+  await cancelModelsUrl.press('Enter')
+  await expect(editModelsUrl).toBeFocused()
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/custom/models')
+  await editModelsUrl.click()
+  await modelsApiInput.fill('https://escape-discarded.example.com/models')
+  await modelsApiInput.press('Escape')
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(editModelsUrl).toBeFocused()
+  await expect(dialog).toBeVisible()
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/custom/models')
+  const body = dialog.locator('.agent-editor__body')
+  const bodyHeightBeforeProbe = await body.evaluate((element) => element.clientHeight)
+  const refreshBox = await refresh.boundingBox()
+  expect(refreshBox).not.toBeNull()
+  if (refreshBox !== null) expect(refreshBox.height, '刷新按钮触达高度不小于 44').toBeGreaterThanOrEqual(44)
+  await refresh.click()
+  await expect(dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')).toContainText('连接成功')
+  await expect(dialog.locator('.agent-editor__body .gateway-probe')).toHaveCount(0)
+  expect(await body.evaluate((element) => element.clientHeight), '探测结果不改变滚动区高度').toBe(bodyHeightBeforeProbe)
+  await expect(models).toHaveValue(/claude-sonnet-5-5/)
+  await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('3')
+  await models.fill('model-a\nmodel-b')
+  await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('2')
+  // 刷新替换整个列表;重新输入后保存仍只读取 modelsText。
+  await refresh.click()
+  await expect(models).toHaveValue(/claude-sonnet-5-5/)
+  await expect(models).not.toHaveValue(/model-a/)
+  await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('3')
+  await models.fill('model-a\nmodel-b')
+  await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('2')
+  await editModelsUrl.click()
+  await modelsApiInput.fill('  ')
+  await modelsApiInput.press('Enter')
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(editModelsUrl).toBeFocused()
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/v1/models')
+  await expect(dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')).toHaveCount(0)
+  const baseUrlInput = dialog.getByRole('textbox', { name: '请求地址' })
+  await baseUrlInput.fill('')
+  await expect(discovery.locator('code')).toHaveText('尚无可用地址')
+  await expect(refresh).toBeDisabled()
+  await baseUrlInput.fill('https://gateway.example.com/v1/chat/completions')
+  await expect(refresh).toBeEnabled()
+  // 保存预填的惯用地址也保持跟随默认,不把它固化成自定义值。
+  await editModelsUrl.click()
+  await saveModelsUrl.click()
+  await baseUrlInput.fill('https://another.example.com/v1/chat/completions')
+  await expect(discovery.locator('code')).toHaveText('https://another.example.com/v1/models')
+  await baseUrlInput.fill('https://gateway.example.com/v1/chat/completions')
+  await editModelsUrl.click()
+  await modelsApiInput.fill('https://gateway.example.com/custom/models')
+  await modelsApiInput.press('Enter')
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(editModelsUrl).toBeFocused()
+  // URL 行内保存只更新草稿;底部「保存」统一提交渠道配置并收起表单。
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(dialog.locator('.source-row--gateway')).toHaveCount(3)
   // 保存只落配置,不隐式切换:来源仍是订阅。
   await expect(dialog.locator('.source-row--gateway[data-active="true"]')).toHaveCount(0)
@@ -2163,7 +2353,23 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   await testGatewayRow.getByRole('button', { name: '「测试网关」的操作' }).click()
   await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
   await expect(dialog.locator('.gateway-form')).toContainText('编辑 API 渠道')
-  await expect(dialog.getByRole('textbox', { name: 'Base URL' })).toHaveValue('https://gateway.example.com')
+  await expect(models).toHaveValue('model-a\nmodel-b')
+  await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('2')
+  await expect(dialog.getByRole('textbox', { name: '请求地址' })).toHaveValue('https://gateway.example.com/v1/chat/completions')
+  await expect(modelsApiInput).toHaveCount(0)
+  await expect(discovery.locator('code')).toHaveText('https://gateway.example.com/custom/models')
+  await editModelsUrl.click()
+  await expect(modelsApiInput).toHaveValue('https://gateway.example.com/custom/models')
+  await modelsApiInput.press('Escape')
+  const savedKey = dialog.locator('.gateway-form__key input')
+  await expect(savedKey).toHaveAttribute('placeholder', '留空保持 · sk-••••••••6789')
+  await expect(dialog.locator('.gateway-form__label-row [data-tone="ok"]')).toHaveText('已保存')
+  await expect(savedKey).toHaveAttribute('aria-describedby', /gateway-key-keep$/)
+  await expect(dialog.locator('p', { hasText: '留空表示保持已保存的密钥' })).toHaveCount(0)
+  await savedKey.fill('replacement-key')
+  await expect(dialog.locator('.gateway-form__label-row [data-tone="ok"]')).toHaveCount(0)
+  await savedKey.fill('')
+  await expect(savedKey).toHaveAttribute('placeholder', /留空保持.*6789/)
   await dialog.getByRole('button', { name: '返回来源' }).click()
 
   // 点击行即切换到该来源；行内菜单只保留编辑与删除。
@@ -2184,6 +2390,293 @@ test('Agent 设置:添加网关,测试连接后发现模型并可设为来源', 
   await expect(dialog.getByRole('menu')).toHaveCount(0)
   await expect(trigger).toBeFocused()
   await expect(dialog).toBeVisible()
+})
+
+// 探测反馈与保存共用 footer:覆盖窄屏高度、独立播报、成功计时与失败保留。
+for (const width of [375, 768, 1280]) {
+  test(`Agent 设置 @${width}:网关探测状态不撑高内容`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
+    await login(page)
+    await waitForStable(page)
+    if (width < 1024) await page.getByRole('button', { name: '打开侧栏' }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+    await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+    await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+    const row = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
+    await row.getByRole('button', { name: '「公司 LiteLLM」的操作' }).click()
+    await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+    const body = dialog.locator('.agent-editor__body')
+    const state = dialog.locator('.agent-editor__save-state')
+    const refresh = dialog.getByRole('button', { name: '刷新模型列表' })
+    const modelsApi = dialog.getByRole('textbox', { name: '模型列表 API', exact: true })
+    const heightBefore = await body.evaluate((element) => element.clientHeight)
+    await expect(state).toBeVisible()
+    await refresh.click()
+    await expect(state).toHaveAttribute('data-state', 'probe-ok')
+    await expect(state).toContainText('连接成功')
+    await expect(state).toContainText(/\d+ms/)
+    await expect(state).toContainText('3 个模型')
+    await expect(state).not.toHaveAttribute('role', 'status')
+    await expect(dialog.locator('[role="status"]', { hasText: '连接成功' })).toHaveCount(1)
+    await expect(dialog.locator('.agent-editor__body .gateway-probe')).toHaveCount(0)
+    expect(await body.evaluate((element) => element.clientHeight), '成功反馈不改变内容区高度').toBe(heightBefore)
+    await page.screenshot({ path: testInfo.outputPath(`gateway-probe-ok-${width}.png`) })
+    if (width === 375) {
+      await expect(state).toHaveAttribute('data-state', 'clean', { timeout: 6_500 })
+      await expect(dialog.locator('[role="status"]', { hasText: '连接成功' })).toHaveCount(0)
+    }
+    await dialog.getByRole('button', { name: '修改模型列表 API', exact: true }).click()
+    await modelsApi.fill('not-an-http-endpoint')
+    await modelsApi.press('Enter')
+    await refresh.click()
+    await expect(state).toHaveAttribute('data-state', 'probe-fail')
+    await expect(state).toContainText('连接失败')
+    expect(await body.evaluate((element) => element.clientHeight), '失败反馈不改变内容区高度').toBe(heightBefore)
+    await page.screenshot({ path: testInfo.outputPath(`gateway-probe-fail-${width}.png`) })
+    if (width === 375) {
+      // 实际等过成功提示的期限,确认失败状态没有被同一计时器清除。
+      await new Promise<void>((resolve) => setTimeout(resolve, 5_100))
+      await expect(state).toHaveAttribute('data-state', 'probe-fail')
+    }
+    await dialog.getByRole('button', { name: '修改模型列表 API', exact: true }).click()
+    await modelsApi.fill('https://llm.corp.example.com/custom/models')
+    await modelsApi.press('Enter')
+    await expect(state).toHaveAttribute('data-state', 'dirty')
+    await dialog.getByRole('textbox', { name: '请求地址' }).fill('https://invalid.example.com/v1/messages')
+    await refresh.click()
+    await expect(state).toHaveAttribute('data-state', 'probe-fail')
+    await expect(state).toContainText('密钥无效或已撤销')
+    await dialog.getByRole('textbox', { name: 'API Key' }).fill('sk-new-key')
+    await expect(state).toHaveAttribute('data-state', 'dirty')
+  })
+}
+
+test('新建 Agent @375:英文探测结果同槽显示且不改变高度', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await switchLanguageViaSettings(page, 'English')
+  await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'New agent', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'New agent' })
+  await dialog.getByRole('tab', { name: 'Model', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^Model source/ }).click()
+  await dialog.locator('.source-row--gateway').first().locator('.source-row__menu-trigger').click()
+  await dialog.getByRole('menuitem', { name: 'Edit configuration', exact: true }).click()
+  const baseUrl = dialog.getByRole('textbox', { name: 'Request URL', exact: true })
+  const modelsApi = dialog.getByRole('textbox', { name: 'Models API', exact: true })
+  const refresh = dialog.getByRole('button', { name: 'Refresh model list', exact: true })
+  const body = dialog.locator('.agent-editor__body')
+  const state = dialog.locator('.agent-editor__save-state')
+  await baseUrl.fill('https://invalid.example.com/v1/messages')
+  const heightBeforeFailure = await body.evaluate((element) => element.clientHeight)
+  await expect(state).toHaveCount(0)
+  await refresh.click()
+  await expect(state).toHaveAttribute('data-state', 'probe-fail')
+  await expect(state).toContainText('The key is invalid or revoked')
+  expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeFailure)
+  await page.screenshot({ path: testInfo.outputPath('gateway-probe-create-en-fail-375.png') })
+  await baseUrl.fill('https://gateway.example.com/v1/messages')
+  await expect(state).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Edit models API', exact: true }).click()
+  await modelsApi.fill('https://gateway.example.com/custom/models')
+  await modelsApi.press('Enter')
+  const heightBeforeSuccess = await body.evaluate((element) => element.clientHeight)
+  await refresh.click()
+  await expect(state).toHaveAttribute('data-state', 'probe-ok')
+  await expect(state).toContainText('Connected')
+  expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeSuccess)
+  await expect(dialog.locator('.agent-editor__body .gateway-probe')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('gateway-probe-create-en-ok-375.png') })
+  await expect(state).toHaveCount(0, { timeout: 6_500 })
+  expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeSuccess)
+})
+
+// 真实窄视口覆盖两套文案:textarea 自动增高、helper 换行、URL 收缩与 footer 按钮稳定。
+for (const language of ['中文', 'English'] satisfies ('中文' | 'English')[]) {
+  test(`Agent 设置 @375:API 渠道分组与 textarea 不溢出 ${language}`, async ({ page }, testInfo) => {
+    const isEnglish = language === 'English'
+    await page.setViewportSize({ width: 375, height: 700 })
+    await login(page)
+    await waitForStable(page)
+    if (isEnglish) await switchLanguageViaSettings(page, 'English')
+    await page.getByRole('button', { name: isEnglish ? 'Open sidebar' : '打开侧栏', exact: true }).click()
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
+    await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
+    await dialog.getByRole('tab', { name: isEnglish ? /^Model source/ : /^模型来源/ }).click()
+    await dialog.locator('.source-row--gateway').first().locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: isEnglish ? 'Edit configuration' : '编辑配置', exact: true }).click()
+    await expect(dialog.getByRole('heading', { name: isEnglish ? 'Connection' : '连接', exact: true })).toBeVisible()
+    await expect(dialog.getByRole('heading', { name: isEnglish ? 'Models' : '模型', exact: true })).toBeVisible()
+    const key = dialog.locator('.gateway-form__key input')
+    await expect(key).toHaveAttribute('placeholder', isEnglish ? /Leave blank to keep · .*••••/ : /留空保持 · .*••••/)
+    await expect(dialog.locator('.gateway-form__label-row [data-tone="ok"]')).toHaveText(isEnglish ? 'Saved' : '已保存')
+    await expect(dialog.locator('p', { hasText: isEnglish ? 'Leave blank to keep the saved key' : '留空表示保持已保存的密钥' })).toHaveCount(0)
+    const models = dialog.getByRole('textbox', { name: isEnglish ? 'Models' : '模型', exact: true })
+    await expect(models).toHaveJSProperty('tagName', 'TEXTAREA')
+    await expect(models).toHaveAttribute('rows', '3')
+    await expect(models).toHaveAttribute('spellcheck', 'false')
+    await expect(models).toHaveAttribute('aria-describedby', /gateway-models-helper$/)
+    const helper = dialog.locator('.gateway-form__models-helper')
+    await expect(helper).toContainText(isEnglish ? 'One model ID per line' : '每行一个模型 ID')
+    // 「刷新会覆盖列表」不占可见行,保留在刷新按钮的 tooltip 里。
+    await expect(dialog.getByRole('button', { name: isEnglish ? 'Refresh model list' : '刷新模型列表' }))
+      .toHaveAttribute('title', isEnglish ? /replaces the list/ : /覆盖/)
+    await models.fill('model-a\nmodel-b\nmodel-c')
+    await expect.poll(() => models.evaluate((element) => Math.abs(element.getBoundingClientRect().height - parseFloat(getComputedStyle(element).minBlockSize)))).toBeLessThanOrEqual(1)
+    await models.fill(Array.from({ length: 9 }, (_, index) => `model-${index + 1}`).join('\n'))
+    await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('9')
+    await expect.poll(() => models.evaluate((element) => Math.abs(element.getBoundingClientRect().height - parseFloat(getComputedStyle(element).maxBlockSize)))).toBeLessThanOrEqual(1)
+    expect(await models.evaluate((element) => element.scrollHeight > element.clientHeight), '超过 8 行后内部滚动').toBe(true)
+    await models.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath(`gateway-form-textarea-max-${isEnglish ? 'en' : 'zh'}-375.png`) })
+    const longId = 'company/very-long-model-identifier-that-must-not-expand-the-dialog-2026-10'
+    await models.fill(`${longId}\nmodel-b\nmodel-c`)
+    const discovery = dialog.getByRole('group', { name: isEnglish ? 'Models API' : '模型列表 API', exact: true })
+    const editUrlButton = discovery.getByRole('button', { name: isEnglish ? 'Edit models API' : '修改模型列表 API', exact: true })
+    const saveUrlButton = discovery.getByRole('button', { name: isEnglish ? 'Save models API' : '保存模型列表 API', exact: true })
+    const cancelUrlButton = discovery.getByRole('button', { name: isEnglish ? 'Cancel editing' : '取消编辑', exact: true })
+    const methodHint = isEnglish ? 'Requested with GET' : '将以 GET 请求此地址'
+    await expect(discovery.getByText(/^(Discovery|GET|Edit|Save|获取方式|修改|保存)$/)).toHaveCount(0)
+    await expect(editUrlButton).toHaveText('')
+    const editButtonBox = await editUrlButton.boundingBox()
+    expect(editButtonBox).not.toBeNull()
+    if (editButtonBox !== null) {
+      expect(editButtonBox.width).toBeGreaterThanOrEqual(44)
+      expect(editButtonBox.height).toBeGreaterThanOrEqual(44)
+    }
+    await expect(discovery.locator('.gateway-form__badge')).toHaveCount(0)
+    await expect(discovery.getByText(/^(Auto|Custom|Use auto|自动|自定义|恢复自动)$/)).toHaveCount(0)
+    const defaultUrl = await discovery.locator('code').innerText()
+    await discovery.scrollIntoViewIfNeeded()
+    const readRow = await discovery.boundingBox()
+    const contentHeight = await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollHeight)
+    await page.screenshot({ path: testInfo.outputPath(`gateway-discovery-read-${isEnglish ? 'en' : 'zh'}-375.png`) })
+    await editUrlButton.click()
+    const modelsApi = dialog.getByRole('textbox', { name: isEnglish ? 'Models API' : '模型列表 API', exact: true })
+    await expect(modelsApi).toHaveValue(defaultUrl)
+    await expect(modelsApi).toBeFocused()
+    await expect(saveUrlButton).toBeVisible()
+    const editRow = await discovery.boundingBox()
+    expect(readRow).not.toBeNull()
+    expect(editRow).not.toBeNull()
+    if (readRow !== null && editRow !== null) expect(Math.abs(readRow.height - editRow.height), '375 中英文原位编辑不改变行高').toBeLessThanOrEqual(1)
+    expect(await dialog.locator('.agent-editor__body').evaluate((element) => element.scrollHeight), '切换编辑态不改变内容高度').toBe(contentHeight)
+    await expect(cancelUrlButton).toBeVisible()
+    await expect(modelsApi).toHaveAccessibleDescription(methodHint)
+    for (const button of [saveUrlButton, cancelUrlButton]) {
+      await expect(button).toHaveText('')
+      await expect(button.locator('svg')).toHaveAttribute('aria-hidden', 'true')
+      const box = await button.boundingBox()
+      expect(box).not.toBeNull()
+      if (box !== null) {
+        expect(box.width, '375 下图标按钮命中区不缩窄').toBeGreaterThanOrEqual(44)
+        expect(box.height).toBeGreaterThanOrEqual(44)
+      }
+    }
+    expect(await discovery.evaluate((element) => element.scrollWidth - element.clientWidth), '编辑态所在行不得横向溢出').toBeLessThanOrEqual(1)
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+    const longUrl = 'https://gateway.example.com/custom/long-workspace-model-discovery-endpoint/models'
+    await modelsApi.fill(longUrl)
+    await page.screenshot({ path: testInfo.outputPath(`gateway-discovery-edit-${isEnglish ? 'en' : 'zh'}-375.png`) })
+    await saveUrlButton.click()
+    await expect(editUrlButton).toBeFocused()
+    await expect(discovery.locator('code')).toHaveAttribute('title', `${longUrl} · ${methodHint}`)
+    await expect(dialog.getByRole('button', { name: isEnglish ? 'Refresh model list' : '刷新模型列表', exact: true })).toHaveAttribute('title', `${isEnglish ? 'Refresh models (replaces the list below)' : '刷新模型列表（覆盖下方列表）'} · GET ${longUrl}`)
+    await editUrlButton.click()
+    await modelsApi.fill('https://discarded.example.com/models')
+    await cancelUrlButton.click()
+    await expect(modelsApi).toHaveCount(0)
+    await expect(editUrlButton).toBeFocused()
+    await expect(discovery.locator('code')).toHaveText(longUrl)
+    await editUrlButton.click()
+    await modelsApi.fill('https://escape-discarded.example.com/models')
+    await modelsApi.press('Escape')
+    await expect(modelsApi).toHaveCount(0)
+    await expect(editUrlButton).toBeFocused()
+    await expect(discovery.locator('code')).toHaveText(longUrl)
+    const constrained = dialog.locator('.gateway-form, .gateway-form__models, .gateway-form__models-helper, .gateway-form__discovery-summary, .agent-editor__body')
+    const overflows = await constrained.evaluateAll((elements) => elements.map((element) => element.scrollWidth - element.clientWidth))
+    expect(overflows.every((value) => value <= 1), 'textarea、helper 与获取方式摘要都不得横向溢出').toBe(true)
+    const helperFits = await helper.evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return Array.from(element.children).every((child) => {
+        const box = child.getBoundingClientRect()
+        return box.left >= bounds.left && box.right <= bounds.right + 1 && box.bottom <= bounds.bottom + 1
+      })
+    })
+    expect(helperFits, '中英文 helper 完整换行,不裁切').toBe(true)
+    const buttons = dialog.locator('.agent-editor__buttons button')
+    const widthsBefore = await buttons.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().width))
+    const body = dialog.locator('.agent-editor__body')
+    const heightBefore = await body.evaluate((element) => element.clientHeight)
+    await dialog.getByRole('button', { name: isEnglish ? 'Refresh model list' : '刷新模型列表', exact: true }).click()
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'probe-ok')
+    await expect(models).toHaveValue(/claude-sonnet-5-5/)
+    await expect(dialog.locator('.gateway-form__models-head .gateway-form__badge')).toHaveText('3')
+    await expect.poll(() => models.evaluate((element) => Math.abs(element.getBoundingClientRect().height - parseFloat(getComputedStyle(element).minBlockSize)))).toBeLessThanOrEqual(1)
+    expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBefore)
+    expect(await buttons.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().width))).toEqual(widthsBefore)
+    const buttonMetrics = await buttons.evaluateAll((items) => items.map((item) => ({ height: item.getBoundingClientRect().height, overflow: item.scrollWidth - item.clientWidth })))
+    expect(buttonMetrics.every((item) => item.height >= 44 && item.overflow <= 1), '中英文按钮完整可见且触达高度不小于 44').toBe(true)
+    await discovery.scrollIntoViewIfNeeded()
+    await expect(models).toBeVisible()
+    const bodyBox = await body.boundingBox()
+    const modelsHeadBox = await dialog.locator('.gateway-form__models-head').boundingBox()
+    const discoveryBox = await discovery.boundingBox()
+    expect(bodyBox).not.toBeNull()
+    expect(modelsHeadBox).not.toBeNull()
+    expect(discoveryBox).not.toBeNull()
+    if (bodyBox !== null && modelsHeadBox !== null && discoveryBox !== null) {
+      expect(modelsHeadBox.y, '默认 3 行时模型 header 与获取方式可同时显示').toBeGreaterThanOrEqual(bodyBox.y)
+      expect(discoveryBox.y + discoveryBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1)
+    }
+    await page.screenshot({ path: testInfo.outputPath(`gateway-form-textarea-${isEnglish ? 'en' : 'zh'}-375.png`) })
+    await editUrlButton.click()
+    await modelsApi.fill('')
+    await modelsApi.press('Enter')
+    await expect(modelsApi).toHaveCount(0)
+    await expect(editUrlButton).toBeFocused()
+    await expect(discovery.locator('code')).toHaveText(defaultUrl)
+  })
+}
+
+// 来源子视图里的改动属于整体 Agent 配置:清空后 Save 可用,回到原值后又恢复不可用。
+test('Agent 设置:来源配置的改动计入整体保存状态', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+  await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+
+  const row = dialog.locator('.source-row--gateway', { hasText: '公司 LiteLLM' })
+  await row.getByRole('button', { name: '「公司 LiteLLM」的操作' }).click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  const save = dialog.getByRole('button', { name: '保存', exact: true })
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+
+  const nameInput = dialog.getByRole('textbox', { name: '名称' })
+  await nameInput.fill('公司 LiteLLM（改）')
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveText('有未保存的更改')
+  await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+
+  // 改回原值即回到干净状态,说明基线按完整草稿比较,而不是只在首次编辑时置脏。
+  await nameInput.fill('公司 LiteLLM')
+  await expect(save).toHaveAttribute('aria-disabled', 'true')
+
+  // 模型列表同样是来源配置的一部分。
+  const models = dialog.getByRole('textbox', { name: '模型', exact: true })
+  await models.fill(`${await models.inputValue()}\nclaude-test-5`)
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveText('有未保存的更改')
+  await expect(save).not.toHaveAttribute('aria-disabled', 'true')
 })
 
 // 至少保留一个 Agent:连续删到只剩一个后,删除入口禁用并给出原因。
@@ -3807,6 +4300,61 @@ test('深树 @375 抽屉:第 5 层不横向溢出、文件名走省略号', asyn
   expect(rowBox, '最深层行有几何盒').not.toBeNull()
   if (sidebar === null || rowBox === null) return
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(sidebar.x + sidebar.width + 1)
+})
+
+// 项目行的 ⋯ 菜单是行内 absolute 浮层:每个 sticky 项目行各成层叠上下文,菜单的 overlay
+// 层序只能在自己行内生效。下方仍有其它打开的项目时,后续项目行会盖住菜单 —— 菜单必须完整可见。
+test('侧栏项目菜单不被下方项目行覆盖', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
+  await login(page)
+  await waitForStable(page)
+  const items = page.locator('.project-item')
+  await expect(items).toHaveCount(2)
+
+  // 两个项目都展开,再把第一个折叠:此时第一个行下方是另一个已展开项目。
+  // 默认展开状态可能随数据变化,按 aria-expanded 归位,不依赖初始值。
+  const setExpanded = async (index: number, expanded: boolean): Promise<void> => {
+    const button = items.nth(index).locator('.project-row__button')
+    if ((await button.getAttribute('aria-expanded')) === String(expanded)) return
+    await button.click()
+    await expect(button).toHaveAttribute('aria-expanded', String(expanded))
+  }
+  await setExpanded(0, true)
+  await setExpanded(1, true)
+  await expect(items.nth(1).locator('.entry-row').first()).toBeVisible()
+  await setExpanded(0, false)
+  await expect(items.nth(0).locator('.project-tree')).toBeHidden()
+
+  await items.nth(0).locator('.project-menu__trigger').click()
+  const popover = page.locator('.project-menu__popover')
+  await expect(popover).toBeVisible()
+
+  // 菜单四角与中心都必须命中菜单自身,而不是被下方项目行截走。
+  const coveredPoints = await popover.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const points: [number, number][] = [
+      [rect.left + 4, rect.top + 4],
+      [rect.right - 4, rect.top + 4],
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + 4, rect.bottom - 4],
+      [rect.right - 4, rect.bottom - 4],
+    ]
+    return points.filter(([x, y]) => {
+      const hit = document.elementFromPoint(x, y)
+      return hit === null || !element.contains(hit)
+    })
+  })
+  expect(coveredPoints, '菜单完整显示,不被后续项目行覆盖').toHaveLength(0)
+
+  // 同时不得被 .project-scroll 的 overflow 裁掉。
+  const scrollBox = await page.locator('.project-scroll').boundingBox()
+  const popoverBox = await popover.boundingBox()
+  expect(scrollBox).not.toBeNull()
+  expect(popoverBox).not.toBeNull()
+  if (scrollBox !== null && popoverBox !== null) {
+    expect(popoverBox.y).toBeGreaterThanOrEqual(scrollBox.y - 1)
+    expect(popoverBox.y + popoverBox.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height + 1)
+  }
 })
 
 test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还焦点', async ({ page }) => {

@@ -111,14 +111,14 @@ export function defaultModelSource(): ModelSource {
     ],
     gateways: [
       {
-        id: 'gateway:litellm', name: '公司 LiteLLM', baseUrl: 'https://llm.corp.example.com',
-        protocol: 'anthropic', authMode: 'bearer', apiKeyMasked: 'sk-••••••••7f3a', apiKeySet: true,
-        discoverModels: true, models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
+        id: 'gateway:litellm', name: '公司 LiteLLM', baseUrl: 'https://llm.corp.example.com/v1/messages',
+        modelsUrl: '', apiKeyMasked: 'sk-••••••••7f3a', apiKeySet: true,
+        models: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
       },
       {
-        id: 'gateway:openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1',
-        protocol: 'openaiCompatible', authMode: 'bearer', apiKeyMasked: 'sk-or-••••••••a91c', apiKeySet: true,
-        discoverModels: false, models: ['anthropic/claude-sonnet-5'],
+        id: 'gateway:openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        modelsUrl: '', apiKeyMasked: 'sk-or-••••••••a91c', apiKeySet: true,
+        models: ['anthropic/claude-sonnet-5'],
       },
     ],
     activeSourceId: 'subscription:claude',

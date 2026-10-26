@@ -11,11 +11,12 @@ import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionPro
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
 import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS, defaultModelSource, modelById, modelsForSubscription, subscriptionIsReady, subscriptionSourceId, tierDefaultsForSource } from '../data/models'
-import { checkSubscription as checkSubscriptionConnection, connectSubscription, reauthorizeSubscription, probeModelGateway } from '../api/workspace'
+import { checkSubscription as checkSubscriptionConnection, authorizeSubscription, reauthorizeSubscription, probeModelGateway } from '../api/workspace'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 import SelectField from './select-field.vue'
 import SubscriptionUsage from './subscription-usage.vue'
+import SubscriptionAuthFlow from './subscription-auth-flow.vue'
 import ModelSourceContext from './model-source-context.vue'
 
 const props = defineProps<{
@@ -177,6 +178,20 @@ function gatewayDraftError(draft: GatewayDraft): string {
   return ''
 }
 const gatewayDraftValid = computed(() => gatewayDraft.value === null || gatewayDraftError(gatewayDraft.value) === '')
+
+type AuthorizationMode = 'add' | 'reauth'
+type AuthorizationStep = 'intro' | 'pending' | 'success' | 'cancelled' | 'error'
+interface AuthorizationFlow {
+  mode: AuthorizationMode
+  provider: ModelSubscriptionProviderId
+  subscriptionId: string
+  step: AuthorizationStep
+  draft: ModelSubscription | null
+  error: string
+}
+const authorizationFlow = ref<AuthorizationFlow | null>(null)
+let authorizationRequestId = 0
+const authorizationFlowRef = ref<{ focusBack: () => void } | null>(null)
 
 const sourceBusy = ref(false)
 const sourceNotice = ref('')
@@ -369,13 +384,14 @@ const showSourceSearch = computed(() => allSources.value.length >= 5 && editingS
 const filteredSources = computed(() => {
   const query = sourceQuery.value.trim().toLowerCase()
   if (!showSourceSearch.value || query === '') return allSources.value
-  return allSources.value.filter((row) => {
-    const fields = row.type === 'subscription'
-      ? [SUBSCRIPTION_PROVIDER_LABELS[row.subscription.provider], row.subscription.label, subscriptionLabel(row.subscription), row.subscription.account, row.subscription.plan]
-      : [row.gateway.name, row.gateway.baseUrl]
-    return fields.some((field) => field.toLowerCase().includes(query))
-  })
+  return allSources.value.filter((row) => sourceMatchesQuery(row, query))
 })
+function sourceMatchesQuery(row: SourceRow, query: string): boolean {
+  const fields = row.type === 'subscription'
+    ? [SUBSCRIPTION_PROVIDER_LABELS[row.subscription.provider], row.subscription.label, subscriptionLabel(row.subscription), row.subscription.account, row.subscription.plan]
+    : [row.gateway.name, row.gateway.baseUrl]
+  return fields.some((field) => field.toLowerCase().includes(query))
+}
 const sourceMatchCount = computed(() => t.value.workspace.agentAdmin.sourceSearchCount
   .replace('{matched}', String(filteredSources.value.length))
   .replace('{total}', String(allSources.value.length)))
@@ -402,7 +418,7 @@ function sourceRowReady(row: SourceRow): boolean {
 }
 const sourceReady = computed(() => activeSource.value !== undefined && sourceRowReady(activeSource.value))
 // 保存还要求来源可用:没有可用来源时不允许把模型配置写回。
-const canSubmit = computed(() => isValid.value && !props.busy && (isCreate.value || isDirty.value) && sourceReady.value)
+const canSubmit = computed(() => isValid.value && !props.busy && (isCreate.value || isDirty.value) && sourceReady.value && authorizationFlow.value === null)
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
@@ -433,6 +449,7 @@ function subscriptionLabel(subscription: ModelSubscription): string {
   const copy = t.value.workspace.agentAdmin
   if (subscription.label === '工作') return copy.subscriptionWork
   if (subscription.label === '个人') return copy.subscriptionPersonal
+  if (subscription.label === '旧账户') return copy.subscriptionLegacy
   const numbered = /^账户 (\d+)$/.exec(subscription.label)
   return numbered === null ? subscription.label : copy.subscriptionAccountNumber.replace('{number}', numbered[1] ?? '')
 }
@@ -523,6 +540,7 @@ function gatewayModelCount(gateway: ModelGateway): string {
 // 离开订阅子视图时清除反馈,并阻止未完成的检查把旧结果带到其它页面。
 watch([activeTab, activeModelSection], () => {
   if (editingSubscriptionId.value !== '') clearSourceCheck()
+  if (activeTab.value !== 'model' || activeModelSection.value !== 'source') abortAuthorization(false)
 })
 
 // 探测结果只对当时的地址 / 密钥 / 模型列表端点有效:任一改变就清空。
@@ -655,41 +673,101 @@ function replaceSubscription(next: ModelSubscription): void {
   modelConfig.value = { ...modelConfig.value, source: { ...modelSource.value, subscriptions } }
 }
 
-// 添加订阅:连接成功后插入同服务商分组末尾。只有完全没有来源时才自动启用它,否则保留当前选择。
-async function addSubscription(provider: ModelSubscriptionProviderId): Promise<void> {
+// 授权结果先留在流程草稿里,只有点「完成」才写入 Agent 草稿,保存前不生效。
+function startAddSubscription(provider: ModelSubscriptionProviderId): void {
   closeSourceMenu()
   if (sourceBusy.value) return
-  sourceBusy.value = true
-  const result = await connectSubscription(provider, subscriptions.value)
-  sourceBusy.value = false
-  if (!result.ok) { sourceNotice.value = result.error.message; return }
   sourceNotice.value = ''
-  const id = subscriptionSourceId(result.value.id)
+  clearSourceCheck()
+  authorizationFlow.value = { mode: 'add', provider, subscriptionId: '', step: 'intro', draft: null, error: '' }
+  enterSourceSubview()
+  void nextTick(() => authorizationFlowRef.value?.focusBack())
+}
+
+function startReauthorize(subscription: ModelSubscription): void {
+  sourceNotice.value = ''
+  clearSourceCheck()
+  authorizationFlow.value = { mode: 'reauth', provider: subscription.provider, subscriptionId: subscription.id, step: 'intro', draft: null, error: '' }
+  enterSourceSubview()
+  void nextTick(() => authorizationFlowRef.value?.focusBack())
+}
+
+async function beginAuthorization(): Promise<void> {
+  const flow = authorizationFlow.value
+  if (flow === null || !['intro', 'cancelled', 'error'].includes(flow.step)) return
+  const subscription = subscriptions.value.find((item) => item.id === flow.subscriptionId)
+  if (flow.mode === 'reauth' && subscription === undefined) return
+  flow.step = 'pending'
+  flow.error = ''
+  const requestId = ++authorizationRequestId
+  const result = flow.mode === 'reauth' && subscription !== undefined
+    ? await reauthorizeSubscription(subscription)
+    : await authorizeSubscription(flow.provider, subscriptions.value)
+  // 取消、关闭、切页与重试会使旧请求失效,不能让迟到的结果写回新流程。
+  if (requestId !== authorizationRequestId || !props.open || authorizationFlow.value === null) return
+  if (!result.ok) {
+    flow.step = 'error'
+    flow.error = result.error.message
+    return
+  }
+  flow.draft = result.value
+  flow.step = 'success'
+}
+
+function abortAuthorization(restoreFocus = true): void {
+  const flow = authorizationFlow.value
+  authorizationRequestId += 1
+  authorizationFlow.value = null
+  if (!restoreFocus || flow === null) return
+  const target = flow.mode === 'add' ? sourceMenuTriggerId(ADD_SOURCE_MENU) : `${dialogId}-subscription-reauth`
+  void nextTick(() => document.getElementById(target)?.focus())
+}
+
+function onAuthorizationCancel(): void {
+  const flow = authorizationFlow.value
+  if (flow?.step !== 'pending') { abortAuthorization(); return }
+  authorizationRequestId += 1
+  flow.step = 'cancelled'
+}
+
+function completeAuthorization(): void {
+  const flow = authorizationFlow.value
+  if (flow === null || flow.step !== 'success' || flow.draft === null) return
+  const draft = flow.draft
+  authorizationFlow.value = null
+  if (flow.mode === 'reauth') {
+    replaceSubscription(draft)
+    subscriptionCheckOk.value = true
+    subscriptionCheckNotice.value = t.value.workspace.agentAdmin.subscriptionReauthorized
+    publishSourceCheck(true, subscriptionCheckNotice.value)
+    enterSourceSubview()
+    return
+  }
+  const id = subscriptionSourceId(draft.id)
   const hasSources = modelSource.value.subscriptions.length > 0 || modelSource.value.gateways.length > 0
   const activeSourceId = modelSource.value.activeSourceId
   const nextSubscriptions = [...modelSource.value.subscriptions]
-  const lastProviderIndex = nextSubscriptions.reduce((last, item, index) => item.provider === provider ? index : last, -1)
-  nextSubscriptions.splice(lastProviderIndex < 0 ? nextSubscriptions.length : lastProviderIndex + 1, 0, result.value)
+  const lastProviderIndex = nextSubscriptions.reduce((last, item, index) => item.provider === flow.provider ? index : last, -1)
+  nextSubscriptions.splice(lastProviderIndex < 0 ? nextSubscriptions.length : lastProviderIndex + 1, 0, draft)
   modelConfig.value = {
     ...modelConfig.value,
-    source: {
-      ...modelSource.value,
-      subscriptions: nextSubscriptions,
-      activeSourceId: hasSources ? activeSourceId : id,
-    },
+    source: { ...modelSource.value, subscriptions: nextSubscriptions, activeSourceId: hasSources ? activeSourceId : id },
   }
-  void nextTick(() => document.getElementById(sourceMenuTriggerId(id))?.focus())
+  // 新行匹配查询时保留搜索上下文;不匹配时清除,保证完成后能看到新来源。
+  if (sourceQuery.value !== '' && !sourceMatchesQuery({ id, type: 'subscription', subscription: draft }, sourceQuery.value.trim().toLowerCase())) sourceQuery.value = ''
+  void nextTick(() => {
+    const target = document.getElementById(`${sourceMenuDomId(id)}-select`) ?? document.getElementById(sourceMenuTriggerId(ADD_SOURCE_MENU))
+    target?.focus()
+  })
 }
 
 // 检查连接只刷新凭据状态,不改变当前启用的来源。
-async function checkSubscription(subscription: ModelSubscription, isReauthorization = false): Promise<void> {
+async function checkSubscription(subscription: ModelSubscription): Promise<void> {
   if (sourceBusy.value) return
   clearSourceCheck()
   const requestId = probeRequestId
   sourceBusy.value = true
-  const result = isReauthorization
-    ? await reauthorizeSubscription(subscription)
-    : await checkSubscriptionConnection(subscription)
+  const result = await checkSubscriptionConnection(subscription)
   sourceBusy.value = false
   if (requestId !== probeRequestId || !props.open) return
   if (!result.ok) {
@@ -707,7 +785,7 @@ async function checkSubscription(subscription: ModelSubscription, isReauthorizat
 
 function useSource(row: SourceRow): void {
   if (row.type === 'subscription' && !subscriptionIsReady(row.subscription)) {
-    sourceNotice.value = t.value.workspace.agentAdmin.sourceRequired
+    sourceNotice.value = t.value.workspace.agentAdmin.sourceNeedsReauth.replace('{name}', sourceName(row))
     return
   }
   if (row.type === 'gateway' && (row.gateway.baseUrl.trim() === '' || !row.gateway.apiKeySet)) {
@@ -810,7 +888,7 @@ function removeSubscriptionFromMenu(id: string): void {
   void nextTick(() => document.getElementById(`${dialogId}-subscription-remove-${id}`)?.focus())
 }
 function addSubscriptionFromMenu(provider: ModelSubscriptionProviderId): void {
-  void addSubscription(provider)
+  startAddSubscription(provider)
 }
 function addApiFromMenu(): void {
   closeSourceMenu()
@@ -1158,6 +1236,7 @@ function onModelSectionKeydown(event: KeyboardEvent): void {
 }
 
 function reset(): void {
+  abortAuthorization(false)
   confirmingDelete.value = false
   selectedTemplate.value = ''
   name.value = props.agent?.name ?? ''
@@ -1279,6 +1358,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   const dialog = dialogRef.value
   if (dialog === null) return
   if (!isOpen) {
+    abortAuthorization(false)
     clearSourceCheck()
     if (dialog.open) dialog.close()
     return
@@ -1294,6 +1374,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  abortAuthorization(false)
   clearSourceCheck()
   closeSourceMenu()
   dialogRef.value?.close()
@@ -1425,7 +1506,14 @@ onBeforeUnmount(() => {
 
           <!-- 所有来源统一成一列:订阅与 API 渠道只是来源类型不同。 -->
           <section class="source-block">
-            <div v-if="editingSubscription !== undefined" class="gateway-form">
+            <SubscriptionAuthFlow
+              v-if="authorizationFlow !== null" ref="authorizationFlowRef"
+              :mode="authorizationFlow.mode" :provider="authorizationFlow.provider" :step="authorizationFlow.step"
+              :subscription="authorizationFlow.draft" :error="authorizationFlow.error"
+              @continue="beginAuthorization" @retry="beginAuthorization"
+              @cancel="onAuthorizationCancel" @complete="completeAuthorization"
+            />
+            <div v-else-if="editingSubscription !== undefined" class="gateway-form">
               <button :id="`${dialogId}-source-back`" type="button" class="gateway-form__back" @click="closeSubscriptionConfig">← {{ t.workspace.agentAdmin.gatewayBack }}</button>
               <h3>{{ subscriptionTitle(editingSubscription) }}</h3>
               <dl class="source-config__facts">
@@ -1447,7 +1535,7 @@ onBeforeUnmount(() => {
               <p class="model-section__hint">{{ t.workspace.agentAdmin.subscriptionConfigHint }}</p>
               <div class="gateway-form__actions">
                 <button type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="checkSubscription(editingSubscription)">{{ t.workspace.agentAdmin.subscriptionCheck }}</button>
-                <button v-if="subscriptionNeedsAuth(editingSubscription)" type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="checkSubscription(editingSubscription, true)">{{ t.workspace.agentAdmin.subscriptionReauthorize }}</button>
+                <button v-if="subscriptionNeedsAuth(editingSubscription)" :id="`${dialogId}-subscription-reauth`" type="button" class="dl-btn dl-btn--ghost" :disabled="sourceBusy" @click="startReauthorize(editingSubscription)">{{ t.workspace.agentAdmin.subscriptionReauthorize }}</button>
                 <button :id="`${dialogId}-source-remove-trigger`" type="button" class="dl-btn dl-btn--ghost source-config__danger" @click="askRemoveFromConfig">{{ t.workspace.agentAdmin.sourceRemove }}</button>
               </div>
               <div v-if="removingSubscriptionId === editingSubscription.id" class="source-row__confirm">
@@ -1720,6 +1808,7 @@ onBeforeUnmount(() => {
           <ModelSourceContext
             :name="activeSource === undefined ? '' : sourceName(activeSource)"
             :account="activeSource?.type === 'subscription' ? activeSource.subscription.account : ''"
+            :usage="activeSource?.type === 'subscription' ? activeSource.subscription.usage : null"
             :is-draft-changed="sourceDraftChanged" :disabled="busy"
             @change="activateModelSection('source', true)"
           />
@@ -1782,6 +1871,7 @@ onBeforeUnmount(() => {
           <ModelSourceContext
             :name="activeSource === undefined ? '' : sourceName(activeSource)"
             :account="activeSource?.type === 'subscription' ? activeSource.subscription.account : ''"
+            :usage="activeSource?.type === 'subscription' ? activeSource.subscription.usage : null"
             :is-draft-changed="sourceDraftChanged" :disabled="busy"
             @change="activateModelSection('source', true)"
           />

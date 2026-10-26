@@ -1920,9 +1920,9 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
   await sourceTab.click()
-  // 所有来源在同一列表:三个订阅实例 + 两个 API 渠道。
+  // 所有来源在同一列表:四个订阅实例(含过期账户) + 两个 API 渠道。
   const sourceRows = dialog.locator('.source-row')
-  await expect(sourceRows).toHaveCount(5)
+  await expect(sourceRows).toHaveCount(6)
   const subscriptionRow = dialog.locator('.source-row--subscription', { hasText: 'Claude · 工作' })
   await expect(subscriptionRow).toHaveAttribute('data-selected', 'true')
   await expect(subscriptionRow.locator('.source-row__status')).toHaveCount(0)
@@ -1973,7 +1973,7 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await dialog.getByRole('menuitem', { name: '删除' }).click()
   await openRouterRow.locator('.source-row__confirm').getByRole('button', { name: '确认删除' }).click()
   await expect(dialog.locator('.source-row--gateway')).toHaveCount(1)
-  await expect(sourceRows).toHaveCount(4)
+  await expect(sourceRows).toHaveCount(5)
   await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
   await expect(dialog.locator('.agent-editor__save-state')).toContainText('未启用任何来源')
   await defaultsTab.click({ force: true })
@@ -1983,7 +1983,8 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   // 已有来源但没有启用项时,添加账户也不得偷偷启用它。
   await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
   await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await completeSubscriptionAuth(dialog, false)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(5)
   await expect(dialog.locator('.source-row[data-selected="true"]')).toHaveCount(0)
   await expect(defaultsTab).toHaveAttribute('aria-disabled', 'true')
 
@@ -2007,10 +2008,10 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   const heading = dialog.locator('.source-block__head h3')
   await expect(heading).toHaveText('来源')
   const claudeRow = dialog.locator('[data-source-id="subscription:claude-work"]')
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
-  await expect(dialog.locator('.source-row')).toHaveCount(5)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await expect(dialog.locator('.source-row')).toHaveCount(6)
   await expect(claudeRow).toHaveAttribute('data-selected', 'true')
-  await expect(dialog.locator('.source-row__status')).toHaveCount(0)
+  await expect(dialog.locator('.source-row__status')).toHaveText('已过期')
   await expect(dialog.getByText('已连接', { exact: true })).toHaveCount(0)
   await expect(dialog.getByText('已配置', { exact: true })).toHaveCount(0)
 
@@ -2026,8 +2027,9 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await expect(dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ })).toBeEnabled()
   await expect(dialog.getByRole('menuitem', { name: /Claude 订阅/ })).toContainText('添加另一个账户')
   await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
-  const newClaude = dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 3' })
+  await completeSubscriptionAuth(dialog, false)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(5)
+  const newClaude = dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 4' })
   await expect(newClaude).toHaveCount(1)
   await expect(newClaude).not.toHaveAttribute('data-selected', 'true')
   await expect(claudeRow).toHaveAttribute('data-selected', 'true')
@@ -2100,8 +2102,8 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   await sectionTabs.getByRole('tab', { name: /^Model source/ }).click()
   const sourceOverflow = await body.evaluate((element) => element.scrollWidth - element.clientWidth)
   expect(sourceOverflow, '来源页不得横向溢出').toBeLessThanOrEqual(1)
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
-  await expect(dialog.locator('.source-row')).toHaveCount(5)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await expect(dialog.locator('.source-row')).toHaveCount(6)
   const rowOverflow = await dialog.locator('.source-row').evaluateAll((rows) => rows.map((row) => row.scrollWidth - row.clientWidth))
   expect(rowOverflow.every((value) => value <= 1), '来源行内容不得越出自身').toBe(true)
 
@@ -2323,7 +2325,7 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
   dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
-  await expect(dialog.locator('.source-row')).toHaveCount(5)
+  await expect(dialog.locator('.source-row')).toHaveCount(6)
   await expect(dialog.locator('.source-config__facts')).toHaveCount(0)
 })
 
@@ -2343,7 +2345,7 @@ test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ pa
   expect(shellHeightBeforeEmpty).toBeGreaterThan(0)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   // 按实例逐一移除,同服务商的另一个账户不得被连带删除。
-  for (const name of ['Claude · 工作', 'Claude · 个人', 'ChatGPT · 个人']) {
+  for (const name of ['Claude · 工作', 'Claude · 个人', 'Claude · 旧账户', 'ChatGPT · 个人']) {
     const row = dialog.locator('.source-row--subscription', { hasText: name })
     await row.getByRole('button', { name: `「${name}」的操作` }).click()
     await dialog.getByRole('menuitem', { name: '移除来源' }).click()
@@ -10533,6 +10535,10 @@ for (const isEnglish of [false, true]) {
     await defaultsTab.click()
     await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Work' : 'Claude · 工作')
     await expect(context.locator('.model-source-context__account')).toHaveText('yizhou.lin@studio.example.com')
+    await expect(context).toHaveAttribute('data-usage', 'exhausted')
+    await expect(context.locator('.subscription-usage__text')).toContainText(isEnglish ? '100% used' : '已用 100%')
+    await expect(context.locator('.subscription-usage__text')).toContainText(isEnglish ? 'Usage limit reached' : '额度用尽')
+    await expect(context.locator('progress')).toHaveCount(0)
     await expect(draft).toHaveCount(0)
     await dialog.getByRole('combobox', { name: isEnglish ? 'Conversation · Model' : '对话默认模型 · 模型', exact: true }).selectOption('claude-opus-5-5')
     await expect(draft).toHaveCount(0)
@@ -10545,6 +10551,9 @@ for (const isEnglish of [false, true]) {
       await tab.click()
       await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
       await expect(context.locator('.model-source-context__account')).toHaveText('yizhou.personal@example.com')
+      await expect(context.locator('.subscription-usage__text')).toContainText(isEnglish ? '18% used' : '已用 18%')
+      await expect(context.locator('.subscription-usage')).toHaveAttribute('data-compact', 'true')
+      await expect(context.locator('progress')).toHaveCount(0)
       await expect(context.locator('.model-source-context__switching')).toHaveText(isEnglish ? 'Switching to' : '待切换至')
       await expect(draft).toHaveText(isEnglish ? 'Takes effect after save' : '保存后生效')
       const modelOptions = await dialog.locator('.model-subpanel:visible select').first().locator('option').evaluateAll((options) => options.map((option) => option.getAttribute('value') ?? ''))
@@ -10578,6 +10587,7 @@ for (const isEnglish of [false, true]) {
     await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
     await defaultsTab.click()
     await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
+    await expect(context.locator('.subscription-usage__text')).toContainText(isEnglish ? '18% used' : '已用 18%')
     await expect(draft).toHaveCount(0)
   })
 }
@@ -10706,6 +10716,223 @@ async function openSubscriptionSettings(page: Page, width = 1280, isEnglish = fa
   return dialog
 }
 
+async function completeSubscriptionAuth(dialog: Locator, isEnglish = false): Promise<void> {
+  await dialog.getByRole('button', { name: isEnglish ? 'Continue in browser' : '在浏览器中继续' }).click()
+  await expect(dialog.getByRole('heading', { name: isEnglish ? 'Authorization successful' : '授权成功' })).toBeVisible()
+  await dialog.getByRole('button', { name: isEnglish ? 'Done' : '完成', exact: true }).click()
+}
+
+// 授权是来源内的子视图,覆盖窄屏几何、焦点、等待态与成功后显式提交。
+for (const width of [375, 768, 1280, 1600]) {
+  test(`Agent 设置:凭据授权完整流程 @${width}`, async ({ page }, testInfo) => {
+    const issues: string[] = []
+    page.on('pageerror', (error) => issues.push(error.message))
+    page.on('console', (message) => { if (message.type() === 'error') issues.push(message.text()) })
+    page.on('response', (response) => { if (response.status() >= 400) issues.push(`${response.status()} ${response.url()}`) })
+    page.on('requestfailed', (request) => issues.push(request.url()))
+    const dialog = await openSubscriptionSettings(page, width)
+    const shellHeight = (await dialog.boundingBox())?.height ?? 0
+    const save = dialog.getByRole('button', { name: '保存', exact: true })
+    const add = dialog.getByRole('button', { name: '添加来源', exact: true })
+    await dialog.getByRole('searchbox').fill('OpenRouter')
+    await add.click()
+    await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+    const flow = dialog.locator('.subscription-auth-flow')
+    await expect(dialog.getByRole('heading', { name: '连接 Claude 订阅', level: 3 })).toBeVisible()
+    await expect(flow.getByRole('button', { name: '返回来源' })).toBeFocused()
+    await expect(flow.locator('.subscription-auth-flow__security li')).toHaveText([
+      '凭据只存系统钥匙串，不写入配置文件。',
+      '可随时重新授权或移除这个来源。',
+    ])
+    await expect(flow.getByText('原型演示：不会真的打开浏览器，授权过程为模拟。')).toBeVisible()
+    await expect(save).toHaveAttribute('aria-disabled', 'true')
+    async function expectAuthShell(): Promise<void> {
+      expect(Math.abs(((await dialog.boundingBox())?.height ?? 0) - shellHeight)).toBeLessThanOrEqual(1)
+      for (const element of await dialog.locator('.subscription-auth-flow, .source-config__facts, .agent-editor__body').all()) {
+        expect(await element.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1)
+      }
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0)
+    }
+    await expectAuthShell()
+    await page.screenshot({ path: testInfo.outputPath(`subscription-auth-intro-${width}.png`) })
+    await flow.getByRole('button', { name: '在浏览器中继续' }).click()
+    await expect(flow).toHaveAttribute('aria-busy', 'true')
+    await expect(flow.getByRole('heading', { name: '等待浏览器完成授权' })).toBeVisible()
+    await expect(flow.getByRole('status')).toHaveText('完成 Claude 登录后，这里会自动继续。')
+    await expect(flow.getByRole('button', { name: '取消授权' })).toBeFocused()
+    await expect(flow.locator('.subscription-auth-flow__spinner')).toHaveAttribute('aria-hidden', 'true')
+    await expect(flow.locator('.subscription-auth-flow__spinner')).toHaveCSS('animation-name', 'none')
+    await expectAuthShell()
+    await page.screenshot({ path: testInfo.outputPath(`subscription-auth-pending-${width}.png`) })
+    await expect(flow.getByRole('heading', { name: '授权成功', level: 3 })).toBeFocused()
+    await expect(flow.locator('.source-config__facts')).toContainText(/yizhou\.claude\.\d+@example\.com/)
+    await expect(flow.locator('.source-config__facts')).toContainText('Claude Max')
+    await expect(flow.locator('.source-config__facts dd.gateway-form__mono')).toHaveText(/^keychain:\/\/mia\/subscriptions\/claude-account-\d+$/)
+    await expect(flow.locator('.subscription-usage__text')).toContainText(/已用 \d+%/)
+    await expect(flow.locator('progress')).toHaveCount(0)
+    await expect(save).toHaveAttribute('aria-disabled', 'true')
+    await expectAuthShell()
+    await page.screenshot({ path: testInfo.outputPath(`subscription-auth-success-${width}.png`) })
+    await flow.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(flow).toHaveCount(0)
+    await expect(dialog.getByRole('searchbox')).toHaveValue('')
+    await expect(dialog.locator('.source-row')).toHaveCount(7)
+    const added = dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 4' })
+    await expect(added).toBeVisible()
+    await expect(added.locator('.source-row__main')).toBeFocused()
+    await expect(added).not.toHaveAttribute('data-selected', 'true')
+    await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
+    await expect(save).not.toHaveAttribute('aria-disabled', 'true')
+    expect(issues).toEqual([])
+  })
+}
+
+test('Agent 设置:取消等待授权不保存凭据,迟到结果不会新增来源', async ({ page }, testInfo) => {
+  const dialog = await openSubscriptionSettings(page, 375)
+  const add = dialog.getByRole('button', { name: '添加来源', exact: true })
+  await add.click()
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  const flow = dialog.locator('.subscription-auth-flow')
+  await flow.getByRole('button', { name: '在浏览器中继续' }).click()
+  await expect(flow).toHaveAttribute('aria-busy', 'true')
+  await flow.getByRole('button', { name: '取消授权' }).click()
+  await expect(flow.getByRole('heading', { name: '授权未完成' })).toBeVisible()
+  await expect(flow.getByText('没有保存任何凭据，可以重新发起授权。')).toBeVisible()
+  await expect(flow.getByRole('button', { name: '重新授权', exact: true })).toBeFocused()
+  await page.screenshot({ path: testInfo.outputPath('subscription-auth-cancelled-375.png') })
+  await flow.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(add).toBeFocused()
+  await expect(dialog.locator('.source-row')).toHaveCount(6)
+  // 等原始往返结束,确认取消不会被迟到的成功响应反转。
+  await new Promise<void>((resolve) => setTimeout(resolve, 1400))
+  await expect(dialog.locator('.source-row')).toHaveCount(6)
+  await expect(flow).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  // 取消后重试由同一状态机处理,不叠加旧请求。
+  await add.click()
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  await flow.getByRole('button', { name: '在浏览器中继续' }).click()
+  await flow.getByRole('button', { name: '取消授权' }).click()
+  await flow.getByRole('button', { name: '重新授权', exact: true }).click()
+  await expect(flow.getByRole('heading', { name: '授权成功' })).toBeVisible()
+  await flow.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(dialog.locator('.source-row')).toHaveCount(7)
+})
+
+test('Agent 设置:英文授权说明、取消与成功文案完整', async ({ page }) => {
+  const dialog = await openSubscriptionSettings(page, 375, true)
+  const add = dialog.getByRole('button', { name: 'Add source', exact: true })
+  await expect(dialog.locator('[data-source-id="subscription:claude-legacy"]')).toContainText('Claude · Old account')
+  await add.click()
+  await dialog.getByRole('menuitem', { name: /ChatGPT subscription/ }).click()
+  const flow = dialog.locator('.subscription-auth-flow')
+  await expect(flow.getByRole('heading', { name: 'Connect ChatGPT subscription' })).toBeVisible()
+  await expect(flow.locator('.subscription-auth-flow__security li')).toHaveText([
+    'Credentials stay in the system keychain, never in the config.',
+    'Reauthorize or remove this source at any time.',
+  ])
+  await expect(flow.getByText('Prototype: no browser actually opens; authorization is simulated.')).toBeVisible()
+  await flow.getByRole('button', { name: 'Continue in browser' }).click()
+  await expect(flow.getByRole('heading', { name: 'Waiting for browser authorization' })).toBeVisible()
+  await flow.getByRole('button', { name: 'Cancel authorization' }).click()
+  await expect(flow.getByRole('heading', { name: 'Authorization not completed' })).toBeVisible()
+  await flow.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(add).toBeFocused()
+  await add.click()
+  await dialog.getByRole('menuitem', { name: /ChatGPT subscription/ }).click()
+  await completeSubscriptionAuth(dialog, true)
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'ChatGPT · Account 2' })).toBeVisible()
+})
+
+test('Agent 设置:默认过期订阅重新授权仅更新原实例,保存后生效', async ({ page }) => {
+  const dialog = await openSubscriptionSettings(page)
+  const legacy = dialog.locator('[data-source-id="subscription:claude-legacy"]')
+  await expect(legacy.locator('.source-row__status')).toHaveText('已过期')
+  await legacy.locator('.source-row__main').click()
+  await expect(dialog.locator('.model-source-notice')).toHaveText('「Claude · 旧账户」需要重新授权后才能使用。')
+  await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
+  await legacy.locator('.source-row__menu-trigger').click()
+  await dialog.getByRole('menuitem', { name: '编辑配置' }).click()
+  const facts = dialog.locator('.source-config__facts')
+  const expiresBefore = await facts.locator('dt', { hasText: '到期' }).locator('+ dd').innerText()
+  await expect(facts.locator('dt', { hasText: '凭据' }).locator('+ dd')).toHaveText('需要重新授权')
+  const reauthorize = dialog.getByRole('button', { name: '重新授权', exact: true })
+  await reauthorize.click()
+  await expect(dialog.getByRole('heading', { name: '重新授权 Claude 订阅' })).toBeVisible()
+  await expect(dialog.getByText('重新授权只刷新这个来源的凭据与到期时间，不会创建新的账户。')).toBeVisible()
+  await dialog.locator('.subscription-auth-flow').getByRole('button', { name: '返回来源' }).click()
+  await expect(reauthorize).toBeFocused()
+  await reauthorize.click()
+  await completeSubscriptionAuth(dialog)
+  await expect(dialog.getByRole('heading', { name: 'Claude · 旧账户' })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '返回来源' })).toBeFocused()
+  await expect(facts.locator('dd.gateway-form__mono')).toHaveText('keychain://mia/subscriptions/claude-legacy')
+  await expect(facts.locator('dt', { hasText: '到期' }).locator('+ dd')).not.toHaveText(expiresBefore)
+  await expect(facts.locator('progress')).toHaveAttribute('value', '8')
+  await expect(reauthorize).toHaveCount(0)
+  await expect(dialog.locator('.agent-editor__save-state[data-state="probe-ok"]')).toContainText('已重新授权')
+  await dialog.getByRole('button', { name: '返回来源' }).click()
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await expect(legacy.locator('.source-row__status')).toHaveCount(0)
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await expect(legacy.locator('.source-row__status')).toHaveCount(0)
+  await expect(legacy).toContainText('已用 8%')
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+})
+
+test('Agent 设置:授权失败可重试,错误不写入来源', async ({ page }, testInfo) => {
+  await page.route(/\/src\/api\/workspace\.ts(?:\?|$)/, async (route) => {
+    const response = await route.fetch()
+    const original = await response.text()
+    const fixture = /(export async function authorizeSubscription\([\s\S]*?await delay\(1200\);?)/
+    expect(fixture.test(original), '失败 fixture 必须命中授权 API').toBe(true)
+    const body = `let authorizationAttempts = 0;\n${original.replace(fixture, '$1\nif (++authorizationAttempts === 1) return { ok: false, error: new Error("Authorization demo failed") };')}`
+    await route.fulfill({ response, body })
+  })
+  const dialog = await openSubscriptionSettings(page, 375)
+  await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
+  await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+  const flow = dialog.locator('.subscription-auth-flow')
+  await flow.getByRole('button', { name: '在浏览器中继续' }).click()
+  await expect(flow.getByRole('heading', { name: '授权失败' })).toBeVisible()
+  await expect(flow.getByRole('alert')).toHaveText('Authorization demo failed')
+  await expect(flow.getByRole('button', { name: '重试', exact: true })).toBeFocused()
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  await page.screenshot({ path: testInfo.outputPath('subscription-auth-error-375.png') })
+  await flow.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(flow.getByRole('heading', { name: '授权成功' })).toBeVisible()
+  await flow.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(dialog.locator('.source-row')).toHaveCount(7)
+})
+
+test('Agent 设置:离开来源或关闭对话框会丢弃授权请求', async ({ page }) => {
+  const dialog = await openSubscriptionSettings(page)
+  for (const exit of ['section', 'tab', 'close']) {
+    await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
+    await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
+    await dialog.getByRole('button', { name: '在浏览器中继续' }).click()
+    await expect(dialog.locator('.subscription-auth-flow')).toHaveAttribute('aria-busy', 'true')
+    if (exit === 'section') await dialog.getByRole('tab', { name: /^默认模型/ }).click()
+    else if (exit === 'tab') await dialog.getByRole('tab', { name: '基本', exact: true }).click()
+    else await dialog.locator('.agent-editor__buttons').getByRole('button', { name: '取消', exact: true }).click()
+    await new Promise<void>((resolve) => setTimeout(resolve, 1400))
+    if (exit === 'close') {
+      await page.locator(AGENT_TRIGGER).click()
+      await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+    } else {
+      await dialog.getByRole('tab', { name: '模型', exact: true }).click()
+      await dialog.getByRole('tab', { name: /^模型来源/ }).click()
+    }
+    await expect(dialog.locator('.subscription-auth-flow')).toHaveCount(0)
+    await expect(dialog.locator('.source-row')).toHaveCount(6)
+    await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+  }
+})
+
 // 档位模型的思考列因模型不支持 effort 被禁用时,必须给出可见原因:
 // disabled 控件不触发 hover/focus,tooltip 不能作为唯一说明。
 test('Agent 设置:档位思考禁用时显示可读原因并可恢复', async ({ page }) => {
@@ -10745,7 +10972,7 @@ test('Agent 设置:多订阅额度用尽时手动切换,保存并重开保留实
   const work = dialog.locator('[data-source-id="subscription:claude-work"]')
   const personal = dialog.locator('[data-source-id="subscription:claude-personal"]')
   const chatgpt = dialog.locator('[data-source-id="subscription:chatgpt-personal"]')
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
   await expect(work).toContainText('Claude · 工作')
   await expect(personal).toContainText('Claude · 个人')
   await expect(chatgpt).toContainText('ChatGPT · 个人')
@@ -10788,11 +11015,12 @@ for (const provider of ['Claude', 'ChatGPT']) {
   for (const isEnglish of [false, true]) {
     test(`Agent 设置:多订阅 ${provider} 连续添加与删除后再添加名称唯一 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
       const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
-      const initialCount = provider === 'Claude' ? 2 : 1
+      const initialCount = provider === 'Claude' ? 3 : 1
       const accountName = (number: number): string => `${provider} · ${isEnglish ? 'Account' : '账户'} ${number}`
       const addAccount = async (): Promise<void> => {
         await dialog.getByRole('button', { name: isEnglish ? 'Add source' : '添加来源', exact: true }).click()
         await dialog.getByRole('menuitem', { name: new RegExp(`${provider} ${isEnglish ? 'subscription' : '订阅'}`) }).click()
+        await completeSubscriptionAuth(dialog, isEnglish)
       }
       const expectUniqueNames = async (): Promise<void> => {
         const titles = await dialog.locator('.source-row__title').allTextContents()
@@ -10808,7 +11036,7 @@ for (const provider of ['Claude', 'ChatGPT']) {
       }
       for (const number of [initialCount + 1, initialCount + 2]) {
         await addAccount()
-        await expect(dialog.locator('.source-row__main')).toHaveCount(5 + number - initialCount)
+        await expect(dialog.locator('.source-row__main')).toHaveCount(6 + number - initialCount)
         await expect(dialog.getByRole('button', { name: isEnglish
           ? `Use ${accountName(number)} as the model source`
           : `使用「${accountName(number)}」作为模型来源`, exact: true })).toBeVisible()
@@ -10833,7 +11061,8 @@ test('Agent 设置:多订阅添加 ChatGPT 不自动切换,移除仅影响选中
   const dialog = await openSubscriptionSettings(page)
   await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
   await dialog.getByRole('menuitem', { name: /ChatGPT 订阅/ }).click()
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
+  await completeSubscriptionAuth(dialog, false)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(5)
   const added = dialog.locator('.source-row--subscription', { hasText: 'ChatGPT · 账户 2' })
   await expect(added).not.toHaveAttribute('data-source-id', 'subscription:chatgpt-personal')
   await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
@@ -10842,7 +11071,7 @@ test('Agent 设置:多订阅添加 ChatGPT 不自动切换,移除仅影响选中
   await dialog.getByRole('menuitem', { name: '移除来源' }).click()
   await work.locator('.source-row__confirm').getByRole('button', { name: '移除来源' }).click()
   await expect(work).toHaveCount(0)
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
   await expect(dialog.locator('[data-source-id="subscription:claude-personal"]')).toHaveAttribute('data-selected', 'true')
 })
 
@@ -10873,6 +11102,7 @@ test('Agent 设置:多订阅异常检查与重新授权使用底部状态槽,不
   await expect(facts).toContainText('额度未知')
   await page.screenshot({ path: testInfo.outputPath('subscription-reauthorize-375.png') })
   await dialog.getByRole('button', { name: '重新授权', exact: true }).click()
+  await completeSubscriptionAuth(dialog)
   await expect(facts.locator('dd.gateway-form__mono')).toHaveText('keychain://mia/subscriptions/claude-personal')
   await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'probe-ok')
   await expect(dialog.getByRole('button', { name: '重新授权', exact: true })).toHaveCount(0)
@@ -10881,7 +11111,7 @@ test('Agent 设置:多订阅异常检查与重新授权使用底部状态槽,不
   await expect(facts.locator('progress')).toHaveAttribute('value', '10')
   await dialog.getByRole('button', { name: '返回来源' }).click()
   await expect(personal.locator('.source-row__status')).toHaveCount(0)
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(3)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
 })
 
 for (const width of [375, 768, 1280, 1600]) {
@@ -10909,7 +11139,8 @@ for (const width of [375, 768, 1280, 1600]) {
         if (await row.locator('.subscription-usage').count() > 0) {
           await expect(main).toHaveAccessibleDescription(/yizhou\.[\w.]+@[\w.]+/)
           await expect(main).toHaveAccessibleDescription(/Claude Max|Claude Pro|ChatGPT Plus/)
-          await expect(main).toHaveAccessibleDescription(isEnglish ? /\d+% used/ : /已用 \d+%/)
+          if (await row.getAttribute('data-state') === 'unknown') await expect(main).toHaveAccessibleDescription(isEnglish ? /Usage unknown/ : /额度未知/)
+          else await expect(main).toHaveAccessibleDescription(isEnglish ? /\d+% used/ : /已用 \d+%/)
           await expect(main).toHaveAccessibleDescription(/\d{4}-\d{2}-\d{2}/)
         } else {
           await expect(main).toHaveAccessibleDescription(await facts.innerText())
@@ -10983,8 +11214,9 @@ test('Agent 设置:多订阅全部耗尽时保留当前来源,添加账户后不
   await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
   await dialog.getByRole('button', { name: '添加来源', exact: true }).click()
   await dialog.getByRole('menuitem', { name: /Claude 订阅/ }).click()
-  await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
-  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 3' })).not.toHaveAttribute('data-selected', 'true')
+  await completeSubscriptionAuth(dialog, false)
+  await expect(dialog.locator('.source-row--subscription')).toHaveCount(5)
+  await expect(dialog.locator('.source-row--subscription', { hasText: 'Claude · 账户 4' })).not.toHaveAttribute('data-selected', 'true')
   await expect(dialog.locator('[data-source-id="subscription:claude-work"]')).toHaveAttribute('data-selected', 'true')
 })
 
@@ -11007,7 +11239,7 @@ for (const isEnglish of [false, true]) {
     await expect(dialog.getByRole('menuitem', { name: claudeMenuName }).locator('.source-type__hint')).toHaveText(anotherAccount)
     await expect(dialog.getByRole('menuitem', { name: chatgptMenuName }).locator('.source-type__hint')).toHaveText(firstAccount)
     await page.keyboard.press('Escape')
-    for (const name of isEnglish ? ['Claude · Work', 'Claude · Personal'] : ['Claude · 工作', 'Claude · 个人']) {
+    for (const name of isEnglish ? ['Claude · Work', 'Claude · Personal', 'Claude · Old account'] : ['Claude · 工作', 'Claude · 个人', 'Claude · 旧账户']) {
       const row = dialog.locator('.source-row--subscription', { hasText: name })
       await row.locator('.source-row__menu-trigger').click()
       await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
@@ -11032,6 +11264,7 @@ for (const isEnglish of [false, true]) {
       await expect(dialog.getByRole('menuitem', { name: menuName }).locator('.source-type__hint')).toHaveText(firstAccount)
     }
     await dialog.getByRole('menuitem', { name: claudeMenuName }).click()
+    await completeSubscriptionAuth(dialog, isEnglish)
     await expect(dialog.locator('.source-row')).toHaveCount(1)
     await expect(dialog.locator('.source-row--subscription')).toHaveAttribute('data-selected', 'true')
     await expect(dialog.locator('.source-row--subscription')).toContainText(isEnglish ? 'Claude · Account 1' : 'Claude · 账户 1')
@@ -11096,12 +11329,12 @@ for (const isEnglish of [false, true]) {
     await expect(count).toHaveCount(0)
     await expect(dialog.locator('.source-search__clear')).toHaveCount(0)
     for (const [query, matched] of [
-      ['  cLaUdE  ', 2], [isEnglish ? 'Work' : '工作', 1], ['个人', 2],
+      ['  cLaUdE  ', 3], [isEnglish ? 'Work' : '工作', 1], ['个人', 2],
       ['yizhou.personal@', 1], ['Claude Max', 1], ['LiteLLM', 1], ['llm.corp.example.com', 1],
     ] as const) {
       await search.fill(query)
       await expect(dialog.locator('.source-row')).toHaveCount(matched)
-      await expect(count).toHaveText(`${matched} / 5`)
+      await expect(count).toHaveText(`${matched} / 6`)
       await expect(count).toHaveAttribute('aria-live', 'polite')
       await expect(save).toHaveAttribute('aria-disabled', 'true')
       await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'clean')
@@ -11111,13 +11344,13 @@ for (const isEnglish of [false, true]) {
     await expect(empty).toHaveAttribute('role', 'status')
     await expect(empty).toContainText(isEnglish ? 'No matching sources' : '没有匹配的来源')
     await expect(empty).toContainText(isEnglish ? 'The active source “Claude · Work” is still in use' : '当前来源「Claude · 工作」仍在使用')
-    await expect(count).toHaveText('0 / 5')
+    await expect(count).toHaveText('0 / 6')
     await expect(dialog.locator('.source-row')).toHaveCount(0)
     await page.screenshot({ path: testInfo.outputPath('source-search-empty.png') })
     await empty.getByRole('button', { name: clearName }).click()
     await expect(search).toHaveValue('')
     await expect(search).toBeFocused()
-    await expect(dialog.locator('.source-row')).toHaveCount(5)
+    await expect(dialog.locator('.source-row')).toHaveCount(6)
     await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-work', isEnglish)
     await search.fill('personal@')
     await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
@@ -11135,13 +11368,20 @@ for (const isEnglish of [false, true]) {
     await page.locator(AGENT_TRIGGER).click()
     await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
     await expect(search).toHaveValue('')
-    await expect(dialog.locator('.source-row')).toHaveCount(5)
+    await expect(dialog.locator('.source-row')).toHaveCount(6)
     await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-work', isEnglish)
   })
 
   test(`Agent 设置:来源搜索五项阈值与删除后不残留过滤 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
     const dialog = await openSubscriptionSettings(page, 1280, isEnglish)
     const search = dialog.getByRole('searchbox')
+    await expect(dialog.locator('.source-row')).toHaveCount(6)
+    await expect(search).toBeVisible()
+    // 五项仍保留搜索;再删除 ChatGPT 才跨过阈值。
+    const legacy = dialog.locator('[data-source-id="subscription:claude-legacy"]')
+    await legacy.locator('.source-row__menu-trigger').click()
+    await dialog.getByRole('menuitem', { name: isEnglish ? 'Remove source' : '移除来源', exact: true }).click()
+    await legacy.locator('.source-row__confirm').getByRole('button', { name: isEnglish ? 'Remove source' : '移除来源', exact: true }).click()
     await expect(dialog.locator('.source-row')).toHaveCount(5)
     await expect(search).toBeVisible()
     await search.fill('ChatGPT')
@@ -11159,6 +11399,7 @@ for (const isEnglish of [false, true]) {
     expect(Math.abs((toolbar?.x ?? 0) + (toolbar?.width ?? 0) - (addButton?.x ?? 0) - (addButton?.width ?? 0))).toBeLessThanOrEqual(1)
     await dialog.getByRole('button', { name: isEnglish ? 'Add source' : '添加来源', exact: true }).click()
     await dialog.getByRole('menuitem', { name: isEnglish ? /ChatGPT subscription/ : /ChatGPT 订阅/ }).click()
+    await completeSubscriptionAuth(dialog, isEnglish)
     await expect(search).toBeVisible()
     await expect(search).toHaveValue('ChatGPT')
     await expect(dialog.locator('.source-row')).toHaveCount(1)
@@ -11205,7 +11446,7 @@ for (const isEnglish of [false, true]) {
     await expect(search).toHaveCount(0)
     await dialog.locator('.gateway-form__back').click()
     await expect(search).toHaveValue('Claude')
-    await expect(dialog.locator('.source-row')).toHaveCount(2)
+    await expect(dialog.locator('.source-row')).toHaveCount(3)
     await search.fill('LiteLLM')
     await dialog.locator('.source-row__menu-trigger').click()
     await dialog.getByRole('menuitem', { name: isEnglish ? 'Edit configuration' : '编辑配置', exact: true }).click()
@@ -11319,7 +11560,7 @@ for (const width of [375, 768, 1280, 1600]) {
       await search.fill('Claude')
       await expectSourceToolbarRow(dialog)
       expect((await search.boundingBox())?.width).toBeGreaterThanOrEqual(44)
-      await expect(dialog.locator('.source-search__count')).toHaveText('2 / 5')
+      await expect(dialog.locator('.source-search__count')).toHaveText('3 / 6')
       const geometry = await dialog.locator('.source-search').evaluate((element) => {
         const input = element.querySelector('input')?.getBoundingClientRect()
         const clear = element.querySelector('button')?.getBoundingClientRect()
@@ -11350,6 +11591,12 @@ for (const width of [375, 768, 1280, 1600]) {
       const removeName = isEnglish ? 'Remove source' : '移除来源'
       await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
       await removedRow.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
+      await expect(dialog.locator('.source-row')).toHaveCount(5)
+      await expectSourceToolbarRow(dialog)
+      const legacy = dialog.locator('[data-source-id="subscription:claude-legacy"]')
+      await legacy.locator('.source-row__menu-trigger').click()
+      await dialog.getByRole('menuitem', { name: removeName, exact: true }).click()
+      await legacy.locator('.source-row__confirm').getByRole('button', { name: removeName, exact: true }).click()
       await expect(dialog.locator('.source-row')).toHaveCount(4)
       await expectSourceToolbarRow(dialog, false)
       expect((await dialog.locator('.source-block__head').boundingBox())?.height).toBe(toolbarHeight)

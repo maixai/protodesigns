@@ -173,10 +173,9 @@ export async function updateAgent(agentId: AgentId, config: AgentConfig): Promis
   return { ok: true, value: updated }
 }
 
-// 订阅连接:原型里直接成功;真实实现应由对应服务商官方 CLI / SDK 的本地登录态提供,
-// 不在第三方客户端内自建 OAuth。
-export async function connectSubscription(provider: ModelSubscriptionProviderId, existing: ModelSubscription[]): Promise<Result<ModelSubscription>> {
-  await delay()
+// 模拟浏览器授权往返;凭据只以系统钥匙串引用返回,不向界面暴露 token。
+export async function authorizeSubscription(provider: ModelSubscriptionProviderId, existing: ModelSubscription[]): Promise<Result<ModelSubscription>> {
+  await delay(1200)
   return { ok: true, value: mockConnectSubscription(provider, existing) }
 }
 
@@ -186,7 +185,7 @@ export async function checkSubscription(subscription: ModelSubscription): Promis
 }
 
 export async function reauthorizeSubscription(subscription: ModelSubscription): Promise<Result<ModelSubscription>> {
-  await delay()
+  await delay(1200)
   return { ok: true, value: mockReauthorizeSubscription(subscription) }
 }
 

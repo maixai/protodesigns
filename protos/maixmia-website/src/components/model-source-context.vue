@@ -1,25 +1,29 @@
 <script setup lang="ts">
 import { useI18n } from '../i18n'
+import type { SubscriptionUsage as SubscriptionUsageData } from '../contracts/generated/agent-model-config'
+import SubscriptionUsage from './subscription-usage.vue'
 
 // 这里只呈现父级草稿的来源事实,不读写来源配置或保存状态。
-defineProps({
-  name: { type: String, required: true },
-  account: { type: String, required: true },
-  isDraftChanged: { type: Boolean, required: true },
-  disabled: { type: Boolean, default: false },
-})
+withDefaults(defineProps<{
+  name: string
+  account: string
+  isDraftChanged: boolean
+  disabled?: boolean
+  usage?: SubscriptionUsageData | null
+}>(), { disabled: false, usage: null })
 const emit = defineEmits<{ change: [] }>()
 const { t } = useI18n()
 </script>
 
 <template>
-  <div class="model-source-context" :data-pending="isDraftChanged ? 'true' : undefined">
+  <div class="model-source-context" :data-usage="usage?.state" :data-pending="isDraftChanged ? 'true' : undefined">
     <span class="model-source-context__dot" aria-hidden="true" />
     <div class="model-source-context__facts">
       <span class="model-source-context__label">{{ t.workspace.agentAdmin.sourceContextLabel }}</span>
       <span v-if="isDraftChanged" class="model-source-context__switching">{{ t.workspace.agentAdmin.sourceContextSwitching }}</span>
       <span class="model-source-context__name">{{ name || t.workspace.agentAdmin.sourceContextEmpty }}</span>
       <span v-if="account !== ''" class="model-source-context__account">{{ account }}</span>
+      <SubscriptionUsage v-if="usage !== null" :usage="usage" compact />
     </div>
     <div class="model-source-context__actions">
       <button type="button" class="model-source-context__change" :disabled="disabled" @click="emit('change')">
@@ -53,6 +57,8 @@ const { t } = useI18n()
   border-radius: var(--dl-radius-pill);
   background: var(--dl-accent);
 }
+.model-source-context[data-usage='warning'] .model-source-context__dot { background: var(--dl-warning); }
+.model-source-context[data-usage='exhausted'] .model-source-context__dot { background: var(--dl-error); }
 .model-source-context[data-pending='true'] .model-source-context__dot { background: var(--dl-warning); }
 .model-source-context__facts {
   display: flex;

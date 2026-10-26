@@ -118,6 +118,13 @@ export function defaultModelSource(): ModelSource {
         credentialRef: 'keychain://mia/subscriptions/claude-personal',
       },
       {
+        id: 'claude-legacy', provider: 'claude', label: '旧账户', connected: false,
+        account: 'yizhou.lin@legacy.example.com', plan: 'Claude Pro',
+        expiresAt: new Date(Date.now() - 7 * 86_400_000).toISOString(), status: 'expired',
+        usage: { state: 'unknown', usedPercent: -1, resetsAt: '' },
+        credentialRef: '',
+      },
+      {
         id: 'chatgpt-personal', provider: 'chatgpt', label: '个人', connected: true,
         account: 'yizhou.openai@example.com', plan: 'ChatGPT Plus',
         expiresAt: new Date(Date.now() + 18 * 86_400_000).toISOString(), status: 'ok',

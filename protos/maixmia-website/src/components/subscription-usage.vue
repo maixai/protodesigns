@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import type { SubscriptionUsage } from '../contracts/generated/agent-model-config'
 import { useI18n } from '../i18n'
 
-const props = defineProps<{ usage: SubscriptionUsage }>()
+const props = withDefaults(defineProps<{ usage: SubscriptionUsage; compact?: boolean }>(), { compact: false })
 const { t, locale } = useI18n()
 const isKnown = computed(() => props.usage.state !== 'unknown' && props.usage.usedPercent >= 0)
 const percent = computed(() => Math.max(0, Math.min(100, props.usage.usedPercent)))
@@ -28,14 +28,15 @@ const usageLabel = computed(() => {
 </script>
 
 <template>
-  <span class="subscription-usage" :data-state="usage.state">
-    <progress v-if="isKnown" class="subscription-usage__bar" :value="percent" max="100" :aria-label="stateLabel" />
+  <span class="subscription-usage" :data-state="usage.state" :data-compact="compact ? 'true' : undefined">
+    <progress v-if="isKnown && !compact" class="subscription-usage__bar" :value="percent" max="100" :aria-label="stateLabel" />
     <span class="subscription-usage__text">{{ usageLabel }}<template v-if="usage.state === 'warning' || usage.state === 'exhausted'"> · {{ stateLabel }}</template></span>
   </span>
 </template>
 
 <style scoped>
 .subscription-usage { display: grid; min-inline-size: 0; gap: var(--dl-space-1); padding-block-start: var(--dl-space-1); color: var(--dl-success); }
+.subscription-usage[data-compact='true'] { padding-block-start: 0; }
 .subscription-usage[data-state='warning'] { color: var(--dl-warning); }
 .subscription-usage[data-state='exhausted'] { color: var(--dl-error); }
 .subscription-usage[data-state='unknown'] { color: var(--dl-text-secondary); }

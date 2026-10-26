@@ -1621,6 +1621,8 @@ test('Agent 设置:保存按钮随脏状态启用,保存后留在对话框并提
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  // 默认落在「模型 → 模型来源」;本用例验证身份表单,先切回基本页。
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   const save = dialog.getByRole('button', { name: '保存', exact: true })
   const state = dialog.locator('.agent-editor__save-state')
   const name = dialog.getByRole('textbox', { name: '名称' })
@@ -1658,6 +1660,8 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await expect(dialog).toBeVisible()
+  // 默认落在「模型 → 模型来源」;身份字段在基本页。
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   const save = dialog.getByRole('button', { name: '保存', exact: true })
   const saveState = dialog.locator('.agent-editor__save-state')
   await expect(saveState).toHaveText('无未保存的更改')
@@ -1682,6 +1686,7 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   await expect(dialog).toBeVisible()
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await dialog.getByRole('button', { name: '删除 Agent' }).click()
   await dialog.getByRole('button', { name: '确认删除' }).click()
   await expect(dialog).toHaveCount(0)
@@ -1699,15 +1704,18 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
   const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
-  await expect(dialog.getByRole('tab')).toHaveCount(2)
+  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(2)
+  // 默认落在「模型 → 模型来源」;先验证基本页,再回到模型页。
+  await expect(modelTab).toHaveAttribute('aria-selected', 'true')
+  await basicTab.click()
   await expect(basicTab).toHaveAttribute('aria-selected', 'true')
-  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toBeFocused()
+  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toBeVisible()
   await expect(dialog.getByRole('textbox', { name: '备注', exact: true })).toBeVisible()
   await basicTab.focus()
   await page.keyboard.press('ArrowRight')
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await expect(modelTab).toBeFocused()
-  // 模型页内再分四区;来源已配置,默认模型分区选中,页面上只呈现外层模型面板 + 当前分区面板。
+  // 模型页内再分四区;默认落在第一个分区「模型来源」,再切到默认模型分区。
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
   const defaultsTab = sectionTabs.getByRole('tab', { name: /^默认模型/ })
@@ -1715,7 +1723,8 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   const advancedTab = sectionTabs.getByRole('tab', { name: /^高级/ })
   await expect(sectionTabs.getByRole('tab')).toHaveCount(4)
   await expect(sourceTab).not.toHaveAttribute('aria-disabled', 'true')
-  await expect(sourceTab).toHaveAttribute('aria-selected', 'false')
+  await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
+  await defaultsTab.click()
   await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
   await expect(dialog.getByRole('tabpanel')).toHaveCount(2)
 
@@ -1789,13 +1798,15 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
 
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
-  await expect(basicTab).toHaveAttribute('aria-selected', 'true')
-  await modelTab.click()
+  // 重开默认落在模型来源;先确认默认页,再回默认模型分区核对回显。
+  await expect(modelTab).toHaveAttribute('aria-selected', 'true')
+  await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
+  await defaultsTab.click()
   await expect(conversationModel).toHaveValue('claude-opus-5-5')
   await expect(conversationEffort).toHaveValue('xhigh')
   await expect(subagentModel).toHaveValue('claude-haiku-5-5')
   await expect(subagentEffort).toHaveValue('low')
-  // 重开后回到默认分区;角标反映保存时的自定义项数量。
+  // 切到默认分区后再核对回显;角标反映保存时的自定义项数量。
   await expect(defaultsTab).toHaveAttribute('aria-selected', 'true')
   await expect(tierTab).toHaveAttribute('aria-label', '档位映射')
   await expect(advancedTab).toHaveAttribute('aria-label', '高级')
@@ -2690,6 +2701,8 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
     await page.getByRole('button', { name: 'Agent 设置' }).click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     await expect(dialog).toBeVisible()
+    // 默认落在「模型 → 模型来源」;删除入口在基本页。
+    await dialog.getByRole('tab', { name: '基本', exact: true }).click()
     // 当前 Agent 的删除入口在确认前是「删除 Agent」。
     await dialog.getByRole('button', { name: '删除 Agent' }).click()
     await dialog.getByRole('button', { name: '确认删除' }).click()
@@ -2699,6 +2712,7 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByRole('button', { name: '删除 Agent' })).toBeDisabled()
   await expect(dialog).toContainText('至少保留一个 Agent')
   await dialog.getByRole('button', { name: '取消' }).click()
@@ -2713,6 +2727,8 @@ test('新建 Agent:模板 + 表单,创建后进入空工作台', async ({ page }
   await page.getByRole('button', { name: '新建 Agent' }).click()
   const dialog = page.getByRole('dialog', { name: '新建 Agent' })
   await expect(dialog).toBeVisible()
+  // 默认落在「模型 → 模型来源」;模板与身份字段在基本页。
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await dialog.getByRole('button', { name: /^研究/ }).click()
   await expect(dialog.getByRole('textbox', { name: '名称' })).toHaveValue('研究助手')
   await expect(dialog.getByRole('textbox', { name: '备注' })).toHaveValue('查资料与整理发现')

@@ -372,8 +372,12 @@ test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  await expect(dialog.getByRole('tab')).toHaveCount(2)
-  await expect(dialog.getByRole('tab')).toHaveText(['基本', '模型'])
+  // 主 tab 只有基本 / 模型两页;子 tab 不计入。
+  const mainTabs = dialog.locator('.agent-editor__tabs').getByRole('tab')
+  await expect(mainTabs).toHaveCount(2)
+  await expect(mainTabs).toHaveText(['基本', '模型'])
+  // 默认落在「模型 → 模型来源」;身份字段在基本页。
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible()
 })

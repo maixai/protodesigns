@@ -1095,8 +1095,9 @@ function reset(): void {
   }
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
-  // 进入 Agent 设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
-  activeTab.value = 'model'
+  // 编辑设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
+  // 新建仍从基本页开始,先填模板与身份。
+  activeTab.value = isCreate.value ? 'basic' : 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
   editingGatewayId.value = null

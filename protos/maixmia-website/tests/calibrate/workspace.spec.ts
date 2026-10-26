@@ -2208,7 +2208,8 @@ test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ 
   await expect(models).toHaveAttribute('aria-describedby', /gateway-models-helper$/)
   await expect(models).toHaveAttribute('placeholder', 'claude-sonnet-5-5')
   // URL 在原位切换读写态,没有状态徽标或额外展开区域。
-  const refresh = dialog.getByRole('button', { name: '刷新模型列表' })
+  // 刷新按钮在编辑态只占位不可见,故用类定位而不是 role(后者会从可访问树移除)。
+  const refresh = dialog.locator('.gateway-form__refresh')
   const modelsApiInput = dialog.getByRole('textbox', { name: '模型列表 API', exact: true })
   const discovery = dialog.getByRole('group', { name: '模型列表 API', exact: true })
   const editModelsUrl = discovery.getByRole('button', { name: '修改模型列表 API', exact: true })
@@ -2269,7 +2270,7 @@ test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ 
   await modelsApiInput.fill('  https://gateway.example.com/custom/models  ')
   await expect(refresh).toHaveAttribute('title', /GET https:\/\/gateway\.example\.com\/v1\/models/)
   // 失焦不提交或取消,保存按钮是唯一的鼠标提交入口。
-  await refresh.focus()
+  await modelsApiInput.blur()
   await expect(modelsApiInput).toBeVisible()
   await saveModelsUrl.click()
   await expect(modelsApiInput).toHaveCount(0)
@@ -4330,7 +4331,8 @@ test('侧栏项目菜单不被下方项目行覆盖', async ({ page }) => {
   await expect(popover).toBeVisible()
 
   // 菜单四角与中心都必须命中菜单自身,而不是被下方项目行截走。
-  const coveredPoints = await popover.evaluate((element) => {
+  // 用轮询等到布局稳定的一帧:展开 / 折叠项目后布局可能还在收尾,单帧测量会误判。
+  await expect.poll(async () => popover.evaluate((element) => {
     const rect = element.getBoundingClientRect()
     const points: [number, number][] = [
       [rect.left + 4, rect.top + 4],
@@ -4342,9 +4344,8 @@ test('侧栏项目菜单不被下方项目行覆盖', async ({ page }) => {
     return points.filter(([x, y]) => {
       const hit = document.elementFromPoint(x, y)
       return hit === null || !element.contains(hit)
-    })
-  })
-  expect(coveredPoints, '菜单完整显示,不被后续项目行覆盖').toHaveLength(0)
+    }).length
+  }), { timeout: 2000, message: '菜单完整显示,不被后续项目行覆盖' }).toBe(0)
 
   // 同时不得被 .project-scroll 的 overflow 裁掉。
   const scrollBox = await page.locator('.project-scroll').boundingBox()

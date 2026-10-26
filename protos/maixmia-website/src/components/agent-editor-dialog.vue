@@ -1095,8 +1095,9 @@ function reset(): void {
   }
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
-  activeTab.value = 'basic'
-  activeModelSection.value = sourceReady.value ? 'defaults' : 'source'
+  // 进入 Agent 设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
+  activeTab.value = 'model'
+  activeModelSection.value = 'source'
   sourceNotice.value = ''
   editingGatewayId.value = null
   gatewayDraft.value = null
@@ -1444,11 +1445,12 @@ onBeforeUnmount(() => {
                         @click="startModelsUrlEdit"
                       ><DliIcon name="pencil" size="sm" /></button>
                     </div>
-                    <!-- 刷新是模型列表的整体动作:放在底栏右端;编辑端点时隐藏,避免与未保存的输入冲突。 -->
+                    <!-- 刷新是模型列表的整体动作:放在底栏右端。编辑端点时保持占位但不可见,
+                         使 URL 读写态同宽,切换不跳动;此时也不可聚焦。 -->
                     <button
-                      v-if="!isModelsUrlEditing"
                       type="button" class="gateway-form__refresh"
-                      :disabled="busy || gatewayProbeBusy || effectiveModelsUrl === ''"
+                      :data-hidden="isModelsUrlEditing ? 'true' : undefined"
+                      :disabled="busy || gatewayProbeBusy || effectiveModelsUrl === '' || isModelsUrlEditing"
                       :data-busy="gatewayProbeBusy ? 'true' : undefined"
                       :aria-label="t.workspace.agentAdmin.gatewayRefreshModels"
                       :title="gatewayRefreshTitle"
@@ -1940,6 +1942,8 @@ onBeforeUnmount(() => {
 .gateway-form__refresh { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: var(--dl-space-1); min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .gateway-form__refresh:hover:not(:disabled) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
 .gateway-form__refresh:disabled { color: var(--dl-text-disabled); }
+/* 编辑端点时刷新按钮只占位、不可见也不可点:URL 读写态同宽,切换不产生横向跳动。 */
+.gateway-form__refresh[data-hidden='true'] { visibility: hidden; pointer-events: none; }
 .gateway-form__refresh[data-busy='true'] :deep(.dl-icon) { animation: gateway-refresh-spin calc(4 * var(--dl-duration-base)) linear infinite; }
 @keyframes gateway-refresh-spin { to { transform: rotate(360deg); } }
 .gateway-form__group { display: grid; min-inline-size: 0; gap: var(--dl-space-2); }

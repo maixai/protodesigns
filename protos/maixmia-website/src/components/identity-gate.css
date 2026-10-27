@@ -1,0 +1,160 @@
+/* 解锁面的局部几何与材质别名，全部派生于既有语义和结构 token，不增加设计语言色阶。 */
+.identity-gate {
+  --gate-column: calc(var(--dl-measure) * 6 / 7);
+  --gate-hero: calc(var(--dl-space-12) * 2 + var(--dl-space-4));
+  --gate-glyph: calc(var(--dl-space-8) * 2);
+  --gate-orbit-outer: calc(var(--dl-space-12) * 12 - var(--dl-space-4));
+  --gate-orbit-inner: calc(var(--dl-space-12) * 8 - var(--dl-space-1));
+  --gate-grid: color-mix(in srgb, var(--dl-accent) 4%, transparent);
+  --gate-orbit: color-mix(in srgb, var(--dl-accent) 8%, transparent);
+  --gate-hero-ring: color-mix(in srgb, var(--dl-accent) 22%, transparent);
+  --gate-page-gutter: var(--dl-space-12);
+  --gate-title-size: var(--dl-font-size-3xl);
+  position: fixed;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100dvh;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--dl-text-primary);
+  text-align: left;
+  font-size: var(--dl-font-size-md);
+  line-height: var(--dl-line-body);
+}
+.identity-gate::backdrop { background: transparent; }
+.identity-gate__surface {
+  --gate-stagger: calc(var(--dl-duration-fast) / 4);
+  --gate-intro-height: calc(var(--gate-title-size) * var(--dl-line-tight) * 2 + var(--dl-space-4) + var(--dl-font-size-md) * var(--dl-line-body) * 2);
+  --gate-actions-height: calc(var(--dl-space-12) * 4 + var(--dl-space-8));
+  position: relative; display: flex; flex-direction: column; block-size: 100%; isolation: isolate; background: var(--dl-bg-base);
+}
+/* 舞台保留主流程的最大占位；恢复与重置可自然长高，由 body 承担滚动。 */
+.identity-gate__stage { min-block-size: calc(var(--gate-intro-height) + var(--dl-space-8) + var(--gate-actions-height)); }
+.identity-gate__intro { min-block-size: var(--gate-intro-height); }
+.identity-gate__surface:is([data-state='recovery'], [data-state='reset']) .identity-gate__intro { min-block-size: 0; }
+.identity-gate__hero > svg { grid-area: 1 / 1; }
+.identity-gate__actions:has(.identity-gate__demo) > .identity-gate__primary { order: -1; }
+.identity-gate__atmosphere { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background-image: linear-gradient(var(--gate-grid) var(--dl-border-width), transparent var(--dl-border-width)), linear-gradient(90deg, var(--gate-grid) var(--dl-border-width), transparent var(--dl-border-width)); background-size: var(--dl-space-8) var(--dl-space-8); }
+.identity-gate__atmosphere > span { position: absolute; inline-size: var(--gate-orbit-outer); block-size: var(--gate-orbit-outer); inset-inline-end: calc(var(--gate-orbit-outer) / -3); inset-block-start: 14%; border: var(--dl-border-width) solid var(--gate-orbit); border-radius: var(--dl-radius-pill); display: grid; place-items: center; }
+.identity-gate__atmosphere > span::after { content: ''; inline-size: var(--gate-orbit-inner); block-size: var(--gate-orbit-inner); border: var(--dl-border-width) solid var(--gate-orbit); border-radius: inherit; }
+.identity-gate__header, .identity-gate__body, .identity-gate__footer { position: relative; min-inline-size: 0; }
+.identity-gate__header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); padding: var(--dl-space-6) var(--gate-page-gutter); }
+.identity-gate__brand { display: flex; align-items: center; gap: var(--dl-space-2); }
+.identity-gate__wordmark { font-size: var(--dl-font-size-xl); font-weight: 500; line-height: var(--dl-line-tight); }
+.identity-gate__brand-dot { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); background: var(--dl-accent); }
+.identity-gate__brand-label { border-inline-start: var(--dl-border-width) solid var(--dl-border-strong); margin-inline-start: var(--dl-space-2); padding-inline-start: var(--dl-space-4); color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); letter-spacing: var(--dl-tracking-caps); }
+.identity-gate__body { flex: 1; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; padding: var(--dl-space-8) var(--gate-page-gutter) calc(var(--dl-space-12) + var(--dl-space-8)); }
+.identity-gate__content { flex: none; inline-size: 100%; max-inline-size: var(--gate-column); margin: auto; }
+.identity-gate__hero { position: relative; display: grid; place-items: center; inline-size: var(--gate-hero); block-size: var(--gate-hero); border: var(--dl-border-width) solid var(--gate-hero-ring); border-radius: var(--dl-radius-pill); color: var(--dl-accent); margin: var(--dl-space-2) 0 var(--dl-space-8); }
+.identity-gate__hero::before { content: ''; position: absolute; inset: calc(-1 * var(--dl-space-2)); border: var(--dl-border-width) solid var(--gate-orbit); border-radius: inherit; }
+.identity-gate__hero.is-warning { color: var(--dl-warning); }
+.identity-gate__hero.is-loading::after { content: ''; position: absolute; inset: calc(-1 * var(--dl-space-2)); border: var(--dl-border-width) solid transparent; border-block-start-color: var(--dl-accent); border-radius: inherit; animation: identity-gate-spin calc(var(--dl-duration-slow) * 4) linear infinite; }
+.identity-gate svg { stroke: currentColor; stroke-width: var(--dl-icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.identity-gate svg path, .identity-gate svg circle { vector-effect: non-scaling-stroke; }
+.identity-gate__glyph { inline-size: var(--gate-glyph); block-size: var(--gate-glyph); }
+.identity-gate__eyebrow { margin: 0 0 var(--dl-space-3); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); letter-spacing: var(--dl-tracking-caps); color: var(--dl-text-secondary); }
+.identity-gate__intro h2 { margin: 0; font-size: var(--gate-title-size); font-weight: 500; line-height: var(--dl-line-tight); }
+.identity-gate__intro p { margin: var(--dl-space-4) 0 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-md); line-height: var(--dl-line-body); }
+.identity-gate__actions { display: flex; flex-direction: column; align-items: stretch; gap: var(--dl-space-3); margin-block-start: var(--dl-space-8); }
+.identity-gate__primary, .identity-gate__danger, .identity-gate__text-button { min-block-size: var(--dl-target-size); min-inline-size: var(--dl-target-size); border: var(--dl-border-width) solid transparent; border-radius: var(--dl-radius-md); padding: var(--dl-space-2) var(--dl-space-4); font: inherit; text-align: left; cursor: pointer; transition: transform var(--dl-duration-fast) var(--dl-ease-standard); overflow-wrap: anywhere; }
+.identity-gate__primary { display: flex; align-items: center; gap: var(--dl-space-3); background: var(--dl-accent); color: var(--dl-text-on-accent); }
+.identity-gate__primary:hover { background: var(--dl-accent-hover); }
+.identity-gate__primary:active { background: var(--dl-accent-active); }
+.identity-gate__primary svg { flex: none; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); }
+.identity-gate__arrow { margin-inline-start: auto; }
+.identity-gate__trust { display: flex; flex-wrap: wrap; gap: var(--dl-space-1) 0; margin: 0; padding: 0; list-style: none; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.identity-gate__trust li { display: flex; align-items: center; }
+.identity-gate__trust li + li::before { content: ''; block-size: var(--dl-space-3); border-inline-start: var(--dl-border-width) solid var(--dl-border-strong); margin-inline: var(--dl-space-3); }
+.identity-gate__text-button { background: transparent; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); padding-inline: var(--dl-space-2); }
+.identity-gate__text-button:hover { color: var(--dl-text-primary); background: var(--dl-bg-hover); }
+.identity-gate__text-button:active { background: var(--dl-bg-sunken); }
+.identity-gate__secondary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); margin-block-start: var(--dl-space-1); margin-inline-start: calc(-1 * var(--dl-space-2)); }
+.identity-gate__secondary > span { block-size: var(--dl-space-3); border-inline-start: var(--dl-border-width) solid var(--dl-border-strong); }
+.identity-gate__back { align-self: flex-start; margin-inline-start: calc(-1 * var(--dl-space-2)); }
+.identity-gate__demo, .identity-gate__key-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); margin: 0; }
+.identity-gate__demo span { display: block; margin-block-end: var(--dl-space-1); font-family: var(--dl-font-mono); }
+.identity-gate__progress { block-size: var(--dl-border-width); overflow: hidden; opacity: 0; }
+.identity-gate__progress.is-busy { opacity: 1; background: var(--dl-border-base); }
+.identity-gate__progress span { display: block; block-size: 100%; inline-size: 100%; background: var(--dl-accent); transform-origin: left; }
+.identity-gate__progress.is-busy span { animation: identity-gate-progress calc(var(--dl-duration-slow) * 3 + var(--dl-duration-fast) / 2) var(--dl-ease-standard) both; }
+.identity-gate__hero.is-verifying .identity-gate__glyph { animation: identity-gate-breathe calc(var(--dl-duration-base) * 6) var(--dl-ease-standard) infinite alternate; }
+.identity-gate__field { display: grid; gap: var(--dl-space-2); font-size: var(--dl-font-size-sm); }
+.identity-gate__input { min-inline-size: 0; inline-size: 100%; min-block-size: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font: inherit; font-family: var(--dl-font-mono); font-size: var(--dl-font-size-md); }
+.identity-gate__input:hover { border-color: var(--dl-accent); }
+.identity-gate__input[aria-invalid='true'] { border-color: var(--dl-error); }
+.identity-gate__key-hint code { display: block; font: inherit; font-family: var(--dl-font-mono); overflow-wrap: anywhere; }
+.identity-gate__consequences { margin: 0; padding: 0; list-style: none; font-size: var(--dl-font-size-sm); }
+.identity-gate__consequences li { padding-block: var(--dl-space-3); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+.identity-gate__consequences li:first-child { padding-block-start: 0; }
+.identity-gate__acknowledge { display: flex; align-items: center; gap: var(--dl-space-3); min-block-size: var(--dl-target-size); font-size: var(--dl-font-size-sm); cursor: pointer; }
+.identity-gate__acknowledge input { flex: none; margin: 0; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); accent-color: var(--dl-accent); }
+.identity-gate__danger { color: var(--dl-error); border-color: var(--dl-error); background: var(--dl-bg-base); }
+.identity-gate__danger:hover { background: var(--dl-bg-hover); }
+.identity-gate__error { color: var(--dl-error); font-size: var(--dl-font-size-sm); margin: var(--dl-space-4) 0 0; }
+/* 验证消息保留可访问播报，视觉反馈由禁用按钮与进度线承担。 */
+.identity-gate__status { position: absolute; inline-size: var(--dl-border-width); block-size: var(--dl-border-width); overflow: hidden; clip-path: inset(50%); }
+.identity-gate__footer { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: var(--dl-space-2) var(--dl-space-6); border-block-start: var(--dl-border-width) solid var(--dl-border-base); background: var(--dl-bg-base); padding: var(--dl-space-4) var(--gate-page-gutter); color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+.identity-gate__footer > :last-child { margin-inline-start: auto; }
+.identity-gate__fingerprint { overflow-wrap: anywhere; }
+.identity-gate button:active { transform: translateY(var(--dl-lift-press)); }
+.identity-gate button:disabled, .identity-gate input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); border-color: var(--dl-border-base); cursor: not-allowed; transform: none; }
+.identity-gate .identity-gate__text-button:disabled { background: transparent; border-color: transparent; }
+.identity-gate :is(button, input):focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+/* 标题仅作读屏定位，不呈现为可编辑的输入框；Tab 焦点仍在控件上清晰可见。 */
+.identity-gate h2:focus { outline: none; box-shadow: none; }
+/* 首次入场与状态切换分层，避免同一个 transform 被两条时间轴争用。 */
+.identity-gate__surface.is-entering { animation: gate-surface-in var(--dl-duration-base) var(--dl-ease-standard) both; }
+.is-entering .identity-gate__atmosphere { animation: gate-surface-in var(--dl-duration-slow) var(--dl-ease-standard) both; }
+.is-entering .identity-gate__hero { animation: gate-hero-in var(--dl-duration-slow) var(--dl-ease-standard) both; }
+.is-entering :is(.identity-gate__eyebrow, .is-initial h2, .is-initial .identity-gate__intro p, .identity-gate__footer) { animation: gate-content-in var(--dl-duration-base) var(--dl-ease-standard) both; }
+.is-entering .identity-gate__eyebrow { animation-delay: var(--gate-stagger); }
+.is-entering .is-initial h2 { animation-delay: calc(var(--gate-stagger) * 2); }
+.is-entering .is-initial .identity-gate__intro p { animation-delay: calc(var(--gate-stagger) * 3); }
+/* 首帧是 loading，尚无 actions/trust；读取完成后由完整状态的 fade-through 一起呈现，避免二次交错。 */
+/* 最后一级缩到 fast，全部入场在 350ms 内结束，不拉长整个安全步骤。 */
+.is-entering .identity-gate__footer { animation-delay: calc(var(--gate-stagger) * 6); animation-duration: var(--dl-duration-fast); }
+.gate-state-leave-active { transition: opacity var(--dl-duration-fast) var(--dl-ease-standard), transform var(--dl-duration-fast) var(--dl-ease-standard); }
+.gate-state-enter-active { transition: opacity var(--dl-duration-base) var(--dl-ease-standard) var(--gate-stagger), transform var(--dl-duration-base) var(--dl-ease-standard) var(--gate-stagger); }
+.gate-state-leave-to { opacity: 0; transform: translateY(calc(-1 * var(--dl-space-1))); }
+.gate-state-enter-from { opacity: 0; transform: translateY(var(--dl-space-1)); }
+.gate-glyph-leave-active { transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.gate-glyph-enter-active { transition: opacity var(--dl-duration-base) var(--dl-ease-standard), transform var(--dl-duration-base) var(--dl-ease-standard); }
+.gate-glyph-enter-from, .gate-glyph-leave-to { opacity: 0; }
+.gate-glyph-enter-from { transform: scale(.96); }
+.gate-glyph-enter-from.is-success { transform: scale(.8); }
+.identity-gate__surface.is-exiting { animation: gate-surface-out var(--dl-duration-slow) var(--dl-ease-standard) calc(var(--gate-stagger) * 2) both; }
+.is-exiting :is(.identity-gate__content, .identity-gate__header, .identity-gate__footer) { animation: gate-content-out var(--dl-duration-fast) var(--dl-ease-standard) both; }
+@keyframes gate-surface-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gate-hero-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes gate-content-in { from { opacity: 0; transform: translateY(var(--dl-space-2)); } to { opacity: 1; transform: none; } }
+@keyframes gate-content-out { to { opacity: 0; transform: translateY(calc(-1 * var(--dl-space-1))); } }
+@keyframes gate-surface-out { to { opacity: 0; transform: scale(1.008); } }
+@keyframes identity-gate-breathe { from { opacity: 1; } to { opacity: .7; } }
+@keyframes identity-gate-spin { to { transform: rotate(360deg); } }
+@keyframes identity-gate-progress { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+@media (max-width: 767px) {
+  .identity-gate { --gate-page-gutter: var(--dl-space-6); --gate-title-size: var(--dl-font-size-2xl); }
+  .identity-gate__header { padding-block: var(--dl-space-4); }
+  .identity-gate__body { padding-block: var(--dl-space-6) var(--dl-space-12); }
+  .identity-gate__atmosphere > span { display: none; }
+  .identity-gate__footer { flex-direction: column; align-items: flex-start; gap: var(--dl-space-1); }
+  .identity-gate__footer > :last-child { margin-inline-start: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .identity-gate *, .identity-gate *::before, .identity-gate *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    transform: none !important;
+  }
+  .identity-gate__hero.is-loading::after, .identity-gate__hero.is-verifying .identity-gate__glyph, .identity-gate__progress.is-busy span { animation: none; }
+  .identity-gate button:active { transform: none; }
+}

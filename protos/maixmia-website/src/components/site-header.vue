@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// 顶栏:首页与工作台共用深色 sticky;登录直接同步切换到工作台。
+// 顶栏保持连续，登录只等待首页内容离场。
 // 语言切换不属于共享顶栏:首页在页脚切换,工作台在底栏「全局设置」切换。
 import { NConfigProvider } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { darkOverrides } from '../theme'
 import { useI18n } from '../i18n'
 import { isAuthenticated, signIn } from '../auth/session'
+import { authPhase, waitForMotion } from '../auth/transition'
 import { currentRoute, navigateTo } from '../router'
 import AccountMenu from './account-menu.vue'
 
@@ -44,9 +45,15 @@ watch(isCollapsedNow, syncHeaderHeight, { immediate: true })
 watch(canCollapse, (can) => { if (!can) isCollapsed.value = false })
 onBeforeUnmount(() => { document.documentElement.style.removeProperty('--dl-header-height-current') })
 
-function onLogin(): void {
+async function onLogin(): Promise<void> {
+  if (authPhase.value !== 'idle') return
+  authPhase.value = 'leaving'
+  await nextTick()
+  await waitForMotion(document.querySelector<HTMLElement>('.auth-home'))
   signIn()
   navigateTo('workspace')
+  await nextTick()
+  authPhase.value = 'idle'
 }
 
 async function onSignedOut(): Promise<void> {
@@ -72,7 +79,7 @@ async function onSignedOut(): Promise<void> {
 
         <div class="site-header__actions">
           <AccountMenu v-if="isAuthenticated" @signed-out="onSignedOut" />
-          <button v-else ref="loginRef" class="dl-btn dl-btn--primary" type="button" @click="onLogin">
+          <button v-else ref="loginRef" class="dl-btn dl-btn--primary" type="button" :disabled="authPhase === 'leaving'" @click="onLogin">
             {{ t.nav.login }}
           </button>
         </div>

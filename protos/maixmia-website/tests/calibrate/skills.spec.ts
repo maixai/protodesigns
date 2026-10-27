@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import type { Skill } from '../../src/contracts/generated/skill'
@@ -10,11 +11,14 @@ async function login(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  await unlockDemoIdentity(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator('#workspace-composer-weekly')).not.toHaveAttribute('readonly', '')
 }
 
 async function openSlash(page: Page): Promise<void> {
+  // 解锁对话框关闭后鼠标可能停在菜单将出现的位置,先移开以免悬停改变初始选中项。
+  await page.mouse.move(0, 0)
   const input = page.locator('#workspace-composer-weekly')
   await input.fill('')
   // fill('') 时若已有前导 `/`,草稿仍是 `/`;先在开头 Backspace 撤掉前缀,再触发 slash。

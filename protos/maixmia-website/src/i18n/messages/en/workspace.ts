@@ -1,5 +1,7 @@
+import { identityPairing } from './identity-pairing'
 // 工作台展示文案与确定性的演示应答。
 export const workspace = {
+  security: identityPairing,
   title: 'Workspace',
   newChat: 'New conversation',
   skills: {
@@ -54,7 +56,7 @@ export const workspace = {
   },
   agentSwitcher: {
     label: 'Switch agent', current: 'Current', running: 'Running {count}', awaiting: 'Needs you {count}', idle: 'Idle', menu: 'All agents', badge: '{count} unseen',
-    create: 'New agent',
+    create: 'Add agent',
   },
   // 侧栏顶层视图:项目文件与 Agent 插件。
   sidebarViews: {
@@ -66,9 +68,9 @@ export const workspace = {
     settingsLabel: 'Agent settings',
     settingsTitle: 'Agent settings',
     settingsHint: 'Identity and model. Changes apply to this agent only.',
-    createLabel: 'New agent',
-    createTitle: 'New agent',
-    createHint: 'Start from a template, or from a blank configuration.',
+    createLabel: 'Add agent',
+    createTitle: 'Add agent',
+    createHint: 'Pair with a one-time link, or enter the code shown on your agent.',
     templates: 'Templates',
     templatePlanning: 'Planning',
     templateResearch: 'Research',
@@ -91,14 +93,14 @@ export const workspace = {
     saveStateNeedsModels: 'Some models need reselecting',
     saveStateNoSource: 'No source is enabled; enable one to save',
     saveStateFailed: 'Save failed. Try again.',
-    create: 'Create agent',
-    creating: 'Creating…',
+    create: 'Add agent',
+    creating: 'Adding…',
     cancel: 'Cancel',
     nameRequired: 'Enter a name',
     saveError: 'Could not save. Try again.',
-    createError: 'Could not create. Try again.',
+    createError: 'Could not add. Pair again.',
     saved: 'Saved "{name}"',
-    created: 'Created "{name}"',
+    created: 'Added "{name}"',
     delete: 'Delete agent',
     deleteTitle: 'Delete "{name}"?',
     deleteBody: 'Its project connections, conversations, and plugin settings will be removed. This cannot be undone.',

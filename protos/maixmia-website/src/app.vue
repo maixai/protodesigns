@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// 根部保留深色 provider 与消息上下文;共用顶栏不包额外节点,保证 sticky。
-// 首页页面组件使用 Fragment,拆页不改变首页的 DOM 布局层级。
+// 深色壳覆盖异步路由间隙；首页离场不影响共用 sticky 顶栏。
 import { defineAsyncComponent } from 'vue'
 import { NConfigProvider, NMessageProvider } from 'naive-ui'
 import { darkOverrides } from './theme'
 import { useI18n } from './i18n'
 import { currentRoute } from './router'
+import { authPhase } from './auth/transition'
 import SiteHeader from './components/site-header.vue'
 import HomePage from './pages/home-page.vue'
 
@@ -22,9 +22,22 @@ useI18n()
 <template>
   <n-config-provider :theme-overrides="darkOverrides">
     <n-message-provider>
-      <SiteHeader />
-      <HomePage v-if="currentRoute.page === 'home'" />
-      <WorkspacePage v-else />
+      <div class="app-shell dl-scope dl-scope--dark">
+        <SiteHeader />
+        <div v-if="currentRoute.page === 'home'" class="auth-home" :class="{ 'is-leaving': authPhase === 'leaving' }" :inert="authPhase === 'leaving'">
+          <HomePage />
+        </div>
+        <WorkspacePage v-else />
+      </div>
     </n-message-provider>
   </n-config-provider>
 </template>
+
+<style scoped>
+.app-shell { min-block-size: 100dvh; background: var(--dl-bg-base); }
+.auth-home.is-leaving { animation: auth-home-leave calc(var(--dl-duration-fast) + (var(--dl-duration-base) - var(--dl-duration-fast)) / 3) var(--dl-ease-standard) both; }
+@keyframes auth-home-leave { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .auth-home.is-leaving { animation-duration: 0.01ms; }
+}
+</style>

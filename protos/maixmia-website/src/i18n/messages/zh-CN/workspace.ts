@@ -1,5 +1,7 @@
+import { identityPairing } from './identity-pairing'
 // 工作台展示文案与确定性的演示应答。
 export const workspace = {
+  security: identityPairing,
   title: '工作台',
   newChat: '新建对话',
   // 输入框 slash 菜单的 Skill 词条。侧栏不再展示 Skill,这些只服务 `/` 菜单。
@@ -56,7 +58,7 @@ export const workspace = {
   },
   agentSwitcher: {
     label: '切换 Agent', current: '当前', running: '运行中 {count}', awaiting: '待你 {count}', idle: '空闲', menu: '全部 Agent', badge: '{count} 条未查看',
-    create: '新建 Agent',
+    create: '添加 Agent',
   },
   // 侧栏顶层视图:项目文件与 Agent 插件。
   sidebarViews: {
@@ -69,9 +71,9 @@ export const workspace = {
     settingsLabel: 'Agent 设置',
     settingsTitle: 'Agent 设置',
     settingsHint: '身份与模型。改动只影响这个 Agent。',
-    createLabel: '新建 Agent',
-    createTitle: '新建 Agent',
-    createHint: '从一个模板开始，或从空白配置。',
+    createLabel: '添加 Agent',
+    createTitle: '添加 Agent',
+    createHint: '通过一次性链接配对，或手动输入 Agent 显示的配对码。',
     templates: '模板',
     templatePlanning: '规划',
     templateResearch: '研究',
@@ -94,14 +96,14 @@ export const workspace = {
     saveStateNeedsModels: '部分模型需重新选择',
     saveStateNoSource: '未启用任何来源，启用后才能保存',
     saveStateFailed: '保存失败，请重试',
-    create: '创建 Agent',
-    creating: '创建中…',
+    create: '添加 Agent',
+    creating: '添加中…',
     cancel: '取消',
     nameRequired: '请填写名称',
     saveError: '保存失败，请重试',
-    createError: '创建失败，请重试',
+    createError: '添加失败，请重新配对',
     saved: '已保存「{name}」',
-    created: '已创建「{name}」',
+    created: '已添加「{name}」',
     delete: '删除 Agent',
     deleteTitle: '删除「{name}」？',
     deleteBody: '它的项目连接、对话与插件配置会一并移除，且无法恢复。',

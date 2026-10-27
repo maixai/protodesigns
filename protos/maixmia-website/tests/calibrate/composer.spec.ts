@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
@@ -46,6 +47,7 @@ async function waitForSent(page: Page, body: string): Promise<StoredMessage[]> {
 async function login(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  await unlockDemoIdentity(page)
   await expect(page).toHaveURL(/#\/workspace$/)
 }
 

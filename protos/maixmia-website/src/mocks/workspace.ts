@@ -1,6 +1,7 @@
 // 演示结构与内存数据；展示文案从当前语言词条组装，刷新即重置。
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
-import type { AgentSummary } from '../contracts/generated/agent-summary'
+import type { AgentSummary, AgentIdentity } from '../contracts/generated/agent-summary'
+import { mockAgentIdentity } from './identity'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
 import type { ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
@@ -44,11 +45,12 @@ interface AgentSeed {
   noteKey?: keyof Messages['workspace']['agentNotes']
   model: AgentModelConfig
   builtIn: boolean
+  identity: AgentIdentity
 }
 
 // 模型来源:默认用已连接的 Claude 订阅;网关配置同时保留,便于在对话框里显式切换。
 // 订阅与网关在运行时互斥,同一时刻只有 kind 指向的那个来源生效。
-function defaultAgentModelConfig(): AgentModelConfig {
+export function defaultAgentModelConfig(): AgentModelConfig {
   return {
     source: defaultModelSource(),
     defaultModelId: DEFAULT_MODEL.id,
@@ -153,10 +155,11 @@ export function mockProbeModelGateway(baseUrl: string, modelsUrl: string): Gatew
 }
 
 const agentStore: AgentSeed[] = [
-  { id: 'planning', nameKey: 'planning', noteKey: 'planning', model: defaultAgentModelConfig(), builtIn: true },
-  { id: 'research', nameKey: 'research', noteKey: 'research', model: defaultAgentModelConfig(), builtIn: true },
+  { id: 'planning', nameKey: 'planning', noteKey: 'planning', model: defaultAgentModelConfig(), builtIn: true, identity: mockAgentIdentity('planning') },
+  { id: 'research', nameKey: 'research', noteKey: 'research', model: defaultAgentModelConfig(), builtIn: true, identity: mockAgentIdentity('research', '研究工作站', 'Ubuntu 24.04 · Mia Headless') },
   {
     id: 'writing',
+    identity: mockAgentIdentity('writing', '写作笔记本', 'Windows 11 · Mia Desktop'),
     nameKey: 'writing',
     noteKey: 'writing',
     // 写作助手刻意给一组非默认值,让「档位映射 / 思考强度 / 回退 / 自动压缩」都有实物可看。
@@ -188,6 +191,7 @@ function summaryOf(seed: AgentSeed): AgentSummary {
     note: seed.noteKey !== undefined ? t.value.workspace.agentNotes[seed.noteKey] : (seed.note ?? ''),
     model: cloneModelConfig(seed.model),
     builtIn: seed.builtIn,
+    identity: { ...seed.identity },
   }
 }
 
@@ -211,6 +215,7 @@ export function mockCreateAgent(config: AgentConfig): AgentSummary {
     note: config.note.trim(),
     model: cloneModelConfig(config.model),
     builtIn: false,
+    identity: mockAgentIdentity(`agent-${agentSequence}`),
   }
   agentStore.push(seed)
   // 新 Agent 从干净的工作台开始:没有项目,也没有安装任何插件。
@@ -228,6 +233,17 @@ export function mockUpdateAgent(agentId: AgentId, config: AgentConfig): AgentSum
   delete seed.nameKey
   delete seed.noteKey
   return summaryOf(seed)
+}
+
+export function mockSetAgentIdentity(agentId: AgentId, identity: AgentIdentity): AgentSummary | null {
+  const seed = agentStore.find((item) => item.id === agentId)
+  if (seed === undefined) return null
+  seed.identity = { ...identity }
+  return summaryOf(seed)
+}
+
+export function mockInvalidateAgentTrust(): void {
+  for (const seed of agentStore) seed.identity = { ...seed.identity, trustState: 'keyChanged' }
 }
 
 export function mockDeleteAgent(agentId: AgentId): boolean {

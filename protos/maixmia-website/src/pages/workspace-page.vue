@@ -28,7 +28,7 @@ import { badgeMapOf, identityClassOf } from '../data/project-identity'
 import { emptyRuntime, runtimeOf, withRuntime } from '../data/chat-runtime'
 import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attachments'
 import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
-import { closeProject as closeProjectRequest, createAgent, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listSystemNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
+import { closeProject as closeProjectRequest, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listSystemNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { session } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
@@ -36,6 +36,9 @@ import { useFlightGhost } from '../composables/use-flight-ghost'
 import type { FlightRect } from '../composables/use-flight-ghost'
 import AgentContextSwitcher from '../components/agent-context-switcher.vue'
 import AgentEditorDialog from '../components/agent-editor-dialog.vue'
+import AgentPairingDialog from '../components/agent-pairing-dialog.vue'
+import IdentityVaultDialog from '../components/identity-vault-dialog.vue'
+import { readIdentityVaultState } from '../mocks/identity'
 import AgentPlugins from '../components/agent-plugins.vue'
 import type { SidebarViewOption } from '../components/sidebar-view-tabs.vue'
 import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
@@ -85,6 +88,7 @@ const notificationProjects = ref<Project[]>([])
 const notificationsStatus = ref<'loading' | 'ready' | 'error'>('loading')
 let notificationVersion = 0
 const pageRoot = ref<HTMLElement | null>(null)
+const isIdentityCovered = ref(readIdentityVaultState() !== 'unlocked')
 const drawer = ref<HTMLElement | null>(null)
 const sidebarTrigger = ref<HTMLButtonElement | null>(null)
 const isAlive = ref(true)
@@ -119,9 +123,13 @@ const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
 }, {
   id: 'plugins', label: t.value.workspace.plugins.pluginsTitle, count: agentPluginCount.value,
 }])
-// Agent 设置 / 新建共用同一个对话框;模式决定多显示模板选择还是删除区。
+// Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
-const agentEditorMode = ref<'create' | 'edit'>('edit')
+const agentEditorSecurityTab = ref(false)
+const isIdentityUnlocked = ref(false)
+const isPairingOpen = ref(false)
+const pairingSessionId = ref('')
+const pairingLinkSecret = ref('')
 const agentEditorBusy = ref(false)
 const agentEditorError = ref('')
 // 编辑保存成功后递增:对话框据此重置脏状态基线并显示「已保存」。新建成功后仍关闭。
@@ -1620,32 +1628,92 @@ function retryAgents(): void {
 }
 
 function openAgentSettings(): void {
-  agentEditorMode.value = 'edit'
+  agentEditorSecurityTab.value = false
   agentEditorError.value = ''
   isAgentEditorOpen.value = true
 }
+function clearPairingHash(): void {
+  const query = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  query.delete('pair')
+  query.delete('secret')
+  const suffix = query.toString()
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/workspace${suffix === '' ? '' : `?${suffix}`}`)
+}
+function resetPairingInvite(): void {
+  clearPairingHash()
+  pairingSessionId.value = ''
+  pairingLinkSecret.value = ''
+}
 function openAgentCreate(): void {
-  agentEditorMode.value = 'create'
-  agentEditorError.value = ''
-  isAgentEditorOpen.value = true
+  isAgentEditorOpen.value = false
+  resetPairingInvite()
+  isPairingOpen.value = true
+}
+function openAgentRePair(): void {
+  // 设置保持打开,上层配对取消后由原生 dialog 将焦点交回重新配对按钮。
+  resetPairingInvite()
+  isPairingOpen.value = true
+}
+function closePairing(): void {
+  isPairingOpen.value = false
+  clearPairingHash()
+}
+function syncPairingHash(): void {
+  if (!isIdentityUnlocked.value) return
+  const query = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  const id = query.get('pair') ?? ''
+  if (id === '') return
+  if (!isPairingOpen.value) isAgentEditorOpen.value = false
+  pairingSessionId.value = id
+  pairingLinkSecret.value = query.get('secret') ?? ''
+  isPairingOpen.value = true
+}
+function onPairingLink(id: string, secret: string): void {
+  const query = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  query.set('pair', id)
+  query.set('secret', secret)
+  const hash = `#/workspace?${query}`
+  if (window.location.hash === hash) syncPairingHash()
+  else window.location.hash = hash
+}
+async function onIdentityUnlocked(): Promise<void> {
+  isIdentityCovered.value = false
+  isIdentityUnlocked.value = true
+  syncPairingHash()
+  await nextTick()
+  if (!isPairingOpen.value) pageRoot.value?.focus({ preventScroll: true })
+}
+function onIdentityLocked(): void {
+  isIdentityCovered.value = true
+  isIdentityUnlocked.value = false
+  isAgentEditorOpen.value = false
+  closePairing()
+}
+function onAgentIdentityUpdated(summary: AgentSummary): void {
+  agents.value = agents.value.map((agent) => agent.id === summary.id ? summary : agent)
+}
+async function onAgentPaired(summary: AgentSummary, details: boolean): Promise<void> {
+  isAgentEditorOpen.value = false
+  agents.value = [...agents.value.filter((agent) => agent.id !== summary.id), summary]
+  closePairing()
+  announcePlacement(t.value.workspace.agentAdmin.created.replace('{name}', summary.name))
+  await onSelectAgent(summary.id)
+  if (details) {
+    agentEditorSecurityTab.value = true
+    agentEditorError.value = ''
+    await nextTick()
+    isAgentEditorOpen.value = true
+  }
 }
 async function onSubmitAgent(config: AgentConfig): Promise<void> {
   if (agentEditorBusy.value) return
   agentEditorBusy.value = true
   agentEditorError.value = ''
-  const creating = agentEditorMode.value === 'create'
-  const result = creating ? await createAgent(config) : await updateAgent(selectedAgent.value, config)
+  const result = await updateAgent(selectedAgent.value, config)
   agentEditorBusy.value = false
   if (!isAlive.value) return
   if (!result.ok) { agentEditorError.value = result.error.message; return }
   const summary = result.value
-  if (creating) {
-    agents.value = [...agents.value, summary]
-    isAgentEditorOpen.value = false
-    announcePlacement(t.value.workspace.agentAdmin.created.replace('{name}', summary.name))
-    await onSelectAgent(summary.id)
-    return
-  }
   agents.value = agents.value.map((agent) => (agent.id === summary.id ? summary : agent))
   // 保存是 Apply 语义:不关闭对话框,让用户继续配置其它项;由对话框内联状态提示结果。
   agentEditorSavedToken.value += 1
@@ -2405,6 +2473,7 @@ async function loadNotifications(): Promise<void> {
 
 onMounted(() => {
   applyDemoState(currentRoute.value.demoState)
+  window.addEventListener('hashchange', syncPairingHash)
   // 先取 Agent 身份(它决定工作台属于谁),再装载工作台。
   void loadAgents().then(() => {
     if (selectedAgent.value === '') return
@@ -2422,6 +2491,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   isAlive.value = false
+  window.removeEventListener('hashchange', syncPairingHash)
   for (const timer of streamTimers.values()) clearInterval(timer)
   streamTimers.clear()
   clearTimeout(pulseTimer)
@@ -2439,7 +2509,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main id="main" ref="pageRoot" class="workspace-page dl-scope dl-scope--dark">
+  <main id="main" ref="pageRoot" tabindex="-1" class="workspace-page dl-scope dl-scope--dark" :class="{ 'is-identity-covered': isIdentityCovered }">
     <!-- 全页唯一的 h1(视觉隐藏):可见标题由 tab 承担,而 tab 是 widget 不是标题,整页不能因此
          丢掉 h1(否则侧栏的 h2 会成为大纲起点)。它住在**页面级**:空区域消失后根区域可能根本
          没有会话头,住在会话头里的地标会跟着一起消失 —— 那样整页 h1 数就不再恒为 1。 -->
@@ -2452,7 +2522,7 @@ onBeforeUnmount(() => {
         :aria-modal="isNarrow && isDrawerOpen ? true : undefined" :aria-label="t.workspace.workspacePanel"
       >
         <!-- 侧栏顶部 = Agent 身份区(标记 + 名称 + 备注)、它的设置齿轮与抽屉关闭钮。
-             新建 Agent 的入口在身份菜单底部 —— 与「切换身份」同处一个动作组,不额外占一行。 -->
+             添加 Agent 的入口在身份菜单底部 —— 与「切换身份」同处一个动作组,不额外占一行。 -->
         <div class="sidebar-head">
           <AgentContextSwitcher
             v-if="agents.length > 0"
@@ -2842,12 +2912,15 @@ onBeforeUnmount(() => {
       </Transition>
       <WorkspaceDock :groups="minimizedGroupsOf(layout)" :windows="layout.windows" :sessions="sessions" :status-of="sessionStatusOf" :projects="notificationProjects" :agents="agents" :agent-id="selectedAgent" :notifications="agentNotifications" :system-notifications="systemNotifications" :notifications-status="notificationsStatus" :seen-sessions="seenSessions" :disabled="isBusy" :format-time="formatTime" :pulse-key="pulseGroupId" @restore="restoreDockGroup" @close="closeDockGroup" @notification="openNotification" @retry="retryNotifications" @mark-system-read="markSystemNoticeRead" @mark-all-read="markAllNotificationsRead" />
     </div>
+    <IdentityVaultDialog @revealing="isIdentityCovered = false" @unlocked="onIdentityUnlocked" @locked="onIdentityLocked" @reset="loadAgents" @announce="announcePlacement" />
+    <AgentPairingDialog :open="isPairingOpen" :session-id="pairingSessionId" :link-secret="pairingLinkSecret" :re-pair="isAgentEditorOpen" @manual="resetPairingInvite" @cancel="closePairing" @added="onAgentPaired" @link="onPairingLink" />
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <AgentEditorDialog
-      :open="isAgentEditorOpen" :mode="agentEditorMode"
-      :agent="agentEditorMode === 'edit' ? currentAgent : undefined"
+      :open="isAgentEditorOpen" :security-tab="agentEditorSecurityTab"
+      :agent="currentAgent"
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
+      @identity-updated="onAgentIdentityUpdated" @re-pair="openAgentRePair"
     />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
          以及空对话时改归属。它挂在页面级、position: fixed,锚点是触发元素交上来的视口矩形
@@ -2885,6 +2958,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 入场 surface 可透明，但底下的工作内容在退出开始前不可见；不建立 fixed 包含块。 */
+.workspace-page.is-identity-covered > :not(dialog) { visibility: hidden; }
+.workspace-page:focus { outline: none; }
 .workspace-page {
   /* 组件级布局常量，不是全局设计 token；侧栏与窄屏抽屉共享同一宽度。 */
   --workspace-sidebar-width: 300px;

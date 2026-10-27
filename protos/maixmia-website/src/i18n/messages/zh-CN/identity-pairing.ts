@@ -1,0 +1,23 @@
+export const identityPairing = {
+  gate: {
+    eyebrow: 'MIA IDENTITY', unlockHint: '用 Passkey 在此设备解密身份密钥，安全进入你的工作台。',
+    trustLabel: '身份保护', trustDevice: 'Passkey 不离开设备', trustLocal: '本地解密', trustPrivate: 'Mia 无法读取',
+    footer: '此设备 · {count} 把 Passkey · 身份 v{version}', help: '无法解锁？', loadingHint: '正在准备这台设备的安全解锁。',
+    passkeyTitle: '验证你的 Passkey', passkeyHint: '使用 Touch ID、Windows Hello 或设备 PIN 确认。',
+    startVerification: '开始验证', verifying: '正在验证…', demoHint: '本原型不会调用真实 Passkey，验证仅作演示。',
+    successTitle: '身份已解锁', successHint: '正在进入工作台…', recoveryHint: '输入创建身份时保存的恢复密钥。它不会发送给 Mia。', back: '返回',
+    resetHint: '这会生成一个全新的身份密钥。', resetAgents: '所有 Agent 需要逐台重新配对', resetHistory: '旧加密历史不可恢复', resetIrreversible: '此操作不可撤销',
+    acknowledge: '我明白旧加密历史不可恢复', errorTitle: '身份暂时不可用',
+  },
+  title: '身份与安全', unlockTitle: '解锁你的身份密钥', unlockHint: '你的私钥以密文保存在 Mia。用 Passkey 在这台设备上解锁，Mia 无法读取。',
+  passkeyUnlock: '使用 Passkey 解锁', mockPasskey: '模拟 Passkey 验证', mockSuccess: '模拟验证成功', recovery: '使用恢复密钥', recoveryLabel: '恢复密钥', recoveryHint: '原型演示密钥', unlock: '解锁身份', unlocking: '正在解锁…', lock: '锁定身份', signOut: '退出登录',
+  resetEntry: '无法解锁？重置身份', reset: '重置身份', resetHint: '会生成全新身份，所有 Agent 需要逐台重新配对；旧加密历史不可恢复。此操作不可撤销。', resetConfirm: '确认重置身份', resetDone: '身份已重置，请逐台重新配对 Agent', cancel: '取消', close: '关闭', retry: '重试', loading: '正在读取身份…', unavailable: '暂时无法读取身份，请重试或退出登录。',
+  fingerprint: '公钥指纹', version: '密钥版本', passkeys: 'Passkey', noPasskeys: '尚未配置 Passkey，请先使用恢复密钥。', source: '来源', thisDevice: '本设备', otherDevice: '其他设备', prf: '支持 PRF', noPrf: '不支持 PRF', lastUsed: '上次使用', notUsed: '尚未使用', recoveryConfigured: '恢复密钥已配置', recoveryMissing: '未配置恢复密钥',
+  browserMode: '当前为浏览器托管模式', browserBoundary: '平台下发恶意 JS 是纯 Web 的边界。严格模式（独立密钥域 / 浏览器扩展 / 桌面安全助手）后续提供，当前不实现。', strict: '了解严格模式（后续提供）', strictHint: '严格模式尚未提供；本原型不创建独立密钥域。', demo: '原型演示', mockHint: '此处不调用真实 Passkey、PRF 或密码学。刷新即重置。',
+  recoveryError: '恢复密钥不正确，请使用提示中的演示密钥重试。', lockedError: '身份已锁定，请先解锁再配对。',
+  add: '添加 Agent', stepFind: '① 找到 Agent / 输入配对码', stepReview: '② 确认身份', stepComplete: '③ 完成',
+  findHint: '优先打开 Agent 提供的一次性配对链接或扫描二维码。链接携带 256-bit 一次性秘密，仅用于本次配对。', manualTitle: '手动输入', manualHint: '在 Agent 上打开配对，输入它显示的 10 位配对码', codeLabel: '10 位配对码', codeWarning: '只输入你刚刚启动的 Agent 显示的配对码。不要输入别人发给你的码。', submitCode: '查找 Agent', connecting: '正在建立一次性配对连接…', safetyCode: '安全码', safetyMatch: '安全码一致', confirmPasskey: '用 Passkey 确认并添加', disconnect: '取消并断开', waiting: '等待 Agent 端确认…', waitingHint: '请在 Agent 自己的终端 / 桌面 App 上允许本次配对。首次配对必须本机确认；headless 自动化可显式使用 --yes（仅说明）。', alreadyTrusted: '这个 Agent 已认识你的身份密钥，确认即可', complete: 'Agent 已允许配对', completeHint: '为它设置一个方便识别的名称，完成后写入信任记录。', name: '名称', note: '备注（可选）', finish: '完成', details: '查看安全详情', device: '设备', platform: '平台', expires: '有效至',
+  noAgent: '没有正在运行的 Agent？打开模拟 Agent 端', mockAgentTitle: '原型演示 · Agent 端', mockAgentHint: '真实产品中在 Agent 自己的终端 / 桌面 App。Agent 运行在你的设备或自有主机，本原型不启动真实进程。', newAgent: '全新 Agent', existingAgent: '以前用过的 Agent（研究助手）', generate: '生成配对邀请', link: '一次性配对链接', copyLink: '复制链接', copyCode: '复制配对码', copied: '已复制', copyFailed: '无法访问剪贴板，请手动选择复制。', qr: '二维码仅作示意', openLink: '打开配对链接', agentWaiting: '等待浏览器连接', agentConnected: '浏览器已提交，请本机确认', userFingerprint: '用户身份指纹', allow: '允许', deny: '拒绝', allowed: '已配对', denied: '已拒绝', noInvitation: '尚未生成邀请。选择模式后生成一个一次性邀请。', expireDemo: '模拟链接过期', networkDemo: '模拟网络失败',
+  invalidCode: '配对码格式不正确，请输入 10 位字母或数字。', notFound: '找不到这个配对码，请检查 Agent 屏幕或生成新邀请。', expired: '配对链接或码已过期，请在 Agent 端重新生成邀请。', used: '此配对邀请已使用，请在 Agent 端生成新邀请。', tooMany: '尝试过多，请取消并在 Agent 端生成新邀请。', agentDenied: 'Agent 拒绝了配对。请核对设备，再生成新邀请。', networkError: '网络连接失败，请重试；也可取消后重新生成邀请。', secretError: '链接的一次性秘密缺失或不匹配，请使用 Agent 提供的完整链接。', invalidState: '当前配对状态不支持此操作，请重新生成邀请。',
+  trusted: '已信任', keyChanged: '密钥已变化', revoked: '已解除', trustWarning: '信任关系不可用，请重新配对；不要仅凭名称信任设备。', rePair: '重新配对', rePairHint: '将更新现有 Agent 的信任记录。请使用这台 Agent 新生成的邀请。', pairedAt: '配对时间', lastSeen: '最后在线', trustRecord: '信任记录', recordId: '记录编号', logIndex: '透明日志条目', hash: '记录哈希', signed: '由你的密钥签名', simulatedRecord: '原型中签名、日志与哈希均为模拟记录。', copyFingerprint: '复制指纹', verify: '验证安全码', compared: '我已对照 Agent 屏幕', verified: '已完成本次人工对照', revoke: '解除关联', revokeHint: '解除后保留 Agent 记录，但不再信任这台设备。确认后进行模拟 Passkey 验证。', revokeConfirm: '确认解除关联', reconnectHint: '要重新连接，请使用「添加 Agent」。', busy: '正在处理…',
+}

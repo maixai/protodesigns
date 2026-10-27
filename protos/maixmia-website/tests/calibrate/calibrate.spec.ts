@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
 
@@ -680,6 +681,7 @@ test('顶栏滚动时固定在视口顶端', async ({ page }) => {
   // 忽略登录过程,同步成为已登录态并进入工作台。
   await login.click()
   await expect(page).toHaveURL(/#\/workspace$/)
+  await unlockDemoIdentity(page)
   // 会话头 h1 = 当前会话任务名(activeId 默认 weekly),不再是固定的页面名。
   await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
   await expect(header.getByRole('button', { name: 'Account menu: 林一舟' })).toBeVisible()

@@ -69,7 +69,78 @@ import {
 } from '../mocks/workspace'
 import type { Result } from './result'
 
+import type { IdentityVault } from '../contracts/generated/identity-vault'
+import type { PairingSession } from '../contracts/generated/pairing-session'
+import { DEMO_RECOVERY_KEY, mockIdentityVault, mockUnlockIdentity, mockLockIdentity, mockResetIdentity } from '../mocks/identity'
+import { mockInvalidateAgentTrust } from '../mocks/workspace'
+import { mockReadPairing, mockCreatePairing, mockConnectPairingLink, mockSubmitPairingCode, mockRequestPairingApproval, mockAllowPairing, mockCancelPairing, mockConfirmPairing, mockRevokeAgent, mockExpirePairing } from '../mocks/pairing'
+
 const { t } = useI18n()
+
+export async function getIdentityVault(): Promise<Result<IdentityVault>> {
+  await delay()
+  return { ok: true, value: mockIdentityVault() }
+}
+export async function unlockIdentityVault(method: 'passkey' | 'recoveryKey', secret: string): Promise<Result<IdentityVault>> {
+  await delay(750)
+  if (method === 'recoveryKey' && secret.trim() !== DEMO_RECOVERY_KEY) return { ok: false, error: new Error(t.value.workspace.security.recoveryError) }
+  return { ok: true, value: mockUnlockIdentity() }
+}
+export async function lockIdentityVault(): Promise<Result<IdentityVault>> {
+  await delay()
+  return { ok: true, value: mockLockIdentity() }
+}
+export async function resetIdentity(): Promise<Result<IdentityVault>> {
+  await delay()
+  mockInvalidateAgentTrust()
+  return { ok: true, value: mockResetIdentity() }
+}
+export async function createMockPairingSession(mode: 'new' | 'existing'): Promise<Result<PairingSession>> {
+  await delay()
+  return { ok: true, value: mockCreatePairing(mode) }
+}
+export async function getPairingSession(sessionId: string): Promise<Result<PairingSession>> {
+  await delay()
+  return mockReadPairing(sessionId)
+}
+export async function connectPairingLink(sessionId: string, secret: string): Promise<Result<PairingSession>> {
+  await delay(900)
+  return mockConnectPairingLink(sessionId, secret)
+}
+export async function submitPairingCode(sessionId: string, code: string): Promise<Result<PairingSession>> {
+  await delay(900)
+  return mockSubmitPairingCode(sessionId, code)
+}
+export async function requestPairingApproval(sessionId: string): Promise<Result<PairingSession>> {
+  await delay(900)
+  return mockRequestPairingApproval(sessionId)
+}
+export async function confirmPairing(sessionId: string, displayName: string, note: string): Promise<Result<AgentSummary>> {
+  await delay()
+  return mockConfirmPairing(sessionId, displayName, note)
+}
+export async function cancelPairing(sessionId: string): Promise<Result<PairingSession>> {
+  await delay()
+  return mockCancelPairing(sessionId)
+}
+export async function allowPairing(sessionId: string): Promise<Result<PairingSession>> {
+  await delay()
+  return mockAllowPairing(sessionId, true)
+}
+export async function denyPairing(sessionId: string): Promise<Result<PairingSession>> {
+  await delay()
+  return mockAllowPairing(sessionId, false)
+}
+export async function revokeAgent(agentId: AgentId): Promise<Result<AgentSummary>> {
+  await delay()
+  if (mockIdentityVault().state !== 'unlocked') return { ok: false, error: new Error(t.value.workspace.security.lockedError) }
+  return mockRevokeAgent(agentId)
+}
+// 演示面板专用故障注入,不代表生产 API。
+export async function expireMockPairing(sessionId: string, networkFailure = false): Promise<Result<PairingSession>> {
+  await delay()
+  return mockExpirePairing(sessionId, networkFailure)
+}
 
 // ---- Agent 身份 ----
 
@@ -146,7 +217,6 @@ function invalidThinkingBudget(tokens: number): boolean {
 export async function createAgent(config: AgentConfig): Promise<Result<AgentSummary>> {
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
-  if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
   if (!sourceReady(config.model.source)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.sourceRequired) }
   if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
   if (invalidSourceModels(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelUnavailable) }
@@ -160,7 +230,6 @@ export async function createAgent(config: AgentConfig): Promise<Result<AgentSumm
 export async function updateAgent(agentId: AgentId, config: AgentConfig): Promise<Result<AgentSummary>> {
   await delay()
   if (!config.name.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
-  if (!config.note.trim()) return { ok: false, error: new Error(t.value.workspace.agentAdmin.noteRequired) }
   if (!sourceReady(config.model.source)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.sourceRequired) }
   if (config.model.defaultModelId.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelRequired) }
   if (invalidSourceModels(config)) return { ok: false, error: new Error(t.value.workspace.agentAdmin.modelUnavailable) }

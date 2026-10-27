@@ -50,7 +50,7 @@ function select(agent: AgentId): void {
   emit('select', agent)
 }
 // 先把焦点还给触发钮再请求创建:随后打开的对话框会把它记作「关闭后回到这里」。
-function createAgent(): void {
+function addAgent(): void {
   close(true)
   emit('create')
 }
@@ -93,7 +93,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
     <button ref="trigger" type="button" class="agent-context-switcher__trigger" :data-agent="value" :aria-label="triggerLabel" :aria-expanded="isOpen" aria-controls="agent-context-panel" @click="toggle">
       <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}</span>
       <span class="agent-context-switcher__body">
-        <span class="agent-context-switcher__name">{{ current?.name ?? '' }}</span>
+        <span class="agent-context-switcher__name">{{ current?.name ?? '' }}<span v-if="current && current.identity.trustState !== 'trusted'" class="agent-context-switcher__trust"> · ! {{ t.workspace.security[current.identity.trustState] }}</span></span>
         <span class="agent-context-switcher__note">{{ current?.note ?? '' }}</span>
       </span>
       <svg class="agent-context-switcher__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
@@ -104,13 +104,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         <button v-for="agent in agents" :key="agent.id" type="button" class="agent-context-switcher__option" :data-agent="agent.id" :aria-current="agent.id === value ? 'true' : undefined" @click="select(agent.id)">
           <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}</span>
           <span class="agent-context-switcher__option-body">
-            <span class="agent-context-switcher__option-name">{{ agent.name }}</span>
+            <span class="agent-context-switcher__option-name">{{ agent.name }}<span v-if="agent.identity.trustState !== 'trusted'" class="agent-context-switcher__trust"> · ! {{ t.workspace.security[agent.identity.trustState] }}</span></span>
             <span class="agent-context-switcher__option-note">{{ agent.note }}</span>
           </span>
           <svg v-if="agent.id === value" class="agent-context-switcher__check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 9-9" /></svg>
         </button>
         <div class="agent-context-switcher__footer">
-          <button type="button" class="agent-context-switcher__add" @click="createAgent">
+          <button type="button" class="agent-context-switcher__add" @click="addAgent">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             <span>{{ t.workspace.agentSwitcher.create }}</span>
           </button>
@@ -125,6 +125,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 </template>
 
 <style scoped>
+.agent-context-switcher__trust { color: var(--dl-warning); font-size: var(--dl-font-size-xs); }
 /* 触发钮是底栏横向密集行的行内控件:32px 档,圆角矩形(--dl-radius-md)。
    它坐在底栏的 elevated 底上,故只用发丝描边 + hover 变色来表明可点。 */
 .agent-context-switcher { position: relative; flex: none; min-width: 0; z-index: var(--dl-z-overlay); }
@@ -149,7 +150,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .agent-context-switcher__check path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .agent-context-switcher__option[aria-current='true'] { background: var(--dl-accent-soft); }
 .agent-context-switcher__option[aria-current='true'] .agent-context-switcher__option-mark { background: var(--dl-bg-elevated); color: var(--dl-text-primary); }
-/* 菜单底部的「新建 Agent」:与上面的身份选项用一条发丝线分开 —— 它是动作,不是另一个身份。 */
+/* 菜单底部的「添加 Agent」:与上面的身份选项用一条发丝线分开 —— 它是动作,不是另一个身份。 */
 .agent-context-switcher__footer { margin-block-start: var(--dl-space-1); padding-block-start: var(--dl-space-1); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 .agent-context-switcher__add { display: flex; align-items: center; gap: var(--dl-space-2); inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); text-align: left; }
 .agent-context-switcher__add svg { inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); }

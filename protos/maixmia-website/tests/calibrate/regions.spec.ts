@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 // 单元 C2:区域切分。
 //
 // 两层断言:
@@ -196,6 +197,7 @@ test('dockWindow 到一个子区域:成员落在那块区域上,不变量恒为�
 async function login(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  await unlockDemoIdentity(page)
   await expect(page).toHaveURL(/#\/workspace$/)
 }
 

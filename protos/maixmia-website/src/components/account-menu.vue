@@ -6,6 +6,8 @@ import { session, signOut } from '../auth/session'
 import { useI18n } from '../i18n'
 import { toInitials } from './account-avatar'
 import ConfirmDialog from './confirm-dialog.vue'
+import { currentRoute } from '../router'
+import { requestIdentitySecurity, requestIdentityLock } from '../auth/identity'
 
 const props = withDefaults(defineProps<{ placement?: 'down' | 'up' }>(), { placement: 'down' })
 const emit = defineEmits<{ 'signed-out': [] }>()
@@ -116,6 +118,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
           <span class="account-menu__email">{{ profile?.email }}</span>
         </div>
         <a class="account-menu__item" :href="'#/workspace'" @click="close(true)">{{ t.account.workspace }}</a>
+        <template v-if="currentRoute.page === 'workspace'">
+          <button class="account-menu__item" type="button" @click="close(true); requestIdentitySecurity()">{{ t.workspace.security.title }}</button>
+          <button class="account-menu__item" type="button" @click="close(true); requestIdentityLock()">{{ t.workspace.security.lock }}</button>
+        </template>
         <div class="account-menu__separator" aria-hidden="true" />
         <button class="account-menu__item" type="button" @click="onRequestSignOut">{{ t.account.signOut }}</button>
       </div>

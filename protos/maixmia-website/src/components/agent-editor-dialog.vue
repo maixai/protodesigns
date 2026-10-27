@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Agent 设置与新建共用基本 / 模型两页;模板只填身份,模型配置独立保存。
+// Agent 设置包含基本、模型与身份安全;添加 Agent 由独立的配对流程承担。
 //
 // 用原生 dialog.showModal():自带焦点陷阱、Esc 与 aria-modal;top layer 内仍继承
 // .dl-scope--dark 的 CSS 变量,故不 Teleport。
@@ -18,11 +18,12 @@ import SelectField from './select-field.vue'
 import SubscriptionUsage from './subscription-usage.vue'
 import SubscriptionAuthFlow from './subscription-auth-flow.vue'
 import ModelSourceContext from './model-source-context.vue'
+import AgentIdentitySecurity from './agent-identity-security.vue'
 
 const props = defineProps<{
   open: boolean
-  mode: 'create' | 'edit'
-  // 编辑模式的当前 Agent;创建模式不需要。
+  securityTab: boolean
+  // 当前编辑的 Agent。
   agent?: AgentSummary | undefined
   canDelete: boolean
   busy: boolean
@@ -33,6 +34,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   submit: [config: AgentConfig]
   delete: []
+  identityUpdated: [agent: AgentSummary]
+  rePair: []
   cancel: []
 }>()
 
@@ -51,13 +54,12 @@ interface SelectOption {
 }
 
 const dialogRef = ref<HTMLDialogElement | null>(null)
-const nameRef = ref<HTMLInputElement | null>(null)
 const returnFocusRef = ref<HTMLElement | null>(null)
 const confirmingDelete = ref(false)
 const name = ref('')
 const note = ref('')
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
-const activeTab = ref<'basic' | 'model'>('basic')
+const activeTab = ref<'basic' | 'model' | 'security'>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
 const activeModelSection = ref<ModelSection>('defaults')
 const bodyRef = ref<HTMLElement | null>(null)
@@ -76,45 +78,35 @@ watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
 }, { flush: 'post' })
 const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
-const selectedTemplate = ref('')
+const securityTabRef = ref<HTMLButtonElement | null>(null)
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 const saveStateId = `${dialogId}-save-state`
 
-type TemplateId = 'planning' | 'research' | 'writing' | 'custom'
-const templates = computed<{ id: TemplateId; label: string; hint: string }[]>(() => [
-  { id: 'planning', label: t.value.workspace.agentAdmin.templatePlanning, hint: t.value.workspace.agentAdmin.templatePlanningHint },
-  { id: 'research', label: t.value.workspace.agentAdmin.templateResearch, hint: t.value.workspace.agentAdmin.templateResearchHint },
-  { id: 'writing', label: t.value.workspace.agentAdmin.templateWriting, hint: t.value.workspace.agentAdmin.templateWritingHint },
-  { id: 'custom', label: t.value.workspace.agentAdmin.templateCustom, hint: t.value.workspace.agentAdmin.templateCustomHint },
-])
-
-const isCreate = computed(() => props.mode === 'create')
-const title = computed(() => (isCreate.value ? t.value.workspace.agentAdmin.createTitle : t.value.workspace.agentAdmin.settingsTitle))
-const hint = computed(() => isCreate.value ? t.value.workspace.agentAdmin.createHint : t.value.workspace.agentAdmin.settingsHint)
-// 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净;新建模式不套用。
+const title = computed(() => t.value.workspace.agentAdmin.settingsTitle)
+const hint = computed(() => t.value.workspace.agentAdmin.settingsHint)
+// 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
 const baselineSerialized = ref('')
 const baselineSourceId = ref('')
-const sourceDraftChanged = computed(() => !isCreate.value && modelConfig.value.source.activeSourceId !== baselineSourceId.value)
+const sourceDraftChanged = computed(() => modelConfig.value.source.activeSourceId !== baselineSourceId.value)
 const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
-const isDirty = computed(() => !isCreate.value && (gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
-const isValid = computed(() => name.value.trim() !== '' && note.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
+const isDirty = computed(() => (gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
+const isValid = computed(() => name.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
 type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'attention' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
   if (props.busy) return 'saving'
   if (props.error !== '') return 'error'
-  if (!isCreate.value && !isDirty.value && savedAt.value !== '') return 'saved'
+  if (!isDirty.value && savedAt.value !== '') return 'saved'
   // 来源不可用时保存被拦下,页脚必须直接说明原因,不能只说「有未保存的更改」。
   if (!sourceReady.value) return 'blocked'
   // 有模型不在当前来源时,页脚给出一句轻量原因;具体位置由 tab 上的警示图标指出。
   if (hasUnavailableSourceModels.value) return 'attention'
   if (!isValid.value) return 'incomplete'
-  if (!isCreate.value) return isDirty.value ? 'dirty' : 'clean'
-  return 'incomplete'
+  return isDirty.value ? 'dirty' : 'clean'
 })
 const saveStateLabel = computed(() => {
   const copy = t.value.workspace.agentAdmin
@@ -418,7 +410,7 @@ function sourceRowReady(row: SourceRow): boolean {
 }
 const sourceReady = computed(() => activeSource.value !== undefined && sourceRowReady(activeSource.value))
 // 保存还要求来源可用:没有可用来源时不允许把模型配置写回。
-const canSubmit = computed(() => isValid.value && !props.busy && (isCreate.value || isDirty.value) && sourceReady.value && authorizationFlow.value === null)
+const canSubmit = computed(() => isValid.value && !props.busy && isDirty.value && sourceReady.value && authorizationFlow.value === null)
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
@@ -434,13 +426,13 @@ function sourceActionsLabel(row: SourceRow): string {
 }
 // 已保存来源与草稿选择独立:选择其它行不会提前移动生效标记。
 function isSourceCurrent(row: SourceRow): boolean {
-  return isCreate.value ? isSourceSelected(row) : row.id === baselineSourceId.value
+  return row.id === baselineSourceId.value
 }
 function isSourceSelected(row: SourceRow): boolean {
   return row.id === modelConfig.value.source.activeSourceId
 }
 function isSourcePending(row: SourceRow): boolean {
-  return !isCreate.value && isSourceSelected(row) && row.id !== baselineSourceId.value
+  return isSourceSelected(row) && row.id !== baselineSourceId.value
 }
 const editingSubscription = computed(() => editingSubscriptionId.value === ''
   ? undefined
@@ -1187,17 +1179,21 @@ function removeFallback(index: number): void {
   modelConfig.value = { ...modelConfig.value, fallbackModelIds: modelConfig.value.fallbackModelIds.filter((_, itemIndex) => itemIndex !== index) }
 }
 
-async function activateTab(tab: 'basic' | 'model', focus = false): Promise<void> {
+async function activateTab(tab: 'basic' | 'model' | 'security', focus = false): Promise<void> {
   activeTab.value = tab
   await nextTick()
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
-  if (focus) (tab === 'basic' ? basicTabRef.value : modelTabRef.value)?.focus()
+  if (focus) (tab === 'basic' ? basicTabRef.value : tab === 'model' ? modelTabRef.value : securityTabRef.value)?.focus()
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
-  const tab = event.key === 'Home' ? 'basic' : event.key === 'End' ? 'model'
-    : event.key === 'ArrowLeft' || event.key === 'ArrowRight' ? (activeTab.value === 'basic' ? 'model' : 'basic') : null
-  if (tab === null) return
+  const tabs = ['basic', 'model', 'security'] satisfies (typeof activeTab.value)[]
+  const current = tabs.indexOf(activeTab.value)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : event.key === 'ArrowRight' ? (current + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (current + tabs.length - 1) % tabs.length : -1
+  const tab = tabs[index]
+  if (tab === undefined) return
   event.preventDefault()
   void activateTab(tab, true)
 }
@@ -1238,7 +1234,6 @@ function onModelSectionKeydown(event: KeyboardEvent): void {
 function reset(): void {
   abortAuthorization(false)
   confirmingDelete.value = false
-  selectedTemplate.value = ''
   name.value = props.agent?.name ?? ''
   note.value = props.agent?.note ?? ''
   const saved = props.agent?.model
@@ -1255,8 +1250,7 @@ function reset(): void {
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
   // 编辑设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
-  // 新建仍从基本页开始,先填模板与身份。
-  activeTab.value = isCreate.value ? 'basic' : 'model'
+  activeTab.value = props.securityTab ? 'security' : 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
   sourceQuery.value = ''
@@ -1279,18 +1273,6 @@ function reset(): void {
   savedAt.value = ''
   savedAnnouncement.value = ''
   seenSavedToken.value = props.savedToken
-}
-
-function applyTemplate(id: TemplateId): void {
-  selectedTemplate.value = id
-  if (id === 'custom') {
-    name.value = ''
-    note.value = ''
-    return
-  }
-  // 模板只是界面的默认值:填进去之后仍是普通输入框,用户可以改。
-  name.value = t.value.workspace.agents[id]
-  note.value = t.value.workspace.agentNotes[id]
 }
 
 function finish(action: 'submit' | 'cancel' | 'delete'): void {
@@ -1339,7 +1321,6 @@ function onBackdropClick(event: MouseEvent): void {
 watch(() => props.savedToken, (token) => {
   if (token === seenSavedToken.value) return
   seenSavedToken.value = token
-  if (isCreate.value) return
   baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
   baselineSourceId.value = modelConfig.value.source.activeSourceId
   savedAt.value = formatSavedAt()
@@ -1368,8 +1349,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   reset()
   await nextTick()
   dialog.showModal()
-  // 新建从可见名称开始;编辑从当前模型分区开始,不聚焦隐藏的基本页控件。
-  if (isCreate.value) nameRef.value?.focus()
+  if (activeTab.value === 'security') securityTabRef.value?.focus()
   else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
 }, { immediate: true })
 
@@ -1389,7 +1369,7 @@ onBeforeUnmount(() => {
   >
     <div class="agent-editor__head">
       <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
-      <span v-if="!isCreate && agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
+      <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
       <p v-if="hint !== ''" :id="hintId" class="agent-editor__hint">{{ hint }}</p>
     </div>
 
@@ -1405,6 +1385,10 @@ onBeforeUnmount(() => {
           :aria-selected="activeTab === 'model'" :aria-controls="`${dialogId}-panel-model`"
           :tabindex="activeTab === 'model' ? 0 : -1" @click="activateTab('model')"
         >{{ t.workspace.agentAdmin.tabModel }}</button>
+        <button :id="`${dialogId}-tab-security`" ref="securityTabRef" type="button" role="tab"
+          :aria-selected="activeTab === 'security'" :aria-controls="`${dialogId}-panel-security`"
+          :tabindex="activeTab === 'security' ? 0 : -1" @click="activateTab('security')"
+        >{{ t.workspace.security.title }}</button>
       </div>
       <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
       <button
@@ -1414,36 +1398,25 @@ onBeforeUnmount(() => {
     </div>
 
     <div ref="bodyRef" class="agent-editor__body">
+      <div v-if="activeTab === 'security'" :id="`${dialogId}-panel-security`" class="agent-editor__panel" role="tabpanel" :aria-labelledby="`${dialogId}-tab-security`" tabindex="0">
+        <AgentIdentitySecurity v-if="agent" :agent="agent" @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" />
+      </div>
       <div
         v-show="activeTab === 'basic'" :id="`${dialogId}-panel-basic`" class="agent-editor__panel"
         role="tabpanel" :aria-labelledby="`${dialogId}-tab-basic`" tabindex="0"
       >
-      <fieldset v-if="isCreate" class="agent-editor__templates">
-        <legend class="agent-editor__legend">{{ t.workspace.agentAdmin.templates }}</legend>
-        <div class="template-grid">
-          <button
-            v-for="template in templates" :key="template.id" type="button"
-            class="template-card" :aria-pressed="selectedTemplate === template.id"
-            :disabled="busy" @click="applyTemplate(template.id)"
-          >
-            <span class="template-card__label">{{ template.label }}</span>
-            <span class="template-card__hint">{{ template.hint }}</span>
-          </button>
-        </div>
-      </fieldset>
-
       <div class="agent-editor__fields">
         <label class="field">
           <span class="field__label">{{ t.workspace.agentAdmin.name }}</span>
-          <input ref="nameRef" v-model="name" :disabled="busy" required type="text" class="field__input" maxlength="40" :placeholder="t.workspace.agentAdmin.namePlaceholder" autocomplete="off">
+          <input v-model="name" :disabled="busy" required type="text" class="field__input" maxlength="40" :placeholder="t.workspace.agentAdmin.namePlaceholder" autocomplete="off">
         </label>
         <label class="field">
           <span class="field__label">{{ t.workspace.agentAdmin.note }}</span>
-          <input v-model="note" :disabled="busy" required type="text" class="field__input" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
+          <input v-model="note" :disabled="busy" type="text" class="field__input" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
         </label>
       </div>
 
-      <section v-if="!isCreate" class="agent-editor__danger">
+      <section  class="agent-editor__danger">
         <h3 class="agent-editor__danger-title">{{ t.workspace.agentAdmin.delete }}</h3>
         <p class="agent-editor__danger-body">{{ t.workspace.agentAdmin.deleteBody }}</p>
         <div v-if="!confirmingDelete" class="agent-editor__danger-row">
@@ -2018,7 +1991,7 @@ onBeforeUnmount(() => {
     <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
     <div class="agent-editor__actions">
       <!-- 探测与保存共用底部状态槽,不撑高滚动内容;成功探测短暂优先,失败保留。 -->
-      <p v-if="!isCreate || hasSourceCheck" :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
+      <p v-if="activeTab !== 'security'" :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
         <template v-if="hasSourceCheck">
           <DliIcon v-if="sourceCheckOk" name="check" size="sm" />
           <span v-else class="agent-editor__probe-fail-icon" aria-hidden="true">×</span>
@@ -2043,12 +2016,12 @@ onBeforeUnmount(() => {
       <div class="agent-editor__buttons">
         <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish('cancel')">{{ t.workspace.agentAdmin.cancel }}</button>
         <button
-          type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
+          v-if="activeTab !== 'security'" type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
           :aria-disabled="!canSubmit ? 'true' : undefined" :aria-busy="busy ? 'true' : undefined"
-          :aria-describedby="!isCreate || hasSourceCheck ? saveStateId : undefined"
+          :aria-describedby="saveStateId"
           @click="finish('submit')"
         >
-          {{ busy ? (isCreate ? t.workspace.agentAdmin.creating : t.workspace.agentAdmin.saving) : (isCreate ? t.workspace.agentAdmin.create : t.workspace.agentAdmin.save) }}
+          {{ busy ? t.workspace.agentAdmin.saving : t.workspace.agentAdmin.save }}
         </button>
       </div>
     </div>
@@ -2258,6 +2231,8 @@ onBeforeUnmount(() => {
 .source-config__danger { color: var(--dl-error); }
 /* 窄对话框里四个二级 tab 放不下:改为横向滚动,避免标签越出自身按钮盒。 */
 @media (max-width: 560px) {
+  .agent-editor__tabbar { flex-wrap: wrap; gap: var(--dl-space-2); }
+  .agent-editor__tabs { flex-wrap: wrap; gap: var(--dl-space-1); }
   .source-config__facts { grid-template-columns: minmax(0, 1fr); gap: var(--dl-space-1); }
   .source-config__facts dd { margin-block-end: var(--dl-space-2); }
   /* 四个二级 tab 排不下时改成两行两列,所有标签完整可见,不做隐藏滚动。 */
@@ -2317,14 +2292,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .fallback-add:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
 .fallback-chain__count { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; }
 
-.agent-editor__templates { display: grid; gap: var(--dl-space-2); border: none; padding: 0; margin: 0; }
 .agent-editor__legend { margin-block-end: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
-.template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--dl-space-2); }
-.template-card { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); text-align: left; }
-.template-card:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
-.template-card[aria-pressed='true'] { border-color: var(--dl-accent); background: var(--dl-accent-soft); }
-.template-card__label { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; line-height: var(--dl-line-snug); }
-.template-card__hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 
 .agent-editor__fields { display: grid; gap: var(--dl-space-3); }
 .field { display: grid; gap: var(--dl-space-1); }
@@ -2408,7 +2376,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .gateway-form__refresh[data-busy='true'] :deep(.dl-icon) { animation: none; }
 }
 
-/* 触屏 / 窄屏:模板卡与输入框仍保持 44 的可点高度(默认已是 44)。 */
+/* 窄屏主 tab 可换行,独立控件仍保持默认触达尺寸。 */
 @media (max-width: 560px) {
   .source-block__add-label { display: none; }
   .source-block__add { inline-size: var(--dl-target-size); padding-inline: 0; }
@@ -2421,7 +2389,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .gateway-form__endpoint, .gateway-form .gateway-form__endpoint-input { grid-column: 1 / -1; grid-row: 1; inline-size: 100%; }
   .gateway-form__url-actions { grid-column: 2; grid-row: 2; }
   .gateway-form__refresh { grid-column: 1; grid-row: 2; justify-self: start; }
-  .template-grid, .model-row { grid-template-columns: minmax(0, 1fr); }
+  .model-row { grid-template-columns: minmax(0, 1fr); }
   .agent-editor__buttons .dl-btn { min-inline-size: var(--dl-target-size); padding-inline: var(--dl-space-2); white-space: nowrap; }
   /* 回退链的控制钮换到第二行,保持 44×44 的独立触达尺寸。 */
   .fallback-row { grid-template-columns: auto minmax(0, 1fr); }

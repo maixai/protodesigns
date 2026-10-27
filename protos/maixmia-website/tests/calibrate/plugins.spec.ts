@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
@@ -7,6 +8,7 @@ async function login(page: Page, width = 1280): Promise<void> {
   await page.setViewportSize({ width, height: 900 })
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
+  await unlockDemoIdentity(page)
   await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
   await expect(page.locator('.telemetry__item--context')).toBeVisible()
   if (width < 1024) await page.getByRole('button', { name: '打开侧栏' }).click()
@@ -362,7 +364,7 @@ test('加载失败重试及切换 Agent:骨架可见、计数留空、重试恢�
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
 })
 
-test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型两页', async ({ page }) => {
+test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型 / 身份与安全三页', async ({ page }) => {
   await login(page)
   const project = page.locator('.project-item').first()
   await expect(project.getByRole('tab')).toHaveCount(0)
@@ -372,10 +374,10 @@ test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  // 主 tab 只有基本 / 模型两页;子 tab 不计入。
+  // 主 tab 为基本 / 模型 / 身份与安全三页;子 tab 不计入。
   const mainTabs = dialog.locator('.agent-editor__tabs').getByRole('tab')
-  await expect(mainTabs).toHaveCount(2)
-  await expect(mainTabs).toHaveText(['基本', '模型'])
+  await expect(mainTabs).toHaveCount(3)
+  await expect(mainTabs).toHaveText(['基本', '模型', '身份与安全'])
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()

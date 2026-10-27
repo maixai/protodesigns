@@ -1,3 +1,4 @@
+import { unlockDemoIdentity, pairDemoAgent } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 import { sampleTextContrast } from '../pixel-contrast'
@@ -144,6 +145,7 @@ test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
 async function login(page: Page, loginLabel = '登录'): Promise<void> {
   await page.goto('/')
   await page.getByRole('button', { name: loginLabel, exact: true }).click()
+  await unlockDemoIdentity(page)
   await expect(page).toHaveURL(/#\/workspace$/)
 }
 
@@ -1340,12 +1342,14 @@ test('手动上滚锁定位置，追加消息不抢滚动，返回底部恢复�
   // 贴底时不应出现「回到底部」。与空态那次断言不同，这条是真能失败的：
   // 同一次用例里手动上滚后该按钮就会渲染出来（见下方断言），故不构成同义反复。
   await expect(page.getByRole('button', { name: '回到底部' })).toHaveCount(0)
+  // 先备好草稿并等输入区尺寸落定,再建立上滚前置条件,不把输入自动增高混入消息追加断言。
+  const input = page.getByRole('textbox')
+  await input.fill('请继续细化准备工作。')
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await log.focus()
   await page.keyboard.press('Home')
   await expect(page.getByRole('button', { name: '回到底部' })).toBeVisible()
   await expect.poll(() => log.evaluate((element) => element.scrollTop)).toBe(0)
-  const input = page.getByRole('textbox')
-  await input.fill('请继续细化准备工作。')
   await input.press('Enter')
   await expect(page.locator('.telemetry__word')).toHaveText('已生成')
   expect(await log.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1)
@@ -1389,15 +1393,15 @@ for (const width of [375, 768]) {
 
 test('加载骨架、新建与会话切换', async ({ page }, testInfo) => {
   await login(page)
-  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'loading')
-  await expect(page.locator('.transcript-loading .n-skeleton').first()).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath('loading.png') })
   await waitForStable(page)
   // 会话行住在菜单里:开菜单 → 选第二条 → 菜单自动收起、转录切到该会话。
   await openSwitcher(page)
   const pickedRow = page.locator('.session-item').nth(1)
   const pickedTitle = await pickedRow.locator('.session-title').innerText()
   await pickedRow.click()
+  await expect(page.getByRole('log')).toHaveAttribute('data-state', 'loading')
+  await expect(page.locator('.transcript-loading .n-skeleton').first()).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('loading.png') })
   await expect(page.locator(SWITCHER_PANEL)).toHaveCount(0)
   await expect(page.locator('.chat-message')).toHaveCount(2)
   // 刚选中并显示的那段从此**不列在菜单里** —— 「当前」不再靠列表里的标记表达,而是靠它根本不在列表里。
@@ -1745,13 +1749,13 @@ for (const width of [375, 768, 1280]) {
     await page.screenshot({ path: testInfo.outputPath(`agent-settings-tier-tab-order-${width}.png`), animations: 'disabled' })
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: '新建 Agent', exact: true }).click()
-    const createDialog = page.getByRole('dialog', { name: '新建 Agent' })
-    const name = createDialog.getByRole('textbox', { name: '名称', exact: true })
-    await expect(name).toBeVisible()
-    await expect(name).toBeFocused()
-    await expect(createDialog.locator('.agent-editor__tabs [tabindex="0"]')).toHaveCount(1)
-    await expect(createDialog.getByRole('tab', { name: '基本', exact: true })).toHaveAttribute('tabindex', '0')
+    await page.getByRole('button', { name: '添加 Agent', exact: true }).click()
+    const createDialog = page.getByRole('dialog', { name: '添加 Agent' })
+    const code = createDialog.getByRole('textbox', { name: '10 位配对码', exact: true })
+    await expect(code).toBeVisible()
+    await expect(code).toBeFocused()
+    await expect(createDialog.locator('.identity-steps [aria-current="step"]')).toHaveCount(1)
+    await expect(createDialog.locator('.identity-steps li').first()).toHaveAttribute('aria-current', 'step')
   })
 }
 
@@ -1764,7 +1768,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
   const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
-  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(2)
+  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(3)
   // 默认落在「模型 → 模型来源」;先验证基本页,再回到模型页。
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await basicTab.click()
@@ -2693,15 +2697,18 @@ for (const width of [375, 768, 1280]) {
   })
 }
 
-test('新建 Agent @375:英文探测结果同槽显示且不改变高度', async ({ page }, testInfo) => {
+test('添加 Agent 后设置 @375:英文探测结果同槽显示且不改变高度', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   await switchLanguageViaSettings(page, 'English')
   await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'New agent', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'New agent' })
+  await page.getByRole('button', { name: 'Add agent', exact: true }).click()
+  await pairDemoAgent(page, 'Gateway demo agent', 'Probe feedback demo', true)
+  await page.locator(AGENT_TRIGGER).click()
+  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Agent settings' })
   await dialog.getByRole('tab', { name: 'Model', exact: true }).click()
   await dialog.getByRole('tab', { name: /^Model source/ }).click()
   await dialog.locator('.source-row--gateway').first().locator('.source-row__menu-trigger').click()
@@ -2713,14 +2720,14 @@ test('新建 Agent @375:英文探测结果同槽显示且不改变高度', async
   const state = dialog.locator('.agent-editor__save-state')
   await baseUrl.fill('https://invalid.example.com/v1/messages')
   const heightBeforeFailure = await body.evaluate((element) => element.clientHeight)
-  await expect(state).toHaveCount(0)
+  await expect(state).toHaveAttribute('data-state', 'dirty')
   await refresh.click()
   await expect(state).toHaveAttribute('data-state', 'probe-fail')
   await expect(state).toContainText('The key is invalid or revoked')
   expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeFailure)
   await page.screenshot({ path: testInfo.outputPath('gateway-probe-create-en-fail-375.png') })
   await baseUrl.fill('https://gateway.example.com/v1/messages')
-  await expect(state).toHaveCount(0)
+  await expect(state).toHaveAttribute('data-state', 'dirty')
   await dialog.getByRole('button', { name: 'Edit models API', exact: true }).click()
   await modelsApi.fill('https://gateway.example.com/custom/models')
   await modelsApi.press('Enter')
@@ -2731,7 +2738,7 @@ test('新建 Agent @375:英文探测结果同槽显示且不改变高度', async
   expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeSuccess)
   await expect(dialog.locator('.agent-editor__body .gateway-probe')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('gateway-probe-create-en-ok-375.png') })
-  await expect(state).toHaveCount(0, { timeout: 6_500 })
+  await expect(state).toHaveAttribute('data-state', 'dirty', { timeout: 6_500 })
   expect(await body.evaluate((element) => element.clientHeight)).toBe(heightBeforeSuccess)
 })
 
@@ -2957,28 +2964,22 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
   await dialog.getByRole('button', { name: '取消' }).click()
 })
 
-// 新建 Agent:模板填充表单 → 创建后切到新 Agent(空工作台)→ 可切回原 Agent。
-test('新建 Agent:模板 + 表单,创建后进入空工作台', async ({ page }) => {
+// 添加 Agent:一次性链接配对与本机确认 → 命名后进入空工作台 → 可切回原 Agent。
+test('添加 Agent:配对 + 表单,完成后进入空工作台', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: '新建 Agent' }).click()
-  const dialog = page.getByRole('dialog', { name: '新建 Agent' })
+  await page.getByRole('button', { name: '添加 Agent' }).click()
+  const dialog = page.getByRole('dialog', { name: '添加 Agent' })
   await expect(dialog).toBeVisible()
-  // 默认落在「模型 → 模型来源」;模板与身份字段在基本页。
-  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
-  await dialog.getByRole('button', { name: /^研究/ }).click()
-  await expect(dialog.getByRole('textbox', { name: '名称' })).toHaveValue('研究助手')
-  await expect(dialog.getByRole('textbox', { name: '备注' })).toHaveValue('查资料与整理发现')
-  await dialog.getByRole('textbox', { name: '名称' }).fill('发布助手')
-  await dialog.getByRole('button', { name: '创建 Agent' }).click()
+  await expect(dialog.getByRole('textbox', { name: '10 位配对码' })).toHaveValue('')
+  await expect(dialog).toContainText('不要输入别人发给你的码')
+  await pairDemoAgent(page, '发布助手', '查资料与整理发现')
   await expect(dialog).toHaveCount(0)
   await expect(page.locator(AGENT_TRIGGER)).toContainText('发布助手')
-  // 新 Agent 没有项目:项目 tab 无计数,主区是「先打开项目」的引导。
   await expect(page.getByRole('button', { name: '打开项目' }).first()).toBeVisible()
   await expect(page.locator('.workspace-projects .project-item')).toHaveCount(0)
-  // 切回规划助手:原项目仍在(新建不修改别的 Agent)。
   await selectAgent(page, AGENT_NAMES['zh-CN'].planning)
   await expect(page.locator('.workspace-projects')).toContainText(PROJECT_NAMES.planning[0])
 })
@@ -7721,6 +7722,8 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
   // ③ 守卫的收放随指针位置:落在「自带 contain 的滚动容器」里摘掉(保住合成器滚动),落在
   //    没有自家滚动容器的区域就挂上。这条不是优化 —— 非 passive 监听会把整棵子树拖成主线程
   //    滚动,转录区在流式输出时会因此发涩并与贴底逻辑抢跑(校准里「真实动效路径」会抖)。
+  // 解锁后指针可能停在转录区,先明确进入无局部滚动容器的 Agent 身份区。
+  await agentTab(page, 'planning').hover()
   await expect(page.locator('.workspace-page')).toHaveAttribute('data-swipe-guard', 'armed')
   const transcript = page.getByRole('log')
   await page.mouse.move(0, 0)
@@ -10454,14 +10457,19 @@ for (const isEnglish of [false, true]) {
     await expect(context.locator('.model-source-context__draft')).toBeVisible()
   })
 
-  test(`新建 Agent:来源点击即选中,没有待保存来源标记 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
+  test(`添加 Agent 后:保存来源后没有待保存来源标记 ${isEnglish ? 'en' : 'zh'}`, async ({ page }) => {
     const settings = await openSubscriptionSettings(page, 1280, isEnglish)
     await settings.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'New agent' : '新建 Agent', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: isEnglish ? 'New agent' : '新建 Agent' })
+    await page.getByRole('button', { name: isEnglish ? 'Add agent' : '添加 Agent', exact: true }).click()
+    await pairDemoAgent(page, 'Source demo agent', 'Model source demo', isEnglish)
+    await page.locator(AGENT_TRIGGER).click()
+    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
     await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
     await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
+    await dialog.getByRole('button', { name: isEnglish ? 'Save' : '保存', exact: true }).click()
+    await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
     await expectSourceSelection(dialog, 'subscription:claude-personal', 'subscription:claude-personal', isEnglish)
     for (const name of [isEnglish ? /^Defaults/ : /^默认模型/, isEnglish ? /^Tiers/ : /^档位映射/]) {
       await dialog.getByRole('tab', { name }).click()

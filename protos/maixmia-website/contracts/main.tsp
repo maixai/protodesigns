@@ -500,6 +500,63 @@ model AgentModelConfig {
   maxThinkingTokens: int32;
 }
 
+// ---- 用户身份密钥与 Agent 的一次性配对 ----
+enum AgentTrustStateId { trusted, keyChanged, revoked }
+model AgentIdentity {
+  publicKey: string;
+  fingerprint: string;
+  trustState: AgentTrustStateId;
+  pairedAt: string;
+  lastSeenAt: string;
+  deviceName: string;
+  platform: string;
+  keyVersion: int32;
+  trustRecordId: string;
+  trustLogIndex: int32;
+  trustRecordHash: string;
+  safetyCode: string;
+}
+
+enum PairingMethodId { link, code }
+enum PairingStateId { waiting, connecting, review, awaitingAgent, complete, expired, denied, error }
+// 会话摘要不包含 256-bit 一次性秘密或手动码;秘密只在 Agent 邀请链接的片段中传递。
+@summary("PairingSession")
+@jsonSchema
+model PairingSession {
+  id: string;
+  method: PairingMethodId;
+  state: PairingStateId;
+  agentName: string;
+  deviceName: string;
+  platform: string;
+  fingerprint: string;
+  safetyCode: string;
+  expiresAt: string;
+  errorCode: string;
+  alreadyTrusted: boolean;
+}
+
+enum VaultStateId { locked, unlocked, unavailable }
+model PasskeySummary {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string;
+  prfSupported: boolean;
+  isThisDevice: boolean;
+}
+@summary("IdentityVault")
+@jsonSchema
+model IdentityVault {
+  state: VaultStateId;
+  publicKey: string;
+  fingerprint: string;
+  keyVersion: int32;
+  passkeys: PasskeySummary[];
+  recoveryKeyConfigured: boolean;
+  lastUnlockedAt: string;
+}
+
 // Agent 的身份摘要:侧栏切换器 / 设置对话框只需要这些字段,不必背着项目树。
 // note 是一句话备注;model 是该 Agent 的默认模型、四档映射与高级配置。
 // builtIn 表示内置 Agent:名称与备注优先跟随界面语言;用户修改后改用字面值。
@@ -511,6 +568,7 @@ model AgentSummary {
   note: string;
   `model`: AgentModelConfig;
   builtIn: boolean;
+  identity: AgentIdentity;
 }
 
 // 新建 / 编辑 Agent 的输入:模板只是界面的默认值,不进入身份,故这里只有最终配置。

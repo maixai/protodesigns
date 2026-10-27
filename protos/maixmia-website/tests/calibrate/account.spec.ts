@@ -1,3 +1,4 @@
+import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
@@ -18,9 +19,15 @@ test('账户 disclosure:键盘可达、Esc 关闭、登出二次确认与还焦'
   await tabTo(page, login)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/#\/workspace$/)
+  await unlockDemoIdentity(page)
   // 会话头 h1 = 当前会话任务名(activeId 默认 weekly),不再是固定的页面名。
   await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
   const account = header.getByRole('button', { name: 'Account menu: 林一舟', exact: true })
+  // 解锁后的新焦点契约是 main；从这里反向经过顶栏折叠钮回到账户入口。
+  await expect(page.locator('main.workspace-page')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(header.locator('.site-header__collapse')).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
   await tabTo(page, account)
   await expect(account).toBeFocused()
   await page.keyboard.press('Enter')
@@ -29,6 +36,10 @@ test('账户 disclosure:键盘可达、Esc 关闭、登出二次确认与还焦'
   await expect(account).toBeFocused()
   await expect(account).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await expect(header.getByRole('button', { name: 'Identity and security', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(header.getByRole('button', { name: 'Lock identity', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   const signOut = header.getByRole('group', { name: 'Account menu', exact: true }).getByRole('button', { name: 'Sign out', exact: true })
   await expect(signOut).toBeFocused()
@@ -64,6 +75,7 @@ test('工作台守卫、返回首页、原生链接与刷新即重置', async ({
   await expect(header.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
   await header.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page).toHaveURL(/#\/workspace$/)
+  await unlockDemoIdentity(page)
   await header.getByRole('link', { name: 'Mia', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Your AI agent, always within reach' })).toBeVisible()
   await expect(header.getByRole('button', { name: 'Sign in', exact: true })).toHaveCount(0)
@@ -89,6 +101,7 @@ for (const width of [375, 768, 1280, 1600]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await unlockDemoIdentity(page)
     await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
     const account = page.getByRole('button', { name: 'Account menu: 林一舟', exact: true })
     await account.click()

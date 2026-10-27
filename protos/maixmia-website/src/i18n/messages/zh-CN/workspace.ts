@@ -65,12 +65,13 @@ export const workspace = {
     label: '侧栏视图',
     projects: '项目',
   },
-  // Agent 的设置与创建:两者共用一套身份表单;创建多一步模板选择,设置多一段删除。
+  // Agent 的设置与创建:两者共用一套身份表单;创建多一步模板选择,删除入口在设置的「身份与安全」危险操作区。
   agentAdmin: {
     loadError: 'Agent 列表加载失败',
     settingsLabel: 'Agent 设置',
     settingsTitle: 'Agent 设置',
     settingsHint: '身份与模型。改动只影响这个 Agent。',
+    settingsSubjectLabel: '正在设置',
     createLabel: '添加 Agent',
     createTitle: '添加 Agent',
     createHint: '通过一次性链接配对，或手动输入 Agent 显示的配对码。',
@@ -104,11 +105,7 @@ export const workspace = {
     createError: '添加失败，请重新配对',
     saved: '已保存「{name}」',
     created: '已添加「{name}」',
-    delete: '删除 Agent',
-    deleteTitle: '删除「{name}」？',
     deleteBody: '它的项目连接、对话与插件配置会一并移除，且无法恢复。',
-    deleteConfirm: '确认删除',
-    deleteCancel: '保留',
     deleting: '删除中…',
     deleteError: '删除失败，请重试',
     deleted: '已删除「{name}」',

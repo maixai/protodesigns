@@ -55,7 +55,6 @@ interface SelectOption {
 
 const dialogRef = ref<HTMLDialogElement | null>(null)
 const returnFocusRef = ref<HTMLElement | null>(null)
-const confirmingDelete = ref(false)
 const name = ref('')
 const note = ref('')
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
@@ -82,10 +81,18 @@ const securityTabRef = ref<HTMLButtonElement | null>(null)
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
+const subjectId = `${dialogId}-subject`
 const saveStateId = `${dialogId}-save-state`
 
 const title = computed(() => t.value.workspace.agentAdmin.settingsTitle)
 const hint = computed(() => t.value.workspace.agentAdmin.settingsHint)
+// 对话框的描述同时包含当前对象与通用提示:打开时读屏先听到「正在设置哪个 Agent」。
+const descriptionIds = computed(() => {
+  const ids: string[] = []
+  if (props.agent !== undefined) ids.push(subjectId)
+  if (hint.value !== '') ids.push(hintId)
+  return ids.length > 0 ? ids.join(' ') : undefined
+})
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
 const baselineSerialized = ref('')
 const baselineSourceId = ref('')
@@ -1233,7 +1240,6 @@ function onModelSectionKeydown(event: KeyboardEvent): void {
 
 function reset(): void {
   abortAuthorization(false)
-  confirmingDelete.value = false
   name.value = props.agent?.name ?? ''
   note.value = props.agent?.note ?? ''
   const saved = props.agent?.model
@@ -1301,14 +1307,7 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
   emit('cancel')
 }
 
-// 删除是两步动作:第一次只把确认区展开并把焦点送过去,避免误触即删。
-async function askDelete(): Promise<void> {
-  if (!props.canDelete || props.busy) return
-  confirmingDelete.value = true
-  await nextTick()
-  dialogRef.value?.querySelector<HTMLButtonElement>('.agent-editor__danger-submit')?.focus()
-}
-
+// 删除、解除关联与安全码核对的交互都在「身份与安全」面板内;本层只负责关闭与提交。
 function onBackdropClick(event: MouseEvent): void {
   const dialog = dialogRef.value
   if (dialog === null || event.target !== dialog) return
@@ -1363,13 +1362,18 @@ onBeforeUnmount(() => {
 
 <template>
   <dialog
-    ref="dialogRef" class="agent-editor" aria-modal="true"
-    :aria-labelledby="titleId" :aria-describedby="hint !== '' ? hintId : undefined"
+    ref="dialogRef" class="agent-editor dl-modal-scrim" aria-modal="true"
+    :aria-labelledby="titleId" :aria-describedby="descriptionIds"
     @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
     <div class="agent-editor__head">
       <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
       <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
+      <p v-if="agent" :id="subjectId" class="agent-editor__subject" data-testid="agent-editor-subject">
+        <span class="agent-editor__subject-label">{{ t.workspace.agentAdmin.settingsSubjectLabel }}</span>
+        <span class="agent-editor__subject-name">{{ agent.name }}</span>
+        <span v-if="agent.note !== ''" class="agent-editor__subject-note">· {{ agent.note }}</span>
+      </p>
       <p v-if="hint !== ''" :id="hintId" class="agent-editor__hint">{{ hint }}</p>
     </div>
 
@@ -1399,7 +1403,10 @@ onBeforeUnmount(() => {
 
     <div ref="bodyRef" class="agent-editor__body">
       <div v-if="activeTab === 'security'" :id="`${dialogId}-panel-security`" class="agent-editor__panel" role="tabpanel" :aria-labelledby="`${dialogId}-tab-security`" tabindex="0">
-        <AgentIdentitySecurity v-if="agent" :agent="agent" @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" />
+        <AgentIdentitySecurity
+          v-if="agent" :agent="agent" :can-delete="canDelete" :busy="busy"
+          @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" @delete="finish('delete')"
+        />
       </div>
       <div
         v-show="activeTab === 'basic'" :id="`${dialogId}-panel-basic`" class="agent-editor__panel"
@@ -1415,29 +1422,6 @@ onBeforeUnmount(() => {
           <input v-model="note" :disabled="busy" type="text" class="field__input" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
         </label>
       </div>
-
-      <section  class="agent-editor__danger">
-        <h3 class="agent-editor__danger-title">{{ t.workspace.agentAdmin.delete }}</h3>
-        <p class="agent-editor__danger-body">{{ t.workspace.agentAdmin.deleteBody }}</p>
-        <div v-if="!confirmingDelete" class="agent-editor__danger-row">
-          <button type="button" class="danger-trigger" :disabled="!canDelete || busy" @click="askDelete">
-            {{ t.workspace.agentAdmin.delete }}
-          </button>
-          <p v-if="!canDelete" class="agent-editor__danger-hint">{{ t.workspace.agentAdmin.lastAgent }}</p>
-        </div>
-        <div v-else class="agent-editor__danger-confirm">
-          <p class="agent-editor__danger-question">{{ t.workspace.agentAdmin.deleteTitle.replace('{name}', agent?.name ?? '') }}</p>
-          <div class="agent-editor__danger-actions">
-            <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="confirmingDelete = false">{{ t.workspace.agentAdmin.deleteCancel }}</button>
-            <button
-              type="button" class="danger-confirm agent-editor__danger-submit"
-              :disabled="busy" @click="finish('delete')"
-            >
-              {{ busy ? t.workspace.agentAdmin.deleting : t.workspace.agentAdmin.deleteConfirm }}
-            </button>
-          </div>
-        </div>
-      </section>
       </div>
 
       <div
@@ -2050,12 +2034,16 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 .agent-editor { color-scheme: dark; }
-.agent-editor::backdrop { background-color: var(--dl-bg-sunken); }
 .agent-editor[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 
 .agent-editor__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-2); }
 .agent-editor__title { font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
 .agent-editor__badge { padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+/* 当前编辑对象:标题下单独一行,避免「这是在设置哪个 Agent」需要回想。 */
+.agent-editor__subject { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-2); min-inline-size: 0; }
+.agent-editor__subject-label { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
+.agent-editor__subject-name { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 600; line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
+.agent-editor__subject-note { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
 .agent-editor__hint { flex-basis: 100%; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
 .agent-editor__head, .agent-editor__tabbar, .agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
@@ -2309,17 +2297,6 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 
 .agent-editor__error { border-inline-start: var(--agent-emphasis-width) solid var(--dl-error); padding-inline-start: var(--dl-space-2); color: var(--dl-error); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
-.agent-editor__danger { display: grid; gap: var(--dl-space-2); padding-block-start: var(--dl-space-3); border-block-start: var(--dl-border-width) solid var(--dl-border-subtle); }
-.agent-editor__danger-title { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); font-weight: 500; }
-.agent-editor__danger-body, .agent-editor__danger-hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
-.agent-editor__danger-hint { color: var(--dl-warning); }
-.agent-editor__danger-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); }
-.danger-trigger { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-error); font-size: var(--dl-font-size-xs); }
-.danger-trigger:hover:not(:disabled) { border-color: var(--dl-error); background: var(--dl-bg-hover); }
-.danger-trigger:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
-.agent-editor__danger-confirm { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-error); border-radius: var(--dl-radius-md); }
-.agent-editor__danger-question { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
-.agent-editor__danger-actions { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); }
 .danger-confirm { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border-radius: var(--dl-radius-md); background: var(--dl-error); color: var(--dl-text-on-accent); font-size: var(--dl-font-size-sm); }
 .danger-confirm:hover:not(:disabled) { outline: var(--dl-border-width) solid var(--dl-error); outline-offset: var(--dl-space-1); }
 .danger-confirm:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }

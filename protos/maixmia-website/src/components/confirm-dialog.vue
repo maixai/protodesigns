@@ -52,7 +52,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
 <template>
   <dialog
     ref="dialogRef"
-    class="confirm-dialog"
+    class="confirm-dialog dl-modal-scrim"
     :aria-labelledby="titleId"
     :aria-describedby="bodyId"
     @cancel.prevent="finish(false)"
@@ -83,10 +83,6 @@ onBeforeUnmount(() => dialogRef.value?.close())
   color: var(--dl-text-primary);
   font: inherit;
   text-align: left;
-}
-
-.confirm-dialog::backdrop {
-  background-color: var(--dl-bg-sunken);
 }
 
 .confirm-dialog__title {

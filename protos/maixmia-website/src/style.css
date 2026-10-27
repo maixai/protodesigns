@@ -552,3 +552,55 @@ a {
   border: 0;
   background: transparent;
 }
+
+/* ==========================================================================
+   模态遮罩:统一的磨砂玻璃层
+   --------------------------------------------------------------------------
+   所有模态原生 <dialog>(Agent 设置 / 打开项目 / 添加 Agent / 确认框 / 身份面板)
+   共用这一层,不再各自写一块不透明的深色底。做法是给 dialog 加 .dl-modal-scrim,
+   遮罩只负责"透出并模糊下方内容",不改变对话框自身表面的不透明度 ——
+   正文仍落在可读的 --dl-bg-elevated 上。
+
+   分层降级(由下而上,后者覆盖前者):
+     1. 基础:高不透明度着色的实底(不支持 backdrop-filter 时的可读兜底);
+     2. 支持 backdrop-filter:半透明着色 + 模糊 / 轻微饱和,让背景成为景深;
+     3. prefers-reduced-transparency:退回实底并去掉模糊;
+     4. prefers-reduced-motion:去掉入场淡入。
+   着色取暖调(浅色用 --dl-neutral-950,深色用 --dl-neutral-50),与中性 ramp 同源。
+   ========================================================================== */
+.dl-modal-scrim::backdrop {
+  --modal-scrim-tint: color-mix(in oklab, var(--dl-neutral-950) 45%, transparent);
+  --modal-scrim-fallback: color-mix(in oklab, var(--dl-neutral-950) 82%, transparent);
+  --modal-scrim-filter: blur(20px) saturate(120%);
+  background-color: var(--modal-scrim-fallback);
+  animation: dl-modal-scrim-in var(--dl-duration-base) var(--dl-ease-standard);
+}
+
+.dl-scope--dark .dl-modal-scrim::backdrop {
+  --modal-scrim-tint: color-mix(in oklab, var(--dl-neutral-50) 48%, transparent);
+  --modal-scrim-fallback: color-mix(in oklab, var(--dl-neutral-50) 86%, transparent);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dl-modal-scrim::backdrop {
+    background-color: var(--modal-scrim-tint);
+    -webkit-backdrop-filter: var(--modal-scrim-filter);
+    backdrop-filter: var(--modal-scrim-filter);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dl-modal-scrim::backdrop {
+    background-color: var(--modal-scrim-fallback);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@keyframes dl-modal-scrim-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dl-modal-scrim::backdrop { animation: none; }
+}

@@ -113,7 +113,7 @@ test('配对错误:不存在的码、Agent 拒绝与链接过期都有下一步'
   await expect(dialog.getByRole('alert')).toContainText('已过期')
 })
 
-test('Agent 身份与安全:指纹、安全码人工核对与解除关联', async ({ page }, testInfo) => {
+test('Agent 身份与安全:指纹、配对信息与解除关联', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await login(page)
   await page.locator('.agent-context-switcher__trigger').click()
@@ -121,14 +121,26 @@ test('Agent 身份与安全:指纹、安全码人工核对与解除关联', asyn
   const dialog = page.getByRole('dialog', { name: 'Agent 设置', exact: true })
   await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
   const panel = dialog.getByTestId('agent-identity-security')
+  await expect(panel).toContainText('身份密钥')
+  // 身份密钥默认折叠,展开后才显示完整指纹与配对信息。
+  const keyToggle = panel.getByTestId('agent-key-toggle')
+  await expect(keyToggle).toHaveAttribute('aria-expanded', 'false')
+  await keyToggle.click()
+  await expect(keyToggle).toHaveAttribute('aria-expanded', 'true')
   await expect(panel).toContainText('DEMO')
-  await expect(panel).toContainText('透明日志条目')
-  await panel.getByRole('button', { name: '验证安全码', exact: true }).click()
-  await panel.getByRole('checkbox', { name: '我已对照 Agent 屏幕', exact: true }).check()
-  await expect(panel).toContainText('已完成本次人工对照')
-  await panel.getByRole('button', { name: '解除关联', exact: true }).click()
-  await panel.getByRole('button', { name: '确认解除关联', exact: true }).click()
-  await panel.getByTestId('mock-revoke-passkey').click()
+  await expect(panel).toContainText('配对时间')
+  // 已配对的 Agent 不再显示配对阶段的安全码核对与信任记录明细。
+  await expect(panel.getByRole('button', { name: '验证安全码', exact: true })).toHaveCount(0)
+  await expect(panel).not.toContainText('透明日志条目')
+  await panel.getByRole('button', { name: '移除 Agent', exact: true }).click()
+  const removeDialog = page.getByTestId('agent-remove-dialog')
+  await expect(removeDialog).toBeVisible()
+  // 默认是安全分支:仅断开连接,保留 Agent 与数据。
+  await expect(removeDialog.getByRole('radio', { name: /仅断开连接/ })).toBeChecked()
+  await expect(removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ })).not.toBeChecked()
+  await removeDialog.getByRole('button', { name: '断开连接', exact: true }).click()
+  await removeDialog.getByTestId('mock-revoke-passkey').click()
+  await expect(removeDialog).toBeHidden()
   await expect(panel).toContainText('要重新连接，请使用「添加 Agent」')
   const rePair = panel.getByRole('button', { name: '重新配对' })
   await expect(rePair).toBeVisible()

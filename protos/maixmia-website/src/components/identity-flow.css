@@ -15,7 +15,6 @@
   font-size: var(--dl-font-size-md);
   line-height: var(--dl-line-body);
 }
-.identity-flow::backdrop { background: color-mix(in oklab, var(--dl-bg-base) 85%, transparent); }
 .identity-stack { display: grid; gap: var(--dl-space-4); min-inline-size: 0; }
 .identity-flow h2, .identity-stack h2 { margin: 0; font-size: var(--dl-font-size-xl); font-weight: 500; line-height: var(--dl-line-body); }
 .identity-flow h3, .identity-stack h3 { margin: 0; font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-body); }

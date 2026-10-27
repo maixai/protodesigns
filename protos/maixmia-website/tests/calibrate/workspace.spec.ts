@@ -1664,6 +1664,8 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await expect(dialog).toBeVisible()
+  // Header 明确当前编辑对象,避免在多个 Agent 之间切换时失去上下文。
+  await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划助手')
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   const save = dialog.getByRole('button', { name: '保存', exact: true })
@@ -1680,6 +1682,8 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await expect(save).toBeFocused()
   await expect(save).toHaveAttribute('aria-disabled', 'true')
   await expect(saveState).toContainText('已保存')
+  // 改名保存后,Header 的当前对象同步更新。
+  await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划官')
   await expect(page.locator(AGENT_TRIGGER)).toContainText('规划官')
   await expect(page.locator(AGENT_TRIGGER)).toContainText('拆解与推进')
   // 转录里的助手署名与侧栏同源。
@@ -1690,9 +1694,12 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   await expect(dialog).toBeVisible()
-  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
-  await dialog.getByRole('button', { name: '删除 Agent' }).click()
-  await dialog.getByRole('button', { name: '确认删除' }).click()
+  await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划官')
+  await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+  await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
+  const removeDialog = page.getByTestId('agent-remove-dialog')
+  await removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ }).check()
+  await removeDialog.getByRole('button', { name: '删除 Agent 及数据', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // 删除当前 Agent 后落到剩余列表的第一个(研究助手),项目区随之更换。
   await expect(page.locator(AGENT_TRIGGER)).toContainText('研究助手')
@@ -2947,21 +2954,28 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
     await page.getByRole('button', { name: 'Agent 设置' }).click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     await expect(dialog).toBeVisible()
-    // 默认落在「模型 → 模型来源」;删除入口在基本页。
-    await dialog.getByRole('tab', { name: '基本', exact: true }).click()
-    // 当前 Agent 的删除入口在确认前是「删除 Agent」。
-    await dialog.getByRole('button', { name: '删除 Agent' }).click()
-    await dialog.getByRole('button', { name: '确认删除' }).click()
+    // 默认落在「模型 → 模型来源」;移除入口在身份与安全页的危险操作区。
+    await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+    await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
+    const removeDialog = page.getByTestId('agent-remove-dialog')
+    await removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ }).check()
+    await removeDialog.getByRole('button', { name: '删除 Agent 及数据', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     await expect(page.locator(AGENT_TRIGGER)).not.toContainText(forbidden)
   }
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
-  await expect(dialog.getByRole('button', { name: '删除 Agent' })).toBeDisabled()
-  await expect(dialog).toContainText('至少保留一个 Agent')
-  await dialog.getByRole('button', { name: '取消' }).click()
+  await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+  await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
+  const removeDialog = page.getByTestId('agent-remove-dialog')
+  // 最后一个 Agent 仍可断开连接,但删除分支被禁用并给出原因。
+  await expect(removeDialog.getByRole('radio', { name: /仅断开连接/ })).toBeChecked()
+  await expect(removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ })).toBeDisabled()
+  await expect(removeDialog).toContainText('至少保留一个 Agent')
+  await removeDialog.getByTestId('agent-remove-cancel').click()
+  await expect(removeDialog).toBeHidden()
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
 })
 
 // 添加 Agent:一次性链接配对与本机确认 → 命名后进入空工作台 → 可切回原 Agent。

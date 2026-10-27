@@ -141,7 +141,7 @@ onBeforeUnmount(() => { isAlive = false; clearTimeout(successTimer); dialog.valu
 </script>
 
 <template>
-  <dialog ref="dialog" tabindex="-1" :class="isGate ? 'identity-gate' : 'identity-flow'" data-testid="identity-vault-dialog" aria-modal="true" aria-labelledby="identity-vault-title" :aria-describedby="isGate ? 'identity-gate-description' : undefined" @keydown.stop="trapGateFocus" @cancel.prevent="close">
+  <dialog ref="dialog" tabindex="-1" :class="isGate ? 'identity-gate' : 'identity-flow dl-modal-scrim'" data-testid="identity-vault-dialog" aria-modal="true" aria-labelledby="identity-vault-title" :aria-describedby="isGate ? 'identity-gate-description' : undefined" @keydown.stop="trapGateFocus" @cancel.prevent="close">
     <IdentityGatePanel v-if="view === 'loading' || view === 'gate' || view === 'success' || view === 'exiting' || view === 'error'" :vault="vault" :view="view" :is-busy="isBusy" :error="error" @passkey="unlock('passkey')" @recovery="unlock('recoveryKey', $event)" @reset="reset" @retry="load" @back="error = ''" @sign-out="signOut" />
     <div v-else-if="view === 'security'" class="identity-stack">
       <h2 id="identity-vault-title" tabindex="-1">{{ copy.title }}</h2>

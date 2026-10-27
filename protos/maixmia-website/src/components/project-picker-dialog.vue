@@ -102,7 +102,7 @@ onBeforeUnmount(() => dialogRef.value?.close())
 <template>
   <dialog
     ref="dialogRef"
-    class="picker"
+    class="picker dl-modal-scrim"
     aria-modal="true"
     :aria-labelledby="titleId"
     @cancel.prevent="finish('cancel')"
@@ -175,10 +175,6 @@ onBeforeUnmount(() => dialogRef.value?.close())
   font: inherit;
   text-align: left;
   overflow: hidden;
-}
-
-.picker::backdrop {
-  background-color: var(--dl-bg-sunken);
 }
 
 .picker__title {

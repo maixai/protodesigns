@@ -184,7 +184,7 @@ onBeforeUnmount(() => { isAlive = false; requestVersion += 1; clearTimeout(timer
 </script>
 
 <template>
-  <dialog ref="dialog" class="identity-flow" data-testid="agent-pairing-dialog" aria-modal="true" aria-labelledby="agent-pairing-title" @keydown.stop @cancel.prevent="cancel">
+  <dialog ref="dialog" class="identity-flow dl-modal-scrim" data-testid="agent-pairing-dialog" aria-modal="true" aria-labelledby="agent-pairing-title" @keydown.stop @cancel.prevent="cancel">
     <div class="identity-stack">
       <h2 id="agent-pairing-title" tabindex="-1">{{ copy.add }}</h2>
       <p v-if="rePair" class="identity-muted">{{ copy.rePairHint }}</p>

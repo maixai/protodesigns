@@ -69,6 +69,8 @@ export const workspace = {
     settingsTitle: 'Agent settings',
     settingsHint: 'Identity and model. Changes apply to this agent only.',
     settingsSubjectLabel: 'Configuring',
+    settingsSubjectSeparator: '.',
+    settingsSubjectNoteSeparator: ', ',
     createLabel: 'Add agent',
     createTitle: 'Add agent',
     createHint: 'Pair with a one-time link, or enter the code shown on your agent.',

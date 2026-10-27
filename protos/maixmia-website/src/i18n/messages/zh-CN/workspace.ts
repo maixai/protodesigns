@@ -72,6 +72,8 @@ export const workspace = {
     settingsTitle: 'Agent 设置',
     settingsHint: '身份与模型。改动只影响这个 Agent。',
     settingsSubjectLabel: '正在设置',
+    settingsSubjectSeparator: '。',
+    settingsSubjectNoteSeparator: '，',
     createLabel: '添加 Agent',
     createTitle: '添加 Agent',
     createHint: '通过一次性链接配对，或手动输入 Agent 显示的配对码。',

@@ -228,6 +228,10 @@ test('身份与安全 @375:标题与指纹首屏可见，时间本地化', async
     await expect(time).not.toContainText(/\d{4}-\d{2}-\d{2}T/)
   }
   await page.screenshot({ path: testInfo.outputPath('identity-security-first-screen-375.png') })
+  // 破坏性确认步的初始焦点落在取消上,而不是红色确认按钮。
+  await dialog.getByRole('button', { name: '重置身份', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeFocused()
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
 })
 
 test('配对表单:满十位可提交、修改清除错误、重新生成清除终态与表单关联', async ({ page }) => {

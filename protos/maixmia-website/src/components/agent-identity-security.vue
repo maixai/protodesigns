@@ -126,11 +126,13 @@ function requestDelete(): void {
       >
         <span class="security-key__title">{{ copy.keySection }}</span>
         <span class="security-key__summary">
-          <span>{{ copy.fingerprint }}</span>
-          <span aria-hidden="true">·</span>
+          <span class="security-key__summary-label">{{ copy.fingerprint }}</span>
+          <span class="security-key__summary-sep security-key__summary-sep--lead" aria-hidden="true">·</span>
           <span class="identity-mono security-key__preview">{{ fingerprintPreview }}</span>
-          <span aria-hidden="true">·</span>
-          <span class="identity-mono">v{{ identity.keyVersion }}</span>
+          <span class="security-key__summary-tail">
+            <span aria-hidden="true">·</span>
+            <span class="identity-mono">v{{ identity.keyVersion }}</span>
+          </span>
         </span>
         <svg class="security-key__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
       </button>
@@ -315,6 +317,9 @@ function requestDelete(): void {
   line-height: var(--dl-line-snug);
 }
 
+/* 英文时间里的 AM/PM 不能被拆到下一行。 */
+.security-hero__seen time { white-space: nowrap; }
+
 .security-chip {
   padding-inline: var(--dl-space-2);
   border: var(--dl-border-width) solid var(--dl-border-base);
@@ -417,6 +422,14 @@ function requestDelete(): void {
 }
 
 .security-key__preview { color: var(--dl-text-secondary); }
+
+/* 版本号与分隔符绑成一组,窄屏换行时不会出现「·」落单或 v1 孤立。 */
+.security-key__summary-tail {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--dl-space-1);
+  white-space: nowrap;
+}
 
 .security-key__panel {
   display: grid;
@@ -673,6 +686,15 @@ function requestDelete(): void {
   .security-specs {
     grid-template-columns: 1fr;
   }
+
+  /* 375 首屏要给危险操作留出完整按钮:收紧卡片间距,并去掉折叠行里重复的「公钥指纹」标签。 */
+  .security-console { gap: var(--dl-space-3); }
+  .security-hero { padding: var(--dl-space-3); }
+  .security-key__toggle { padding-block: var(--dl-space-2); }
+  .security-key__summary-label,
+  .security-key__summary-sep--lead { display: none; }
+  .security-danger { padding: var(--dl-space-3); }
+  .security-danger__head { padding-block-end: var(--dl-space-2); }
 }
 
 @media (prefers-reduced-motion: reduce) {

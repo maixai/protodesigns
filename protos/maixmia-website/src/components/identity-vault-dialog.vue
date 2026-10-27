@@ -170,8 +170,8 @@ onBeforeUnmount(() => { isAlive = false; clearTimeout(successTimer); dialog.valu
       <section v-if="method === 'reset'" class="identity-box">
         <h3>{{ copy.reset }}</h3><p class="identity-warning">{{ copy.resetHint }}</p>
         <div class="identity-actions">
-          <button type="button" class="identity-button" :disabled="isBusy" @click="method = 'choice'">{{ copy.cancel }}</button>
-          <button type="button" data-step-focus data-testid="reset-identity-confirm" class="identity-button identity-button--danger" :disabled="isBusy" @click="reset">{{ isBusy ? copy.busy : copy.resetConfirm }}</button>
+          <button type="button" data-step-focus class="identity-button" :disabled="isBusy" @click="method = 'choice'">{{ copy.cancel }}</button>
+          <button type="button" data-testid="reset-identity-confirm" class="identity-button identity-button--danger" :disabled="isBusy" @click="reset">{{ isBusy ? copy.busy : copy.resetConfirm }}</button>
         </div>
       </section>
       <p v-if="error !== ''" role="alert" class="identity-error">{{ error }}</p>

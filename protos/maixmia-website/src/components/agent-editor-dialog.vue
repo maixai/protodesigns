@@ -93,6 +93,14 @@ const descriptionIds = computed(() => {
   if (hint.value !== '') ids.push(hintId)
   return ids.length > 0 ? ids.join(' ') : undefined
 })
+// 可见的 Header 用 flex 排布;读屏单独拿一句带标点的完整描述,避免 span 拼接成无停顿长句。
+const subjectDescription = computed(() => {
+  const agent = props.agent
+  if (agent === undefined) return ''
+  const admin = t.value.workspace.agentAdmin
+  const note = agent.note === '' ? '' : `${admin.settingsSubjectNoteSeparator}${agent.note}`
+  return `${admin.settingsSubjectLabel} ${agent.name}${note}${admin.settingsSubjectSeparator}`
+})
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
 const baselineSerialized = ref('')
 const baselineSourceId = ref('')
@@ -1370,9 +1378,10 @@ onBeforeUnmount(() => {
       <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
       <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
       <p v-if="agent" :id="subjectId" class="agent-editor__subject" data-testid="agent-editor-subject">
-        <span class="agent-editor__subject-label">{{ t.workspace.agentAdmin.settingsSubjectLabel }}</span>
-        <span class="agent-editor__subject-name">{{ agent.name }}</span>
-        <span v-if="agent.note !== ''" class="agent-editor__subject-note">· {{ agent.note }}</span>
+        <span class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
+        <span aria-hidden="true" class="agent-editor__subject-label">{{ t.workspace.agentAdmin.settingsSubjectLabel }}</span>
+        <span aria-hidden="true" class="agent-editor__subject-name">{{ agent.name }}</span>
+        <span v-if="agent.note !== ''" aria-hidden="true" class="agent-editor__subject-note">{{ agent.note }}</span>
       </p>
       <p v-if="hint !== ''" :id="hintId" class="agent-editor__hint">{{ hint }}</p>
     </div>
@@ -2385,5 +2394,12 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .model-matrix:not(.model-matrix--tiers) .model-matrix__field-label,
   .model-matrix:not(.model-matrix--tiers) .select-field { grid-column: 1; grid-row: auto; }
   .model-matrix:not(.model-matrix--tiers) .model-matrix__field-label { display: block; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+}
+
+/* 窄屏 Header 收紧:保留当前 Agent,通用提示让位给危险操作首屏完整可见。 */
+@media (max-width: 560px) {
+  .agent-editor { padding: var(--dl-space-4); }
+  .agent-editor__head { gap: var(--dl-space-1); }
+  .agent-editor__hint { display: none; }
 }
 </style>

@@ -70,8 +70,10 @@ import {
 import type { Result } from './result'
 
 import type { IdentityVault } from '../contracts/generated/identity-vault'
+import type { DeviceUnlockCapability } from '../contracts/generated/device-unlock-capability'
+import type { RecoveryKeyReveal } from '../contracts/generated/recovery-key-reveal'
 import type { PairingSession } from '../contracts/generated/pairing-session'
-import { DEMO_RECOVERY_KEY, mockIdentityVault, mockUnlockIdentity, mockLockIdentity, mockResetIdentity } from '../mocks/identity'
+import { readRecoveryKey, mockIdentityVault, mockUnlockIdentity, mockLockIdentity, mockResetIdentity, mockDeviceUnlockCapability, mockAddPasskey, mockRemovePasskey, mockRegenerateRecoveryKey } from '../mocks/identity'
 import { mockInvalidateAgentTrust } from '../mocks/workspace'
 import { mockReadPairing, mockCreatePairing, mockConnectPairingLink, mockSubmitPairingCode, mockRequestPairingApproval, mockAllowPairing, mockCancelPairing, mockConfirmPairing, mockRevokeAgent, mockExpirePairing } from '../mocks/pairing'
 
@@ -81,9 +83,32 @@ export async function getIdentityVault(): Promise<Result<IdentityVault>> {
   await delay()
   return { ok: true, value: mockIdentityVault() }
 }
+export async function getDeviceUnlockCapability(): Promise<Result<DeviceUnlockCapability>> {
+  await delay()
+  return { ok: true, value: mockDeviceUnlockCapability() }
+}
+export async function addPasskey(): Promise<Result<IdentityVault>> {
+  await delay(600)
+  return { ok: true, value: mockAddPasskey() }
+}
+export async function removePasskey(id: string): Promise<Result<IdentityVault>> {
+  await delay()
+  const result = mockRemovePasskey(id)
+  return result instanceof Error ? { ok: false, error: result } : { ok: true, value: result }
+}
+export async function regenerateRecoveryKey(): Promise<Result<RecoveryKeyReveal>> {
+  await delay(600)
+  return { ok: true, value: mockRegenerateRecoveryKey() }
+}
 export async function unlockIdentityVault(method: 'passkey' | 'recoveryKey', secret: string): Promise<Result<IdentityVault>> {
   await delay(750)
-  if (method === 'recoveryKey' && secret.trim() !== DEMO_RECOVERY_KEY) return { ok: false, error: new Error(t.value.workspace.security.recoveryError) }
+  const vault = mockIdentityVault()
+  if (method === 'passkey' && !vault.passkeys.some((passkey) => passkey.canUnlock && passkey.prfSupported)) {
+    return { ok: false, error: new Error(t.value.workspace.security.gate.prfUnsupported) }
+  }
+  if (method === 'recoveryKey' && (!vault.recoveryKeyConfigured || secret.trim() !== readRecoveryKey())) {
+    return { ok: false, error: new Error(t.value.workspace.security.recoveryError) }
+  }
   return { ok: true, value: mockUnlockIdentity() }
 }
 export async function lockIdentityVault(): Promise<Result<IdentityVault>> {

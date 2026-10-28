@@ -537,12 +537,15 @@ model PairingSession {
 }
 
 enum VaultStateId { locked, unlocked, unavailable }
+enum UnlockMethodId { passkey, recoveryKey }
 model PasskeySummary {
   id: string;
   label: string;
   createdAt: string;
   lastUsedAt: string;
   prfSupported: boolean;
+  canUnlock: boolean;
+  backupEligible: boolean;
   isThisDevice: boolean;
 }
 @summary("IdentityVault")
@@ -553,8 +556,24 @@ model IdentityVault {
   fingerprint: string;
   keyVersion: int32;
   passkeys: PasskeySummary[];
+  unlockMethods: UnlockMethodId[];
   recoveryKeyConfigured: boolean;
   lastUnlockedAt: string;
+}
+@summary("DeviceUnlockCapability")
+@jsonSchema
+model DeviceUnlockCapability {
+  prfAvailable: boolean;
+  localPasskeyCount: int32;
+  canUseRecoveryKey: boolean;
+  canRequestDeviceTransfer: boolean;
+}
+@summary("RecoveryKeyReveal")
+@jsonSchema
+model RecoveryKeyReveal {
+  recoveryKey: string;
+  generatedAt: string;
+  vault: IdentityVault;
 }
 
 // Agent 的身份摘要:侧栏切换器 / 设置对话框只需要这些字段,不必背着项目树。

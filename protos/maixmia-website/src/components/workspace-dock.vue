@@ -14,6 +14,10 @@ import { badgeMapOf } from '../data/project-identity'
 import { fileBaseName } from '../data/windows'
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
+import GlobalSettingsPanel from './global-settings-panel.vue'
+import SettingsDrawer from './settings-drawer.vue'
+import { session } from '../auth/session'
+import { toInitials } from './account-avatar'
 
 const props = defineProps<{
   groups: MinimizedGroup[]
@@ -40,11 +44,20 @@ const emit = defineEmits<{
   markSystemRead: [id: string]
   markAllRead: []
 }>()
-const { t, locale, setLocale } = useI18n()
+const { t } = useI18n()
 const root = ref<HTMLElement | null>(null)
 const settingsTrigger = ref<HTMLButtonElement | null>(null)
 const notificationTrigger = ref<HTMLButtonElement | null>(null)
 const activePanel = ref('')
+const settingsSection = ref<'' | 'accountSecurity' | 'languageRegion' | 'shortcuts'>('')
+function openSettings(section: Exclude<typeof settingsSection.value, ''>): void {
+  activePanel.value = ''
+  settingsSection.value = section
+}
+function closeSettings(): void {
+  settingsSection.value = ''
+  settingsTrigger.value?.focus()
+}
 const panelRef = ref<HTMLElement | null>(null)
 const badges = computed(() => badgeMapOf(props.projects))
 const activeGroup = computed(() => props.groups.find((group) => group.id === activePanel.value))
@@ -177,10 +190,11 @@ function close(restoreFocus = false): void {
   else root.value?.querySelector<HTMLButtonElement>(`[data-group-menu="${CSS.escape(previous)}"]`)?.focus()
 }
 async function toggle(id: string, event: MouseEvent): Promise<void> {
-  if (activePanel.value === id) { close(); return }
+  if (activePanel.value === id) { close(id === 'settings'); return }
   activePanel.value = id
   await nextTick()
-  if (event.detail !== 0) return
+  // 设置打开后统一移入首行，保证不聚焦鼠标按钮的浏览器也能接到 Esc。
+  if (event.detail !== 0 && id !== 'settings') return
   if (id === 'notifications') focusNotificationTab()
   else panelRef.value?.querySelector<HTMLButtonElement>('button')?.focus()
 }
@@ -206,7 +220,7 @@ function closeNotifications(): void {
 }
 // 抽屉在 DOM 末尾,前向 Tab 走到这里时浏览器会先落到 body;哨兵把焦点直接交给工作区。
 function focusWorkspaceStart(): void {
-  const candidates = [document.querySelector<HTMLElement>('.site-header__brand'), ...document.querySelectorAll<HTMLElement>('.workspace-layout button:not([tabindex="-1"])')]
+  const candidates = [document.querySelector<HTMLElement>('.agent-context-switcher__trigger'), ...document.querySelectorAll<HTMLElement>('.workspace-layout button:not([tabindex="-1"])')]
   const target = candidates.find((element) => element !== null && element.closest('[inert]') === null && element.getClientRects().length > 0)
   target?.focus()
 }
@@ -274,11 +288,11 @@ onBeforeUnmount(() => {
     <div class="workspace-dock__global-settings" role="group" :aria-label="t.workspace.settings.label">
       <button
         ref="settingsTrigger" type="button" class="workspace-dock__settings-trigger"
-        :aria-label="t.workspace.settings.label"
-        :aria-expanded="activePanel === 'settings'" aria-controls="workspace-settings-panel"
+        :aria-label="`${t.workspace.settings.label}: ${session.profile?.name ?? ''}`"
+        :aria-expanded="activePanel === 'settings' || settingsSection !== ''" aria-controls="workspace-settings-panel"
         @click="toggle('settings', $event)"
       >
-        <DliIcon name="settings" size="md" />
+        <span class="workspace-dock__account-avatar" aria-hidden="true">{{ toInitials(session.profile?.name ?? '') }}</span>
       </button>
       <span class="workspace-dock__settings-tooltip" aria-hidden="true">{{ t.workspace.settings.label }}</span>
     </div>
@@ -311,17 +325,12 @@ onBeforeUnmount(() => {
       <button v-for="id in activeGroup.memberIds" :key="id" type="button" class="workspace-dock__member" :data-member-id="id" :aria-label="t.workspace.dock.restoreMember.replace('{name}', labelOf(id))" @click="restore(activeGroup.id, id)">{{ labelOf(id) }}</button>
       <button type="button" class="workspace-dock__close" :disabled="disabled" @click="closeGroup(activeGroup.id)">{{ t.workspace.dock.closeGroup }}</button>
     </div>
-    <div v-else-if="activePanel === 'settings'" id="workspace-settings-panel" ref="panelRef" class="workspace-dock__panel workspace-dock__panel--settings" role="region" :aria-label="t.workspace.settings.label">
-      <h2>{{ t.workspace.settings.title }}</h2>
-      <!-- 语言是真正影响全局的设置;两个 aria-pressed 按钮是切换钮,不是 menu。 -->
-      <div class="workspace-dock__setting-row">
-        <span class="workspace-dock__setting-label">{{ t.workspace.settings.language }}</span>
-        <div class="workspace-dock__language" role="group" :aria-label="t.workspace.settings.language">
-          <button type="button" :aria-pressed="locale === 'zh-CN'" @click="setLocale('zh-CN')">中文</button>
-          <button type="button" :aria-pressed="locale === 'en'" @click="setLocale('en')">English</button>
-        </div>
-      </div>
+    <Transition name="workspace-settings-menu">
+    <div v-if="activePanel === 'settings'" id="workspace-settings-panel" ref="panelRef" class="workspace-dock__panel workspace-dock__panel--settings" role="region" :aria-label="t.workspace.settings.label">
+      <GlobalSettingsPanel @close="close(true)" @open="openSettings" />
     </div>
+    </Transition>
+    <SettingsDrawer v-if="settingsSection" :section="settingsSection" @close="closeSettings" />
     <Transition name="workspace-notification-drawer">
       <div v-if="activePanel === 'notifications'" id="workspace-notifications-panel" ref="panelRef" class="workspace-dock__drawer" role="dialog" aria-labelledby="workspace-notifications-title" :aria-busy="notificationsStatus === 'loading'">
         <header class="workspace-dock__notification-head">
@@ -400,7 +409,7 @@ onBeforeUnmount(() => {
   --dock-status-dot-size: 6px;
   /* 组头两行之间的紧凑间距:1px 的发丝级尺寸,集中成局部变量。 */
   --dock-inline-tight: 1px;
-  --dock-settings-panel-width: 320px;
+  --dock-settings-panel-width: 360px;
   position: relative; grid-column: 1 / -1; display: flex; align-items: center; gap: var(--dl-space-3); height: var(--dock-height); min-width: 0; padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm);
 }
 .workspace-dock__global-settings { position: relative; display: flex; flex: none; align-items: center; min-width: 0; }
@@ -420,13 +429,14 @@ onBeforeUnmount(() => {
 .workspace-dock__badge[data-running='true'] { color: var(--dl-accent); }
 .workspace-dock__menu, .workspace-dock__settings-trigger, .workspace-dock__notification-trigger { flex: none; min-width: var(--workspace-nav-control-size); width: var(--workspace-nav-control-size); padding: 0; border-radius: var(--dl-radius-md); }
 .workspace-dock__restore, .workspace-dock__menu, .workspace-dock__settings-trigger, .workspace-dock__notification-trigger { min-height: var(--workspace-nav-control-size); color: var(--dl-text-primary); }
-/* 左端设置与右端铃铛都保持 icon-only;文字只留在 title / aria-label 里。 */
-.workspace-dock__settings-trigger { display: flex; flex: none; align-items: center; justify-content: center; color: var(--dl-text-secondary); }
+/* 头像入口属于横向密集导航行；完整账户名由 aria-label 提供。 */
+.workspace-dock__settings-trigger { display: flex; flex: none; align-items: center; justify-content: center; width: var(--workspace-nav-control-size); height: var(--workspace-nav-control-size); color: var(--dl-text-secondary); }
+.workspace-dock__account-avatar { display: grid; place-items: center; flex: none; inline-size: var(--dl-icon-lg); block-size: var(--dl-icon-lg); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); font-size: var(--dl-font-size-xs); font-weight: 500; }
 .workspace-dock__notification-trigger { position: relative; display: flex; flex: none; align-items: center; justify-content: center; }
-/* 设置只有图标,补一枚显式 tooltip:悬停 / 键盘聚焦都可见;文字同时由按钮 aria-label 提供。 */
+/* 所有宽度提供提示，菜单或抽屉打开后隐藏以免遮挡内容。 */
 .workspace-dock__settings-tooltip { position: absolute; inset-block-end: calc(100% + var(--dl-space-2)); inset-inline-start: 0; z-index: var(--dl-z-overlay); padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
-.workspace-dock__global-settings:hover .workspace-dock__settings-tooltip,
-.workspace-dock__settings-trigger:focus-visible + .workspace-dock__settings-tooltip { opacity: 1; visibility: visible; }
+.workspace-dock__settings-trigger[aria-expanded="false"]:hover + .workspace-dock__settings-tooltip,
+.workspace-dock__settings-trigger[aria-expanded="false"]:focus-visible + .workspace-dock__settings-tooltip { opacity: 1; visibility: visible; }
 .workspace-dock__settings-trigger .dl-icon, .workspace-dock__notification-trigger .dl-icon { color: var(--dl-text-secondary); }
 .workspace-dock__settings-trigger:hover, .workspace-dock__notification-trigger:hover { color: var(--dl-text-primary); }
 .workspace-dock__settings-trigger:hover .dl-icon, .workspace-dock__notification-trigger:hover .dl-icon { color: var(--dl-text-primary); }
@@ -536,12 +546,6 @@ onBeforeUnmount(() => {
 .workspace-dock__panel h2 { font-size: var(--dl-font-size-md); font-weight: 500; }
 .workspace-dock__panel h4 { font-size: var(--dl-font-size-sm); font-weight: 500; color: var(--dl-text-secondary); padding: var(--dl-space-2); }
 .workspace-dock__panel p { font-size: var(--dl-font-size-sm); color: var(--dl-text-secondary); }
-/* 设置面板:一行设置的 label + 控件;语言是两个 aria-pressed 切换钮。 */
-.workspace-dock__setting-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); padding: var(--dl-space-2); }
-.workspace-dock__setting-label { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); }
-.workspace-dock__language { display: flex; align-items: center; gap: var(--dl-space-1); }
-.workspace-dock__language button { min-height: var(--dl-control-height); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.workspace-dock__language button[aria-pressed='true'] { border-color: transparent; background: var(--dl-accent); color: var(--dl-text-on-accent); }
 .workspace-dock__member, .workspace-dock__close, .workspace-dock__notice { min-height: var(--dl-target-size); padding: var(--dl-space-2); border-radius: var(--dl-radius-sm); text-align: left; color: var(--dl-text-primary); overflow-wrap: anywhere; }
 .workspace-dock__close { border-block-start: var(--dl-border-width) solid var(--dl-border-base); color: var(--dl-error); }
 .workspace-dock__retry { align-self: flex-start; min-height: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); background: var(--dl-bg-elevated); }
@@ -559,7 +563,12 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
   .workspace-dock { gap: var(--dl-space-1); padding-inline: var(--dl-space-2); }
   .workspace-dock__chip { max-width: calc(4 * var(--dl-space-12)); }
 }
+.workspace-settings-menu-enter-active { transition: transform var(--dl-duration-base) var(--dl-ease-standard), opacity var(--dl-duration-base) var(--dl-ease-standard); }
+.workspace-settings-menu-leave-active { transition: transform var(--dl-duration-fast) var(--dl-ease-standard), opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.workspace-settings-menu-enter-from, .workspace-settings-menu-leave-to { transform: translateY(var(--dl-space-2)); opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
+  .workspace-settings-menu-enter-active, .workspace-settings-menu-leave-active { transition: none; }
+  .workspace-settings-menu-enter-from, .workspace-settings-menu-leave-to { transform: none; }
   button:active { transform: none; }
   .workspace-notification-drawer-enter-active,
   .workspace-notification-drawer-leave-active { transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }

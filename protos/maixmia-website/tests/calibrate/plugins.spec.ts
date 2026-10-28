@@ -364,7 +364,7 @@ test('加载失败重试及切换 Agent:骨架可见、计数留空、重试恢�
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
 })
 
-test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型 / 身份与安全三页', async ({ page }) => {
+test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型 / 安全三页', async ({ page }) => {
   await login(page)
   const project = page.locator('.project-item').first()
   await expect(project.getByRole('tab')).toHaveCount(0)
@@ -374,10 +374,10 @@ test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  // 主 tab 为基本 / 模型 / 身份与安全三页;子 tab 不计入。
+  // 主 tab 为基本 / 模型 / 安全三页;子 tab 不计入。
   const mainTabs = dialog.locator('.agent-editor__tabs').getByRole('tab')
   await expect(mainTabs).toHaveCount(3)
-  await expect(mainTabs).toHaveText(['基本', '模型', '身份与安全'])
+  await expect(mainTabs).toHaveText(['基本', '模型', '安全'])
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()

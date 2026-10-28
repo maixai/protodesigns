@@ -26,6 +26,11 @@ function guardedRoute(): AppRoute {
     clearHash()
     return { page: 'home', demoState: 'normal' }
   }
+  if (route.page === 'home' && isAuthenticated.value) {
+    // 登录态唯一落点是工作台；替换当前条目，保留部署子路径与查询参数。
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/workspace`)
+    return { page: 'workspace', demoState: 'normal' }
+  }
   return route
 }
 

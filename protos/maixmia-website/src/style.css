@@ -125,9 +125,7 @@
   /* 布局常量:内容容器、吸顶栏高度 */
   --dl-container-max: 1520px;
   --dl-header-height: 60px;
-  /* 顶栏**当场**的高度:默认 = --dl-header-height;工作台页把整站顶栏折叠起来时,
-     由 site-header.vue 把它改写成 0px,页面据此把腾出的高度交还给下方内容。
-     单独一个 token 而不是直接改 --dl-header-height —— 后者是「设计常量」,还有别处按它算间距。 */
+  /* 首页顶栏占据设计高度；工作台在页面作用域覆盖为 0，不再运行时写全局样式。 */
   --dl-header-height-current: var(--dl-header-height);
 
   /* 外壳 gutter:顶栏与应用框架只共享 .dl-container 的视口内边距,

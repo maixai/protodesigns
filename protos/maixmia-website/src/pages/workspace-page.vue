@@ -125,7 +125,7 @@ const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
 }])
 // Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
-const agentEditorSecurityTab = ref(false)
+const agentEditorFocusSecurity = ref(false)
 const isIdentityUnlocked = ref(false)
 const isPairingOpen = ref(false)
 const pairingSessionId = ref('')
@@ -1628,7 +1628,7 @@ function retryAgents(): void {
 }
 
 function openAgentSettings(): void {
-  agentEditorSecurityTab.value = false
+  agentEditorFocusSecurity.value = false
   agentEditorError.value = ''
   isAgentEditorOpen.value = true
 }
@@ -1699,7 +1699,7 @@ async function onAgentPaired(summary: AgentSummary, details: boolean): Promise<v
   announcePlacement(t.value.workspace.agentAdmin.created.replace('{name}', summary.name))
   await onSelectAgent(summary.id)
   if (details) {
-    agentEditorSecurityTab.value = true
+    agentEditorFocusSecurity.value = true
     agentEditorError.value = ''
     await nextTick()
     isAgentEditorOpen.value = true
@@ -2916,7 +2916,7 @@ onBeforeUnmount(() => {
     <AgentPairingDialog :open="isPairingOpen" :session-id="pairingSessionId" :link-secret="pairingLinkSecret" :re-pair="isAgentEditorOpen" @manual="resetPairingInvite" @cancel="closePairing" @added="onAgentPaired" @link="onPairingLink" />
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <AgentEditorDialog
-      :open="isAgentEditorOpen" :security-tab="agentEditorSecurityTab"
+      :open="isAgentEditorOpen" :focus-security="agentEditorFocusSecurity"
       :agent="currentAgent"
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
@@ -2962,6 +2962,7 @@ onBeforeUnmount(() => {
 .workspace-page.is-identity-covered > :not(dialog) { visibility: hidden; }
 .workspace-page:focus { outline: none; }
 .workspace-page {
+  --dl-header-height-current: 0px;
   /* 组件级布局常量，不是全局设计 token；侧栏与窄屏抽屉共享同一宽度。 */
   --workspace-sidebar-width: 300px;
   /* 侧栏文件树的**行高**(密集档)。依据 design-language ⑥ 的触达尺寸规则:密集列表 / 树行是
@@ -2998,8 +2999,8 @@ onBeforeUnmount(() => {
   --workspace-gutter: calc(var(--workspace-avatar-size) + var(--workspace-avatar-gap));
   /* 应用外壳内缩:面板从视口边缘退开 8px,16px 的面板圆角才看得见。 */
   --workspace-shell-inset: var(--dl-space-2);
-  /* 高度按顶栏的**当前**高度算:顶栏在工作台页可被折叠,折叠后这里自动长高。 */
-  height: calc(100dvh - var(--dl-header-height-current) - var(--dl-border-width));
+  /* 工作台没有整站顶栏，页面与悬浮窗共用零顶栏高度。 */
+  height: calc(100dvh - var(--dl-header-height-current));
   min-height: 0;
 }
 /* 外壳网格:两列(侧栏 / 对话)+ 两行(面板行 / 最小化栏行)。 */

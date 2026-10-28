@@ -230,7 +230,7 @@ export function useWindowFrame(options: WindowFrameOptions): WindowFrameApi {
       gutter: resolveLength('--workspace-gutter') || 0,
       composer: composerRect === null ? null : { left: composerRect.left, top: composerRect.top, width: composerRect.width },
       headingBottom: headingRect === null ? null : headingRect.bottom,
-      headerHeight: resolveLength('--dl-header-height') || 60,
+      headerHeight: resolveLength('--dl-header-height-current') || 0,
       composerJumpReserve: options.composerJumpReserve === true ? jumpReserve.value : 0,
       cascade: options.cascade(),
       minW: options.minWidth,

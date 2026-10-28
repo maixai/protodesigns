@@ -94,21 +94,20 @@ for (const width of [375, 1280]) {
   }
 }
 
-test('身份动效:已解锁用户返回工作台，从首帧起不打开 modal', async ({ page }) => {
+test('身份动效:已解锁用户访问首页被守卫送回，不闪现 gate', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await unlockDemoIdentity(page)
-  await page.locator('.site-header').getByRole('link', { name: 'Mia', exact: true }).click()
-  await expect(page.locator('.auth-home')).toBeVisible()
   await page.evaluate(() => {
     const observer = new MutationObserver(() => {
       if (document.querySelector('dialog.identity-gate[open]')) performance.mark('motion-unlocked-gate-flash')
     })
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] })
   })
-  await page.locator('.account-menu__trigger').click()
-  await page.getByRole('link', { name: '工作台', exact: true }).click()
+  await page.evaluate(() => { window.location.hash = '' })
+  await expect(page).toHaveURL(/#\/workspace$/)
+  await expect(page.locator('.site-header')).toHaveCount(0)
   await expect(page.locator('main.workspace-page')).toBeFocused()
   await expect(page.getByTestId('identity-vault-dialog')).toBeHidden()
   expect(await page.evaluate(() => performance.getEntriesByName('motion-unlocked-gate-flash').length)).toBe(0)

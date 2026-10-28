@@ -9,7 +9,4 @@ export const nav = {
   quickstart: 'Quickstart',
   features: 'Highlights',
   login: 'Sign in',
-  // The site header's collapse control (workspace page only; the home page does not render it).
-  collapseHeader: 'Collapse the header',
-  expandHeader: 'Expand the header',
 }

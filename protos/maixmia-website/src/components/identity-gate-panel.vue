@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { IdentityVault } from '../contracts/generated/identity-vault'
+import type { DeviceUnlockCapability } from '../contracts/generated/device-unlock-capability'
 import { useI18n } from '../i18n'
-import { DEMO_RECOVERY_KEY } from '../mocks/identity'
+import { readRecoveryKey } from '../mocks/identity'
 import './identity-gate.css'
 
 const props = defineProps<{
   vault: IdentityVault | null
+  capability: DeviceUnlockCapability | null
+  lockedByUser: boolean
   view: 'loading' | 'gate' | 'success' | 'error' | 'exiting'
   isBusy: boolean
   error: string
@@ -50,27 +53,49 @@ function enteredState(): void {
 const title = computed(() => {
   switch (state.value) {
     case 'loading': return copy.value.loading
-    case 'passkey': return copy.value.gate.passkeyTitle
+    case 'passkey': return isHybrid.value ? copy.value.gate.hybridTitle : copy.value.gate.passkeyTitle
     case 'recovery': return copy.value.recovery
     case 'reset': return copy.value.reset
     case 'success': return copy.value.gate.successTitle
     case 'error': return copy.value.gate.errorTitle
-    default: return copy.value.unlockTitle
+    default: return noFactors.value ? copy.value.gate.noFactorsTitle : copy.value.unlockTitle
   }
 })
 const description = computed(() => {
   switch (state.value) {
     case 'loading': return copy.value.gate.loadingHint
-    case 'passkey': return copy.value.gate.passkeyHint
+    case 'passkey': return isHybrid.value ? copy.value.gate.hybridHint : copy.value.gate.passkeyHint
     case 'recovery': return copy.value.gate.recoveryHint
     case 'reset': return copy.value.gate.resetHint
     case 'success': return copy.value.gate.successHint
     case 'error': return copy.value.unavailable
-    default: return props.vault?.passkeys.length === 0 ? copy.value.noPasskeys : copy.value.gate.unlockHint
+    default:
+      if (noFactors.value) return copy.value.gate.noFactorsHint
+      if (!hasUnlockFactor.value) return copy.value.gate.resetHint
+      if (props.capability?.prfAvailable === false) return copy.value.gate.prfUnsupported
+      if ((props.capability?.localPasskeyCount ?? 0) === 0 && hasUnlockFactor.value) return copy.value.gate.noLocalFactor
+      if (props.lockedByUser) return copy.value.gate.lockedConsole
+      return copy.value.gate.unlockHint
   }
 })
+const isHybrid = computed(() => (props.capability?.localPasskeyCount ?? 0) === 0 && (props.vault?.passkeys.some((passkey) => passkey.canUnlock && passkey.backupEligible) ?? false))
+const hasUnlockFactor = computed(() => (props.vault?.passkeys.some((passkey) => passkey.canUnlock) ?? false) || (props.capability?.canUseRecoveryKey ?? false))
+const primaryKind = computed<'passkey' | 'hybrid' | 'recovery' | 'reset'>(() => {
+  if ((props.capability?.prfAvailable ?? false) && ((props.capability?.localPasskeyCount ?? 0) > 0)) return 'passkey'
+  if ((props.capability?.prfAvailable ?? false) && isHybrid.value) return 'hybrid'
+  if (props.capability?.canUseRecoveryKey ?? false) return 'recovery'
+  return 'reset'
+})
+const primaryLabel = computed(() => primaryKind.value === 'passkey' ? copy.value.passkeyUnlock : primaryKind.value === 'hybrid' ? copy.value.gate.hybridUnlock : primaryKind.value === 'recovery' ? copy.value.recovery : copy.value.gate.resetIdentity)
+// 无任何可用因子时，主路径就是重置身份；标题与说明不能再说「解锁」。
+const noFactors = computed(() => state.value === 'idle' && primaryKind.value === 'reset' && !hasUnlockFactor.value)
+function activatePrimary(): void {
+  if (primaryKind.value === 'reset') selectMode('reset')
+  else if (primaryKind.value === 'recovery') selectMode('recovery')
+  else selectMode('passkey')
+}
 const footer = computed(() => copy.value.gate.footer
-  .replace('{count}', props.vault === null ? '—' : String(props.vault.passkeys.length))
+  .replace('{count}', props.capability === null ? '—' : String(props.capability.localPasskeyCount))
   .replace('{version}', props.vault === null ? '—' : String(props.vault.keyVersion)))
 const fingerprint = computed(() => props.vault?.fingerprint.split(' ').slice(0, 5).join(' ') ?? '—')
 
@@ -133,18 +158,19 @@ onMounted(focusHeading)
         </div>
 
         <div v-if="state === 'idle'" class="identity-gate__actions">
-          <button type="button" class="identity-gate__primary" :disabled="isBusy || vault?.passkeys.length === 0" @click="selectMode('passkey')">
+          <button type="button" class="identity-gate__primary" :class="{ 'identity-gate__danger': primaryKind === 'reset' }" :disabled="isBusy" @click="activatePrimary">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12v-1a8 8 0 0 1 16 0v3M7 16c1-2 1-4 1-5a4 4 0 0 1 8 0v3c0 3-1 5-2 7M12 11c0 5-1 7-3 10M4 17l-1 3M20 18l-1 3" /></svg>
-            <span>{{ copy.passkeyUnlock }}</span>
+            <span>{{ primaryLabel }}</span>
             <svg class="identity-gate__arrow" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>
           </button>
-          <ul class="identity-gate__trust" :aria-label="copy.gate.trustLabel">
+          <ul v-if="primaryKind !== 'reset'" class="identity-gate__trust" :aria-label="copy.gate.trustLabel">
             <li>{{ copy.gate.trustDevice }}</li><li>{{ copy.gate.trustLocal }}</li><li>{{ copy.gate.trustPrivate }}</li>
           </ul>
           <div class="identity-gate__secondary">
-            <button type="button" class="identity-gate__text-button" @click="selectMode('recovery')">{{ copy.recovery }}</button>
-            <span aria-hidden="true" />
-            <button type="button" class="identity-gate__text-button" @click="selectMode('reset')">{{ copy.gate.help }}</button>
+            <button v-if="capability?.canUseRecoveryKey && primaryKind !== 'recovery'" type="button" class="identity-gate__text-button" @click="selectMode('recovery')">{{ copy.recovery }}</button>
+            <span v-if="capability?.canUseRecoveryKey && primaryKind !== 'recovery'" aria-hidden="true" />
+            <button v-if="hasUnlockFactor" type="button" class="identity-gate__text-button" @click="selectMode('reset')">{{ copy.gate.help }}</button>
+            <button v-else type="button" class="identity-gate__text-button" @click="emit('sign-out')">{{ copy.signOut }}</button>
           </div>
         </div>
 
@@ -159,7 +185,7 @@ onMounted(focusHeading)
           <label class="identity-gate__field" for="identity-recovery-key">{{ copy.recoveryLabel }}
             <input id="identity-recovery-key" v-model="secret" class="identity-gate__input" name="recovery-key" data-testid="recovery-key-input" type="text" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="isBusy || isTransitioning" :aria-invalid="error !== ''" :aria-describedby="error !== '' ? 'identity-gate-key-hint identity-gate-error' : 'identity-gate-key-hint'" @input="emit('back')">
           </label>
-          <p id="identity-gate-key-hint" class="identity-gate__key-hint">{{ copy.recoveryHint }}<code>{{ DEMO_RECOVERY_KEY }}</code></p>
+          <p id="identity-gate-key-hint" class="identity-gate__key-hint">{{ copy.recoveryHint }}<code>{{ readRecoveryKey() }}</code></p>
           <button class="identity-gate__primary" type="submit" :disabled="isBusy || secret.trim() === ''">{{ isBusy ? copy.unlocking : copy.unlock }}</button>
           <button class="identity-gate__text-button identity-gate__back" type="button" :disabled="isBusy || isTransitioning" @click="selectMode('idle')">{{ copy.gate.back }}</button>
         </form>

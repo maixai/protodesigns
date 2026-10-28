@@ -6,7 +6,9 @@ import { cancelPairing, confirmPairing, connectPairingLink, getPairingSession, r
 import { useI18n } from '../i18n'
 import MockAgentPanel from './mock-agent-panel.vue'
 import MockPasskeyStep from './mock-passkey-step.vue'
+import DliIcon from './dl-icon.vue'
 import './identity-flow.css'
+import './pairing-flow.css'
 
 const props = defineProps<{ open: boolean; sessionId: string; linkSecret: string; rePair: boolean }>()
 const emit = defineEmits<{ cancel: []; manual: []; added: [agent: AgentSummary, details: boolean]; link: [id: string, secret: string] }>()
@@ -30,20 +32,102 @@ const note = ref('')
 const isSafetyMatched = ref(false)
 const showPasskey = ref(false)
 const showMock = ref(false)
-const step = computed(() => pairing.value?.state === 'complete' ? 3 : pairing.value !== null && ['review', 'awaitingAgent'].includes(pairing.value.state) ? 2 : 1)
-const statusLabel = computed(() => isConnecting.value ? copy.value.connecting : pairing.value?.state === 'awaitingAgent' ? copy.value.waiting : step.value === 3 ? copy.value.complete : step.value === 2 ? copy.value.stepReview : copy.value.stepFind)
+const stage = ref(1)
+const isOpening = ref(false)
+const isBackward = ref(false)
+const mockKey = ref(0)
+const mockPanel = ref<InstanceType<typeof MockAgentPanel> | null>(null)
+const consoleTrigger = ref<HTMLButtonElement | null>(null)
+const body = ref<HTMLElement | null>(null)
+const now = ref(Date.now())
+const flow = computed(() => copy.value.pairingFlow)
+const stages = computed(() => [
+  { number: 1, label: flow.value.connect, code: 'CONNECT', title: flow.value.connectTitle, hint: flow.value.connectHint, next: flow.value.connectNext },
+  { number: 2, label: flow.value.verify, code: 'VERIFY', title: flow.value.verifyTitle, hint: flow.value.verifyHint, next: flow.value.verifyNext },
+  { number: 3, label: flow.value.authorize, code: 'AUTHORIZE', title: flow.value.authorizeTitle, hint: flow.value.authorizeHint, next: flow.value.authorizeNext },
+  { number: 4, label: flow.value.name, code: 'NAME', title: flow.value.nameTitle, hint: flow.value.nameHint, next: '' },
+])
+const currentStage = computed(() => stages.value.find((item) => item.number === stage.value))
 const terminalError = computed(() => pairing.value?.state === 'denied' ? copy.value.agentDenied : pairing.value?.state === 'expired' ? copy.value.expired : pairing.value?.state === 'error' ? copy.value.networkError : '')
+const hasError = computed(() => error.value !== '' || terminalError.value !== '')
+// 阶段切换交给标题焦点，错误只交给 alert；这里播报同一阶段内的异步进展与 console 操作反馈。
+const consoleNotice = ref('')
+const statusLabel = computed(() => {
+  if (hasError.value) return ''
+  if (isConnecting.value) return copy.value.connecting
+  if (isBusy.value) return copy.value.busy
+  if (consoleNotice.value !== '') return consoleNotice.value
+  const state = pairing.value?.state
+  if (state === 'review') return flow.value.reviewLive
+  if (state === 'awaitingAgent') return copy.value.waiting
+  if (state === 'complete') return copy.value.complete
+  return ''
+})
+const ttl = computed(() => {
+  if (pairing.value === null || pairing.value.state === 'complete') return '—'
+  const seconds = Math.max(0, Math.ceil((Date.parse(pairing.value.expiresAt) - now.value) / 1000))
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+})
+// 原始状态串只在代码里用；telemetry 给人看，awaitingAgent 必须有可读间隔。
+function stateCode(state: PairingSession['state']): string {
+  return state === 'awaitingAgent' ? 'AWAITING AGENT' : state.toUpperCase()
+}
+const telemetryState = computed(() => {
+  if (hasError.value) return pairing.value === null || pairing.value.state === 'review' ? 'ERROR' : stateCode(pairing.value.state)
+  if (isConnecting.value) return 'CONNECTING'
+  return stateCode(pairing.value?.state ?? 'waiting')
+})
 let timer: ReturnType<typeof setTimeout> | undefined
 let requestVersion = 0
 let isAlive = true
-watch(() => pairing.value?.state, async (state, previous) => {
-  if (state === previous || (state !== 'review' && state !== 'complete')) return
-  await nextTick()
-  if (dialog.value === null || !props.open) return
-  dialog.value.scrollTop = 0
-  const target = state === 'complete' ? dialog.value.querySelector<HTMLElement>('[data-testid="pairing-name"]') : dialog.value.querySelector<HTMLElement>('#agent-pairing-title')
-  target?.focus({ preventScroll: true })
+// 只有服务端状态推进阶段；失败保持现场，恢复入口显式回到连接阶段。
+watch(() => pairing.value?.state, (state) => {
+  if (state === 'review') moveToStage(2)
+  else if (state === 'awaitingAgent') moveToStage(3)
+  else if (state === 'complete') moveToStage(4)
 })
+function moveToStage(next: number): void {
+  if (next !== 1) isOpening.value = false
+  isBackward.value = next < stage.value
+  stage.value = next
+  // 上一阶段的复制 / 失败提示不得压住新阶段的播报。
+  consoleNotice.value = ''
+}
+function focusStage(): void {
+  if (!props.open || dialog.value === null) return
+  if (body.value !== null) body.value.scrollTop = 0
+  const selector = stage.value === 4 ? '[data-testid="pairing-name"]' : stage.value === 1 && isOpening.value && props.sessionId === '' ? '[data-testid="pairing-code-input"]' : '#pairing-stage-title'
+  dialog.value.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true })
+  isOpening.value = false
+}
+async function toggleConsole(open: boolean): Promise<void> {
+  showMock.value = open
+  await nextTick()
+  if (open) dialog.value?.querySelector<HTMLElement>('#mock-agent-title')?.focus()
+  else consoleTrigger.value?.focus()
+}
+// Passkey 面板替换主按钮后，焦点必须跟着落到新主按钮，不能回到 BODY。
+async function openPasskey(): Promise<void> {
+  showPasskey.value = true
+  await nextTick()
+  dialog.value?.querySelector<HTMLElement>('[data-testid="mock-pairing-passkey"]')?.focus()
+}
+async function closePasskey(): Promise<void> {
+  showPasskey.value = false
+  await nextTick()
+  dialog.value?.querySelector<HTMLElement>('#pairing-safety-match')?.focus()
+}
+async function restart(): Promise<void> {
+  await toggleConsole(true)
+  await mockPanel.value?.generate()
+}
+watch(() => props.open, (open, _previous, onCleanup) => {
+  if (!open) return
+  now.value = Date.now()
+  // 时钟只更新 TTL，不驱动流程推进。
+  const clock = setInterval(() => { now.value = Date.now() }, 1000)
+  onCleanup(() => clearInterval(clock))
+}, { immediate: true })
 function normalizeCode(event: Event): void {
   if (!(event.target instanceof HTMLInputElement)) return
   error.value = ''
@@ -52,6 +136,9 @@ function normalizeCode(event: Event): void {
   event.target.value = code.value
 }
 function restartInvitation(): void {
+  isOpening.value = false
+  moveToStage(1)
+  consoleNotice.value = ''
   requestVersion += 1
   clearTimeout(timer)
   error.value = ''
@@ -71,7 +158,7 @@ function accept(session: PairingSession): void {
 }
 async function poll(version: number): Promise<void> {
   const id = pairing.value?.id
-  if (id === undefined || !props.open || version !== requestVersion || !isAlive) return
+  if (id === undefined || !props.open || version !== requestVersion || !isAlive || !['review', 'awaitingAgent'].includes(pairing.value?.state ?? '')) return
   const result = await getPairingSession(id)
   if (!props.open || version !== requestVersion || !isAlive) return
   if (!result.ok) { error.value = result.error.message; return }
@@ -97,6 +184,7 @@ async function findAgent(): Promise<void> {
 }
 async function connectLink(): Promise<void> {
   if (props.sessionId === '') return
+  moveToStage(1)
   requestVersion += 1
   const version = requestVersion
   clearTimeout(timer)
@@ -112,7 +200,11 @@ async function connectLink(): Promise<void> {
   if (!props.open || version !== requestVersion || !isAlive) return
   isBusy.value = false
   isConnecting.value = false
-  if (!result.ok) { error.value = result.error.message; return }
+  if (!result.ok) {
+    if (found.ok && ['denied', 'expired', 'error'].includes(found.value.state)) accept(found.value)
+    error.value = result.error.message
+    return
+  }
   accept(result.value)
   void poll(version)
 }
@@ -164,6 +256,10 @@ watch(() => [props.open, props.sessionId, props.linkSecret], async () => {
   if (!props.open) { requestVersion += 1; clearTimeout(timer); showMock.value = false; dialog.value?.close(); return }
   if (dialog.value?.open === false) {
     returnFocus.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    moveToStage(1)
+    isOpening.value = true
+    mockKey.value += 1
+    consoleNotice.value = ''
     pairing.value = null
     code.value = ''
     name.value = ''
@@ -184,44 +280,97 @@ onBeforeUnmount(() => { isAlive = false; requestVersion += 1; clearTimeout(timer
 </script>
 
 <template>
-  <dialog ref="dialog" class="identity-flow dl-modal-scrim" data-testid="agent-pairing-dialog" aria-modal="true" aria-labelledby="agent-pairing-title" @keydown.stop @cancel.prevent="cancel">
-    <div class="identity-stack">
-      <h2 id="agent-pairing-title" tabindex="-1">{{ copy.add }}</h2>
-      <p v-if="rePair" class="identity-muted">{{ copy.rePairHint }}</p>
-      <ol class="identity-steps" :aria-label="copy.add"><li :aria-current="step === 1 ? 'step' : undefined">{{ copy.stepFind }}</li><li :aria-current="step === 2 ? 'step' : undefined">{{ copy.stepReview }}</li><li :aria-current="step === 3 ? 'step' : undefined">{{ copy.stepComplete }}</li></ol>
-      <p aria-live="polite" aria-atomic="true">{{ statusLabel }}</p>
-      <p v-if="pairing === null" class="identity-muted">{{ copy.findHint }}</p>
-      <form v-if="pairing === null && sessionId === '' && !isConnecting" class="identity-stack" @submit.prevent="findAgent">
-        <h3>{{ copy.manualTitle }}</h3><p>{{ copy.manualHint }}</p>
-        <label class="identity-field" for="pairing-code">{{ copy.codeLabel }}<input id="pairing-code" name="pairing-code" :value="code" data-testid="pairing-code-input" class="identity-input identity-mono" type="text" autocomplete="one-time-code" :spellcheck="false" maxlength="11" :disabled="isBusy" placeholder="XXXXX-XXXXX" @input="normalizeCode"></label>
-        <p class="identity-warning">{{ copy.codeWarning }}</p>
-        <button type="submit" class="identity-button identity-button--primary" :disabled="isBusy || code.replace(/[\s-]/g, '').length !== 10">{{ copy.submitCode }}</button>
-      </form>
-      <template v-if="pairing !== null && terminalError === ''">
-        <section v-if="step === 2" class="identity-stack">
-          <p v-if="pairing.alreadyTrusted" class="identity-box">{{ copy.alreadyTrusted }}</p>
-          <h3>{{ pairing.agentName }}</h3>
-          <dl class="identity-facts"><dt>{{ copy.device }} / {{ copy.platform }}</dt><dd>{{ pairing.deviceName }} · {{ pairing.platform }}</dd><dt>{{ copy.fingerprint }}</dt><dd class="identity-mono">{{ pairing.fingerprint }}</dd><dt>{{ copy.expires }}</dt><dd class="identity-mono" data-testid="pairing-expires">{{ formatTime(pairing.expiresAt) }}</dd></dl>
-          <div class="identity-box"><h3>{{ copy.safetyCode }}</h3><p class="identity-code" data-testid="pairing-safety-code" :aria-label="`${copy.safetyCode}: ${pairing.safetyCode.split('').join(' ')}`">{{ pairing.safetyCode }}</p></div>
-          <template v-if="pairing.state === 'review'">
-            <label class="identity-check" for="pairing-safety-match"><input id="pairing-safety-match" name="pairing-safety-match" v-model="isSafetyMatched" type="checkbox" :disabled="isBusy">{{ copy.safetyMatch }}</label>
-            <button class="identity-button identity-button--primary" type="button" :disabled="!isSafetyMatched || isBusy" @click="showPasskey = true">{{ copy.confirmPasskey }}</button>
-            <MockPasskeyStep v-if="showPasskey" :busy="isBusy" test-id="mock-pairing-passkey" @confirm="approve" />
-          </template>
-          <p v-else class="identity-muted">{{ copy.waitingHint }}</p>
-        </section>
-        <form v-if="step === 3" class="identity-stack" @submit.prevent="finish(false)">
-          <p>{{ copy.completeHint }}</p>
-          <label class="identity-field" for="pairing-name">{{ copy.name }}<input id="pairing-name" name="agent-name" v-model="name" class="identity-input" maxlength="40" required :disabled="isBusy" data-testid="pairing-name"></label>
-          <label class="identity-field" for="pairing-note">{{ copy.note }}<input id="pairing-note" name="agent-note" v-model="note" class="identity-input" maxlength="80" :disabled="isBusy"></label>
-          <div class="identity-actions"><button type="submit" class="identity-button identity-button--primary" :disabled="isBusy || name.trim() === ''">{{ copy.finish }}</button><button type="button" class="identity-button" :disabled="isBusy || name.trim() === ''" @click="finish(true)">{{ copy.details }}</button></div>
-        </form>
-      </template>
-      <div v-if="error !== '' || terminalError !== ''" class="identity-stack" role="alert"><p class="identity-error">{{ error || terminalError }}</p><button v-if="pairing === null && sessionId !== ''" type="button" class="identity-button" :disabled="isBusy" @click="connectLink">{{ copy.retry }}</button></div>
-      <p v-if="isBusy && !isConnecting" role="status">{{ copy.busy }}</p>
-      <button type="button" class="identity-button" :disabled="isBusy" @click="cancel">{{ copy.disconnect }}</button>
-      <button type="button" class="identity-button" :aria-expanded="showMock" @click="showMock = !showMock">{{ copy.noAgent }}</button>
-      <MockAgentPanel v-if="showMock" @generate="restartInvitation" @link="(id, secret) => emit('link', id, secret)" />
+  <dialog ref="dialog" class="identity-flow pairing-flow dl-modal-scrim" :class="{ 'is-console-open': showMock, 'is-backward': isBackward }" data-testid="agent-pairing-dialog" aria-modal="true" aria-labelledby="agent-pairing-title" @keydown.stop @cancel.prevent="cancel">
+    <header class="pairing-flow__header">
+      <div class="pairing-flow__eyebrow" aria-hidden="true"><span>AGENT PAIRING</span><span>STEP {{ String(stage).padStart(2, '0') }} / 04 · {{ currentStage?.code }}</span></div>
+      <h2 id="agent-pairing-title">{{ copy.add }}</h2>
+      <ol class="identity-steps pairing-flow__steps" :aria-label="copy.add">
+        <li v-for="item in stages" :key="item.number" :aria-current="stage === item.number ? 'step' : undefined" :class="{ 'is-done': item.number < stage, 'is-current': item.number === stage, 'is-error': item.number === stage && hasError }">
+          <span class="pairing-flow__track" aria-hidden="true"></span>
+          <span class="pairing-flow__step-caption">
+            <span class="identity-mono">{{ String(item.number).padStart(2, '0') }}</span><span>{{ item.label }}</span>
+            <span class="pairing-flow__step-status">
+              <DliIcon v-if="item.number === stage && hasError" name="alert" size="sm" />
+              <DliIcon v-else-if="item.number < stage" name="check" size="sm" />
+              <span v-else-if="item.number === stage" class="pairing-flow__pulse" aria-hidden="true"></span>
+              <span class="pairing-flow__sr-only">{{ item.number === stage && hasError ? flow.failed : item.number < stage ? flow.done : item.number > stage ? flow.pending : '' }}</span>
+            </span>
+          </span>
+        </li>
+      </ol>
+      <div class="pairing-flow__telemetry" aria-hidden="true"><span>CHANNEL {{ sessionId !== '' ? 'ONE-TIME LINK' : 'PAIRING CODE' }}</span><span>TTL {{ ttl }}</span><span>STATE {{ telemetryState }}</span></div>
+      <h3 id="pairing-stage-title" tabindex="-1">{{ currentStage?.title }}</h3>
+    </header>
+    <div ref="body" class="pairing-flow__body">
+      <div class="pairing-flow__stage">
+        <Transition name="pairing-stage" mode="out-in" @after-enter="focusStage">
+          <section :key="stage" class="identity-stack pairing-flow__content" :aria-label="currentStage?.title">
+            <p class="pairing-flow__intro">{{ currentStage?.hint }}</p>
+            <div v-if="hasError" class="identity-stack pairing-flow__error" role="alert">
+              <p class="identity-error"><DliIcon name="alert" size="sm" /> {{ error || terminalError }}</p>
+              <button v-if="terminalError !== '' || (stage > 1 && error !== '')" type="button" class="identity-button" :disabled="isBusy" @click="restart">{{ flow.restart }}</button>
+              <button v-else-if="pairing === null && sessionId !== '' && error !== ''" type="button" class="identity-button" :disabled="isBusy" @click="restart">{{ flow.restart }}</button>
+            </div>
+            <template v-if="stage === 1">
+              <p v-if="rePair" class="identity-box">{{ copy.rePairHint }}</p>
+              <p v-if="sessionId !== ''" class="identity-muted">{{ pairing === null && isConnecting ? flow.linkConnecting : copy.findHint }}</p>
+              <form v-else class="identity-stack" @submit.prevent="findAgent">
+                <label class="identity-field" for="pairing-code">{{ copy.codeLabel }}<input id="pairing-code" name="pairing-code" :value="code" data-testid="pairing-code-input" class="identity-input identity-mono" type="text" autocomplete="one-time-code" :spellcheck="false" maxlength="11" :disabled="isBusy" placeholder="XXXXX-XXXXX" :aria-invalid="error !== ''" aria-describedby="pairing-code-warning" @input="normalizeCode"></label>
+                <p id="pairing-code-warning" class="identity-warning">{{ copy.codeWarning }}</p>
+                <button type="submit" class="identity-button identity-button--primary" :disabled="isBusy || code.replace(/[\s-]/g, '').length !== 10">{{ copy.submitCode }}</button>
+                <p v-if="isConnecting" class="identity-muted">{{ copy.connecting }}</p>
+              </form>
+            </template>
+            <template v-if="stage === 2 && pairing !== null">
+              <div class="identity-box pairing-flow__code-board">
+                <div class="pairing-flow__code-label"><h4>{{ copy.safetyCode }}</h4><span>{{ flow.safetyIdentical }}</span></div>
+                <p class="identity-code" data-testid="pairing-safety-code" :aria-label="`${copy.safetyCode}: ${pairing.safetyCode.split('').join(' ')}`">{{ pairing.safetyCode }}</p>
+                <p class="identity-muted">{{ flow.safetyHint }}</p>
+              </div>
+              <p v-if="pairing.alreadyTrusted" class="identity-box">{{ copy.alreadyTrusted }}</p>
+              <dl class="identity-facts pairing-flow__facts"><dt>{{ flow.agentName }}</dt><dd>{{ pairing.agentName }}</dd><dt>{{ copy.device }} / {{ copy.platform }}</dt><dd>{{ pairing.deviceName }} · {{ pairing.platform }}</dd><dt>{{ copy.expires }}</dt><dd class="identity-mono" data-testid="pairing-expires">{{ formatTime(pairing.expiresAt) }}</dd></dl>
+              <template v-if="terminalError === ''">
+                <template v-if="!showPasskey">
+                  <label class="identity-check" for="pairing-safety-match"><input id="pairing-safety-match" name="pairing-safety-match" v-model="isSafetyMatched" type="checkbox" :disabled="isBusy">{{ copy.safetyMatch }}</label>
+                  <button class="identity-button identity-button--primary" type="button" :disabled="!isSafetyMatched || isBusy" @click="openPasskey">{{ copy.confirmPasskey }}</button>
+                </template>
+                <template v-else>
+                  <MockPasskeyStep :busy="isBusy" test-id="mock-pairing-passkey" @confirm="approve" />
+                  <button type="button" class="identity-button pairing-flow__text-button" :disabled="isBusy" @click="closePasskey">{{ flow.back }}</button>
+                </template>
+              </template>
+              <details class="pairing-flow__fingerprint"><summary>{{ copy.fingerprint }}</summary><p class="identity-mono">{{ pairing.fingerprint }}</p></details>
+            </template>
+            <template v-if="stage === 3 && pairing !== null">
+              <div class="pairing-flow__handshake">
+                <span><DliIcon name="check" />{{ copy.thisDevice }}</span>
+                <span class="pairing-flow__handshake-line" aria-hidden="true"></span>
+                <span><span v-if="!hasError" class="pairing-flow__pulse" aria-hidden="true"></span><DliIcon v-else name="alert" />Agent</span>
+              </div>
+              <p v-if="!hasError">{{ copy.waiting }}</p>
+              <p class="identity-mono identity-muted">{{ flow.ttl }} · {{ ttl }}</p>
+              <p class="identity-muted">{{ copy.waitingHint }}</p>
+              <button v-if="!showMock" type="button" class="identity-button pairing-flow__text-button" @click="toggleConsole(true)">{{ flow.openConsole }}</button>
+            </template>
+            <form v-if="stage === 4 && pairing !== null" id="pairing-name-form" class="identity-stack" @submit.prevent="finish(false)">
+              <ul class="pairing-flow__summary"><li v-for="label in [flow.matched, flow.passkeyConfirmed, flow.agentAllowed]" :key="label"><DliIcon name="check" size="sm" />{{ label }}</li></ul>
+              <label class="identity-field" for="pairing-name">{{ copy.name }}<input id="pairing-name" name="agent-name" v-model="name" class="identity-input" maxlength="40" required :disabled="isBusy" data-testid="pairing-name"></label>
+              <label class="identity-field" for="pairing-note">{{ copy.note }}<input id="pairing-note" name="agent-note" v-model="note" class="identity-input" maxlength="80" :disabled="isBusy"></label>
+            </form>
+            <p v-if="!hasError && currentStage?.next" class="pairing-flow__next">{{ currentStage.next }}</p>
+          </section>
+        </Transition>
+      </div>
+      <MockAgentPanel v-if="open" v-show="showMock" :key="mockKey" ref="mockPanel" id="pairing-demo-console" @collapse="toggleConsole(false)" @notice="consoleNotice = $event" @failure="error = $event" @generate="restartInvitation" @link="(id, secret) => emit('link', id, secret)" />
     </div>
+    <footer class="pairing-flow__footer">
+      <div class="identity-actions">
+        <button v-if="stage === 4" type="submit" form="pairing-name-form" class="identity-button identity-button--primary pairing-flow__finish" :disabled="isBusy || name.trim() === ''">{{ copy.finish }}</button>
+        <button v-if="stage === 4" type="button" class="identity-button" :disabled="isBusy || name.trim() === ''" @click="finish(true)">{{ copy.details }}</button>
+        <button type="button" class="identity-button" :disabled="isBusy" @click="cancel">{{ copy.disconnect }}</button>
+      </div>
+      <button ref="consoleTrigger" type="button" class="identity-button pairing-flow__text-button" :aria-expanded="showMock" aria-controls="pairing-demo-console" @click="toggleConsole(!showMock)">{{ showMock ? flow.collapse : copy.noAgent }}</button>
+    </footer>
+    <p class="pairing-flow__sr-only" aria-live="polite" aria-atomic="true">{{ statusLabel }}</p>
   </dialog>
 </template>

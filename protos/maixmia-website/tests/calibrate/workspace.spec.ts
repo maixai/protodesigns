@@ -154,7 +154,8 @@ async function switchLanguageViaSettings(page: Page, language: 'English' | '中�
   await page.locator('.workspace-dock__settings-trigger').click()
   const panel = page.locator('#workspace-settings-panel')
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: language, exact: true }).click()
+  await panel.locator('[data-settings-section="languageRegion"]').click()
+  await page.locator('#workspace-settings-drawer').getByRole('radio', { name: language, exact: true }).check()
   await page.keyboard.press('Escape')
   await expect(page.locator('.workspace-dock__settings-trigger')).toBeFocused()
 }
@@ -447,10 +448,9 @@ const SHELL_INSET = 8
 const PANEL_RADIUS = 16
 // 侧栏内边距由外壳 gutter(24)收到 16,与内缩 8 相加仍等于 24 —— Agent 切换器与顶栏
 // 品牌左缘因此对齐(见 workspace-page.vue 的 --workspace-shell-inset 注释)。
-const CHROME_GUTTER = 24
 
 for (const width of [1280, 1600]) {
-  test(`浮动面板外壳几何 @${width}:内缩、缝隙、面板圆角与品牌对齐`, async ({ page }) => {
+  test(`浮动面板外壳几何 @${width}:内缩、缝隙、面板圆角与内容内边距`, async ({ page }) => {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
@@ -475,22 +475,16 @@ for (const width of [1280, 1600]) {
       await expect.poll(() => panel.evaluate((element) => getComputedStyle(element).borderTopLeftRadius)).toBe(`${PANEL_RADIUS}px`)
     }
 
-    // 回归护栏:内缩 8 + 侧栏内边距 16 = 24 = 外壳 gutter,故侧栏内容与顶栏品牌左缘同在
-    // 24px 竖线上(1px 容差吸收面板 1px 描边)。原先承担这条对齐关系的是侧栏里的 Agent 切换器,
-    // 它搬到底栏之后改由**项目区**承担(侧栏内边距不变,内容左缘不动)。
+    // 工作台已无整站品牌；保留项目内容与侧栏描边、内边距之间的精确几何契约。
     const projects = await page.locator('.workspace-projects').boundingBox()
-    const brand = await page.locator('.site-header__brand').boundingBox()
     const sidebarContentLeft = await page.locator('.workspace-sidebar').evaluate((element) => {
       const rect = element.getBoundingClientRect()
       const style = getComputedStyle(element)
       return rect.x + (Number.parseFloat(style.borderLeftWidth) || 0) + (Number.parseFloat(style.paddingInlineStart) || 0)
     })
     expect(projects).not.toBeNull()
-    expect(brand).not.toBeNull()
-    if (projects === null || brand === null) return
-    expect(Math.abs(brand.x - CHROME_GUTTER)).toBeLessThanOrEqual(1)
+    if (projects === null) return
     expect(Math.abs(projects.x - sidebarContentLeft), '侧栏内容左缘 = 面板内边距处').toBeLessThanOrEqual(1)
-    expect(Math.abs(projects.x - brand.x), '侧栏内容与品牌同一条竖线').toBeLessThanOrEqual(1)
   })
 }
 
@@ -1666,6 +1660,8 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await expect(dialog).toBeVisible()
   // Header 明确当前编辑对象,避免在多个 Agent 之间切换时失去上下文。
   await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划助手')
+  await expect(dialog.getByTestId('agent-editor-subject')).not.toContainText('拆解任务与推进节奏')
+  await expect(dialog.locator('.agent-editor__head')).not.toContainText('正在设置')
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   const save = dialog.getByRole('button', { name: '保存', exact: true })
@@ -1695,7 +1691,7 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划官')
-  await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+  await dialog.getByRole('tab', { name: '安全', exact: true }).click()
   await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
   const removeDialog = page.getByTestId('agent-remove-dialog')
   await removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ }).check()
@@ -1785,6 +1781,19 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await basicTab.focus()
   await page.keyboard.press('ArrowRight')
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
+  await expect(modelTab).toBeFocused()
+  const securityTab = dialog.getByRole('tab', { name: '安全', exact: true })
+  await page.keyboard.press('ArrowRight')
+  await expect(securityTab).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(basicTab).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(securityTab).toBeFocused()
+  await page.keyboard.press('Home')
+  await expect(basicTab).toBeFocused()
+  await page.keyboard.press('End')
+  await expect(securityTab).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
   await expect(modelTab).toBeFocused()
   // 模型页内再分四区;默认落在第一个分区「模型来源」,再切到默认模型分区。
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
@@ -2954,8 +2963,8 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
     await page.getByRole('button', { name: 'Agent 设置' }).click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     await expect(dialog).toBeVisible()
-    // 默认落在「模型 → 模型来源」;移除入口在身份与安全页的危险操作区。
-    await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+    // 默认落在「模型 → 模型来源」;移除入口在安全页底部。
+    await dialog.getByRole('tab', { name: '安全', exact: true }).click()
     await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
     const removeDialog = page.getByTestId('agent-remove-dialog')
     await removeDialog.getByRole('radio', { name: /删除 Agent 及数据/ }).check()
@@ -2966,7 +2975,7 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
   await page.locator(AGENT_TRIGGER).click()
   await page.getByRole('button', { name: 'Agent 设置' }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  await dialog.getByRole('tab', { name: '身份与安全', exact: true }).click()
+  await dialog.getByRole('tab', { name: '安全', exact: true }).click()
   await dialog.getByRole('button', { name: '移除 Agent', exact: true }).click()
   const removeDialog = page.getByTestId('agent-remove-dialog')
   // 最后一个 Agent 仍可断开连接,但删除分支被禁用并给出原因。
@@ -3115,16 +3124,17 @@ for (const width of [375, 480, 600, 768, 1280, 1600]) {
     const settings = dock.locator('.workspace-dock__settings-trigger')
     const settingsBox = await settings.boundingBox()
     expect(settingsBox?.height).toBe(32)
-    expect(settingsBox?.width, '设置 icon-only').toBe(32)
+    expect(settingsBox?.width, '账户入口仅保留头像').toBe(32)
     expect(settingsBox?.x ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(box.x + 16)
     expect(settingsBox?.x ?? 0).toBeGreaterThanOrEqual(box.x)
-    await expect(settings).toHaveAttribute('aria-label', '全局设置')
-    // 图标按钮的 tooltip:悬停可见、离开隐藏,且不出视口。
+    await expect(settings).toHaveAttribute('aria-label', '账户与全局设置: 林一舟')
+    // 所有宽度都只显示头像，tooltip 在 hover / focus 时补充入口含义。
     const settingsTooltip = dock.locator('.workspace-dock__settings-tooltip')
     await expect(settingsTooltip).toBeHidden()
+    await expect(dock.locator('.workspace-dock__account-name')).toHaveCount(0)
     await settings.hover()
     await expect(settingsTooltip).toBeVisible()
-    await expect(settingsTooltip).toHaveText('全局设置')
+    await expect(settingsTooltip).toHaveText('账户与全局设置')
     const tooltipBox = await settingsTooltip.boundingBox()
     expect(tooltipBox?.x ?? -1).toBeGreaterThanOrEqual(0)
     expect((tooltipBox?.x ?? 0) + (tooltipBox?.width ?? 0)).toBeLessThanOrEqual(width)
@@ -3141,7 +3151,7 @@ for (const width of [375, 480, 600, 768, 1280, 1600]) {
     expect((bellBox?.x ?? 0) + (bellBox?.width ?? 0)).toBeLessThanOrEqual(box.x + box.width)
     expect(box.x + box.width - ((bellBox?.x ?? 0) + (bellBox?.width ?? 0))).toBeLessThanOrEqual(16)
     await expect(dock.locator('.workspace-dock__divider')).toHaveCount(2)
-    await expect(dock.locator('.workspace-dock__global-settings')).toHaveAttribute('aria-label', '全局设置')
+    await expect(dock.locator('.workspace-dock__global-settings')).toHaveAttribute('aria-label', '账户与全局设置')
     await expect(dock.locator('.workspace-dock__groups')).toHaveAttribute('aria-label', '当前 Agent 的页面')
     await expect(page.locator('.workspace-dock__status-cluster')).toHaveCount(0)
     await expect(page.locator('.workspace-dock__status-text')).toHaveCount(0)
@@ -3149,13 +3159,24 @@ for (const width of [375, 480, 600, 768, 1280, 1600]) {
     await settings.click()
     const settingsPanel = page.locator('#workspace-settings-panel')
     await expect(settingsPanel).toBeVisible()
-    await expect(settingsPanel.getByRole('heading', { name: '全局设置', level: 2 })).toBeVisible()
-    await expect(settingsPanel.locator('button[aria-pressed="true"]')).toHaveText('中文')
+    await expect(settingsPanel.getByRole('heading', { name: '全局设置', exact: true })).toHaveCount(0)
+    await expect(settingsTooltip).toBeHidden()
+    await expect(settingsPanel.locator('[data-settings-section="languageRegion"]')).toContainText('中文')
     await expect(settingsPanel.getByRole('heading', { name: '通知中心' })).toHaveCount(0)
     const settingsPanelBox = await settingsPanel.boundingBox()
     expect(settingsPanelBox?.x ?? -1).toBeGreaterThanOrEqual(0)
     expect((settingsPanelBox?.x ?? 0) + (settingsPanelBox?.width ?? 0)).toBeLessThanOrEqual(width)
     expect((settingsPanelBox?.y ?? 0) + (settingsPanelBox?.height ?? 0)).toBeLessThanOrEqual((settingsBox?.y ?? 0) + 1)
+    await settingsPanel.locator('[data-settings-section="languageRegion"]').click()
+    const drawer = page.locator('#workspace-settings-drawer')
+    await expect(drawer.locator('h2')).toBeFocused()
+    await expect.poll(() => drawer.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
+    const drawerBox = await drawer.boundingBox()
+    expect(drawerBox?.x).toBe(0)
+    expect(drawerBox?.y).toBe(0)
+    expect(drawerBox?.height).toBe(VIEWPORT_HEIGHT)
+    expect(drawerBox?.width).toBe(width <= 767 ? width : Math.min(520, Math.max(440, width * 0.32)))
+
     await page.keyboard.press('Escape')
     await expect(settings).toBeFocused()
 
@@ -3496,7 +3517,7 @@ test('通知徽标:合计未读、待处理附加说明、逐条消除且底栏�
   await expect(badge).toHaveText('6')
   await expect(bell).toHaveAttribute('aria-label', '通知 · 6 条未读')
   // 设置入口不再承担通知数字。
-  await expect(page.locator('.workspace-dock__settings-trigger')).toHaveAttribute('aria-label', '全局设置')
+  await expect(page.locator('.workspace-dock__settings-trigger')).toHaveAttribute('aria-label', '账户与全局设置: 林一舟')
   await expect(page.locator('.workspace-dock__settings-trigger .workspace-dock__notification-badge')).toHaveCount(0)
   expect((await page.locator('.workspace-dock').boundingBox())?.height).toBe(50)
 })
@@ -3560,7 +3581,7 @@ test('通知中心:两个分段 Tab 的计数、关联与键盘循环，关闭�
   await expect(panel.locator('.workspace-dock__notice')).toHaveCount(4)
   await panel.locator('.workspace-dock__notice').last().focus()
   await page.keyboard.press('Tab')
-  await expect(page.locator('.site-header__brand')).toBeFocused()
+  await expect(page.locator('.agent-context-switcher__trigger')).toBeFocused()
   // 点击抽屉外的任意区域收起面板。
   await page.locator('.chat-message.assistant').first().click()
   await expect(panel).toHaveCount(0)
@@ -5401,8 +5422,9 @@ test('输入区重构:坞为流内元素、坞底贴面板内底、转录区与�
 // ③ 核心缺陷回归:坞并入面板后,**内缩与淡出带都不再存在** —— 转录区只有一条静态底部内缩
 // (--dl-space-4),mask-image 已整条删除。贴底时末条仍落在坞顶之上的留白处、且不与坞相交。
 // 覆盖 375 / 768 / 1280 / 1600 × 单行 / 多行草稿,并逐值核对「多行不改变内缩」。
-test('输入区内缩:四宽度 × 单/多行草稿,内缩静态、无 mask、末条落在留白处', async ({ page }) => {
-  for (const width of [375, 768, 1280, 1600]) {
+// 每档独立计时，避免八次完整身份解锁挤占同一个测试的总超时预算；断言和覆盖组合不变。
+for (const width of [375, 768, 1280, 1600]) {
+  test(`输入区内缩 @${width}:单/多行草稿,内缩静态、无 mask、末条落在留白处`, async ({ page }) => {
     for (const multiline of [false, true]) {
       await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
       await login(page)
@@ -5440,8 +5462,8 @@ test('输入区内缩:四宽度 × 单/多行草稿,内缩静态、无 mask、�
       expect(lastBottom, `${label}:末条消息与坞不相交`).toBeLessThanOrEqual(dockBox.y + 1)
       expect(Math.abs(clearancePx - TRANSCRIPT_BOTTOM_PAD), `${label}:末条到坞顶 = 静态留白`).toBeLessThanOrEqual(1)
     }
-  }
-})
+  })
+}
 
 // ③ scroll-padding 的落地:搜索正文命中跳转后,被高亮的那一轮**完整落在坞顶之上**
 // (只给 padding 时「跳转定位」仍会把目标落到坞底下 —— 这是 WCAG C43 要成对给的原因)。
@@ -7348,8 +7370,12 @@ test('多悬浮窗口:各自独立几何 / 级联 / 聚焦置顶 / F6 循环 / E
   console.log(`[multi window] Shift+↑ ×8 → ${JSON.stringify(afterUp)}(原 ${JSON.stringify(beforeUp)})`)
   expect(afterUp.width, '上移:宽不变').toBe(beforeUp.width)
   expect(afterUp.height, '上移:高不变').toBe(beforeUp.height)
-  const headingBottom = (await page.locator('.conversation-heading').boundingBox())?.y ?? 0
-  expect(afterUp.y, '此时顶边确实在顶部行之上(手柄被 chrome 盖住)').toBeLessThan(headingBottom)
+  const headingBox = await page.locator('.conversation-heading').boundingBox()
+  expect(headingBox).not.toBeNull()
+  if (headingBox === null) throw new Error('Missing conversation heading')
+  // 工作台移除了整站 Header；遮挡边界是导航行的真实底边，不再假定行上方还有顶栏。
+  const headingBottom = headingBox.y + headingBox.height
+  expect(afterUp.y, '顶边仍与工作台顶部导航行重叠').toBeLessThan(headingBottom)
   // 通路②:方向键继续移动它(此刻手柄已被顶部 chrome 盖住,鼠标路径不可用)。
   await page.keyboard.press('ArrowDown')
   await expect.poll(async () => Math.round((await panelRectOf(page, README)).y), { message: '方向键能移动它' }).toBe(PANEL_MARGIN + 16)
@@ -7607,101 +7633,20 @@ test('下拉「文件」页:列出全部已打开的文件(含条上可见的)�
   await expect(page.locator('[data-conversation-option]').first(), '对话页里对话行在场').toBeVisible()
 })
 
-test('整站 Header 可折叠(仅工作台页):两态高度、aria 翻转、无布局过渡、折叠态不可聚焦', async ({ page }) => {
+test('工作台无 Header:满视口高度，登出回首页仍保留顶栏', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
-  const header = page.locator('.site-header')
-  const collapse = page.locator('.site-header__collapse')
-  const mark = page.locator('.site-header__collapse-mark')
-  const transcript = page.locator('.transcript')
-  const heading = page.locator('.conversation-heading')
-
-  // ---- 展开态 ----
-  const expandedHeader = await header.boundingBox()
-  const expandedTranscript = await transcript.boundingBox()
-  const expandedHeading = await heading.boundingBox()
-  const btnBox = await collapse.boundingBox()
-  expect(expandedHeader).not.toBeNull()
-  expect(expandedTranscript).not.toBeNull()
-  expect(expandedHeading).not.toBeNull()
-  expect(btnBox).not.toBeNull()
-  if (expandedHeader === null || expandedTranscript === null || expandedHeading === null || btnBox === null) return
-  await expect(collapse, '展开态 aria-expanded=true').toHaveAttribute('aria-expanded', 'true')
-  await expect(collapse).toHaveAttribute('aria-controls', 'site-header-inner')
-  // 命中区 ≥44×44(可见记号只是一枚很小的三角)。
-  expect(btnBox.width, '折叠控件命中区宽 ≥44').toBeGreaterThanOrEqual(43.5)
-  expect(btnBox.height, '折叠控件命中区高 ≥44').toBeGreaterThanOrEqual(43.5)
-  const markBox = await mark.boundingBox()
-  console.log(`[header collapse] 控件 ${btnBox.width.toFixed(0)}×${btnBox.height.toFixed(0)} / 三角 ${markBox?.width.toFixed(0) ?? '?'}×${markBox?.height.toFixed(0) ?? '?'}`)
-  expect((markBox?.width ?? 0), '可见三角很小(≤16px)').toBeLessThanOrEqual(16)
-  // **没有布局过渡**:内层显式 transition:none;只有三角的旋转有过渡,且过渡属性是 transform。
-  const innerTransition = await page.locator('.site-header__inner').evaluate((el) => getComputedStyle(el).transitionProperty)
-  const markTransition = await mark.evaluate((el) => getComputedStyle(el).transitionProperty)
-  console.log(`[header collapse] 内层 transition-property ${innerTransition} / 三角 ${markTransition}`)
-  expect(innerTransition, '折叠是布局变化 → 内层不做过渡').toBe('none')
-  expect(markTransition, '只有三角旋转可过渡').toBe('transform')
-  const markBefore = await mark.evaluate((el) => getComputedStyle(el).transform)
-  expect(markBefore, '展开态三角不旋转').toBe('none')
-
-  // ---- 折叠 ----
-  await collapse.click()
-  await expect(collapse, '折叠态 aria-expanded=false').toHaveAttribute('aria-expanded', 'false')
-  await expect.poll(async () => (await header.boundingBox())?.height ?? -1, { message: '折叠后顶栏高归 0' }).toBeLessThanOrEqual(1)
-  const collapsedTranscript = await transcript.boundingBox()
-  const collapsedHeading = await heading.boundingBox()
-  expect(collapsedTranscript).not.toBeNull()
-  expect(collapsedHeading).not.toBeNull()
-  if (collapsedTranscript === null || collapsedHeading === null) return
-  console.log(`[header collapse] 顶栏高 ${expandedHeader.height.toFixed(1)} → ${(await header.boundingBox())?.height.toFixed(1)} / 转录区高 ${expandedTranscript.height.toFixed(1)} → ${collapsedTranscript.height.toFixed(1)}(+${(collapsedTranscript.height - expandedTranscript.height).toFixed(1)}) / 转录区顶 ${expandedTranscript.y.toFixed(1)} → ${collapsedTranscript.y.toFixed(1)}`)
-  // 腾出的高度交还给面板:转录区变高 ≈ 顶栏原来的高度。
-  // 用 poll 而非一次性取值:顶栏高度归 0 与页面重排是两处 DOM 变更,重负载下(整仓 smoke 并行跑满)
-  // 两者之间可能隔着一次同步点,一次性采样会抓到还没重排的中帧。
-  await expect.poll(async () => {
-    const box = await transcript.boundingBox()
-    return box === null ? -999 : Math.abs((box.height - expandedTranscript.height) - expandedHeader.height)
-  }, { message: '转录区增高 = 顶栏原高' }).toBeLessThanOrEqual(2)
-  await expect.poll(async () => {
-    const box = await transcript.boundingBox()
-    return box === null ? -999 : Math.abs((expandedTranscript.y - box.y) - expandedHeader.height)
-  }, { message: '转录区上移 = 顶栏原高' }).toBeLessThanOrEqual(2)
-  // 工作台**自己的**会话头不受影响。
-  expect(Math.abs(collapsedHeading.height - expandedHeading.height), '工作台会话头高度不变').toBeLessThanOrEqual(1)
-  // 三角旋转走 transform。
-  const markAfter = await mark.evaluate((el) => getComputedStyle(el).transform)
-  console.log(`[header collapse] 三角 transform ${markBefore} → ${markAfter}`)
-  expect(markAfter, '折叠后三角旋转 180°(transform)').not.toBe('none')
-  expect(markAfter, '旋转矩阵 = 180°').toContain('matrix(-1')
-
-  // ---- 折叠态的 a11y ----
-  // 顶栏内的链接 / 控件移出可达性树与 Tab 序。
-  expect(await page.locator('.site-header__inner').evaluate((el) => el.hasAttribute('inert')), '折叠态顶栏内层 inert').toBe(true)
-  // 顶栏内的控件(品牌链接 / 账号)逐个试聚焦:inert 让它们既离开可达性树、也离开 Tab 序。
-  const innerControls = await page.locator('.site-header__inner').evaluate((el) => {
-    const candidates = Array.from(el.querySelectorAll<HTMLElement>('a, button, [tabindex]'))
-    const focusable = candidates.filter((candidate) => { candidate.focus(); return document.activeElement === candidate }).length
-    const activeInside = document.activeElement !== null && el.contains(document.activeElement)
-    return { total: candidates.length, focusable, activeInside }
-  })
-  console.log(`[header collapse] 折叠态顶栏内控件 ${innerControls.total} 个 / 仍可聚焦 ${innerControls.focusable}`)
-  expect(innerControls.total, '顶栏内确有可交互控件(样本非空)').toBeGreaterThan(0)
-  expect(innerControls.focusable, '折叠态顶栏内控件都不可聚焦(inert)').toBe(0)
-  expect(innerControls.activeInside, '焦点不会落到顶栏内部').toBe(false)
-  // 折叠控件本身仍可见、可聚焦(回退入口常在)。
-  await expect(collapse).toBeVisible()
-  await collapse.focus()
-  await expect(collapse).toBeFocused()
-
-  // ---- 展开回去 ----
-  await collapse.click()
-  await expect(collapse).toHaveAttribute('aria-expanded', 'true')
-  await expect.poll(async () => (await header.boundingBox())?.height ?? -1).toBeGreaterThanOrEqual(expandedHeader.height - 1)
-  expect(await page.locator('.site-header__inner').evaluate((el) => el.hasAttribute('inert')), '展开态移除 inert').toBe(false)
-
-  // ---- 只作用于工作台页:首页不渲染折叠控件,且顶栏常驻 ----
-  await page.goto('/')
+  await expect(page.locator('.site-header')).toHaveCount(0)
+  const workspace = await page.locator('.workspace-page').boundingBox()
+  expect(workspace?.y).toBe(0)
+  expect(workspace?.height).toBe(VIEWPORT_HEIGHT)
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('#workspace-settings-panel').getByRole('button', { name: '登出', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '登出', exact: true }).click()
+  await expect(page.locator('.site-header')).toBeVisible()
+  await expect(page.locator('.site-header')).toHaveCSS('position', 'sticky')
   await expect(page.locator('.site-header__collapse')).toHaveCount(0)
-  await expect.poll(async () => (await header.boundingBox())?.height ?? -1).toBeGreaterThanOrEqual(expandedHeader.height - 1)
 })
 
 test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔离、守卫不误伤合法横向滚动', async ({ page }) => {
@@ -7823,10 +7768,15 @@ test('横滑后退防护:根滚动容器禁用过度滚动、局部滚动链隔�
     expect(edge.prevented, '已到边缘 → 守卫接管,不再把滑动交给浏览器').toBe(true)
   }
 
-  // ⑦ 离开工作台 → 类被摘掉,根元素的过度滚动行为恢复默认(首页滚动语义不被缩小)。
+  // ⑦ 登录态清空 hash 仍回工作台；只有登出才摘掉根类并恢复首页滚动语义。
   await page.evaluate(() => {
     window.location.hash = ''
   })
+  await expect(page).toHaveURL(/#\/workspace$/)
+  await expect(page.locator('.workspace-page')).toHaveCount(1)
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('#workspace-settings-panel').getByRole('button', { name: '登出', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '登出', exact: true }).click()
   await expect(page.locator('.workspace-page')).toHaveCount(0)
   const homeStyles = await page.evaluate(() => {
     const html = getComputedStyle(document.documentElement)
@@ -11311,16 +11261,19 @@ async function expectSourceToolbarRow(dialog: Locator, hasSearch = true): Promis
   if (await list.count() > 0) await expect(list).toHaveAccessibleName(await heading.innerText())
   // 入场与视口高度调整会移动整行,等动画落定再同时读取几何,避免跨帧比较。
   await expect.poll(() => head.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
-  const [toolbar, add] = await Promise.all([
-    head.boundingBox(),
-    head.locator('.source-block__add').boundingBox(),
-  ])
+  // 一次浏览器求值读取全部矩形；分开的 boundingBox 调用会跨过 resize 帧，制造错位假阳性。
+  const { toolbar, add, search } = await head.evaluate((element) => {
+    function rectOf(target: Element | null) {
+      const rect = target?.getBoundingClientRect()
+      return rect === undefined ? null : { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    }
+    return { toolbar: rectOf(element), add: rectOf(element.querySelector('.source-block__add')), search: rectOf(element.querySelector('.source-search')) }
+  })
   expect(toolbar).not.toBeNull()
   expect(add).not.toBeNull()
   if (toolbar === null || add === null) return
   expect(Math.abs(toolbar.x + toolbar.width - add.x - add.width)).toBeLessThanOrEqual(1)
   if (hasSearch) {
-    const search = await head.locator('.source-search').boundingBox()
     expect(search).not.toBeNull()
     if (search === null) return
     expect(Math.abs(add.y + add.height / 2 - search.y - search.height / 2)).toBeLessThanOrEqual(2)

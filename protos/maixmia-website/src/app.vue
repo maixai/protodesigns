@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 深色壳覆盖异步路由间隙；首页离场不影响共用 sticky 顶栏。
+// 深色壳覆盖异步路由间隙；首页保留 sticky 顶栏，工作台独占视口。
 import { defineAsyncComponent } from 'vue'
 import { NConfigProvider, NMessageProvider } from 'naive-ui'
 import { darkOverrides } from './theme'
@@ -23,7 +23,7 @@ useI18n()
   <n-config-provider :theme-overrides="darkOverrides">
     <n-message-provider>
       <div class="app-shell dl-scope dl-scope--dark">
-        <SiteHeader />
+        <SiteHeader v-if="currentRoute.page === 'home'" />
         <div v-if="currentRoute.page === 'home'" class="auth-home" :class="{ 'is-leaving': authPhase === 'leaving' }" :inert="authPhase === 'leaving'">
           <HomePage />
         </div>

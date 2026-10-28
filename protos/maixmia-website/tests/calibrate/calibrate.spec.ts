@@ -684,7 +684,8 @@ test('顶栏滚动时固定在视口顶端', async ({ page }) => {
   await unlockDemoIdentity(page)
   // 会话头 h1 = 当前会话任务名(activeId 默认 weekly),不再是固定的页面名。
   await expect(page.getByRole('heading', { level: 1, name: 'Turn project updates into an action plan', exact: true })).toBeVisible()
-  await expect(header.getByRole('button', { name: 'Account menu: 林一舟' })).toBeVisible()
+  await expect(header).toHaveCount(0)
+  await expect(page.locator('.workspace-dock__settings-trigger')).toBeVisible()
   await expect(login).toHaveCount(0)
 })
 

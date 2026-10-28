@@ -1,13 +1,15 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { unlockDemoIdentity } from './identity-helpers'
+import type { IdentityVault } from '../../src/contracts/generated/identity-vault'
+import type { DeviceUnlockCapability } from '../../src/contracts/generated/device-unlock-capability'
 
 test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
 
-async function openGate(page: Page): Promise<void> {
+async function openGate(page: Page, title = '解锁你的身份密钥'): Promise<void> {
   await page.goto('/')
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '解锁你的身份密钥', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
 }
 
 for (const width of [375, 768, 1280, 1600]) {
@@ -84,8 +86,8 @@ test('身份 gate:短视口滚动、焦点陷阱与重进后清空恢复步骤',
   await expect(gate.getByRole('checkbox')).not.toBeChecked()
   await gate.getByRole('button', { name: '返回', exact: true }).click()
   await unlockDemoIdentity(page)
-  await page.locator('.account-menu__trigger').click()
-  await page.getByRole('button', { name: '锁定身份', exact: true }).click()
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('#workspace-settings-panel').getByRole('button', { name: '锁定控制台', exact: true }).click()
   await expect(gate.getByRole('button', { name: '使用 Passkey 解锁', exact: true })).toBeVisible()
   await expect(gate.getByTestId('recovery-key-input')).toHaveCount(0)
 })
@@ -103,8 +105,13 @@ test('身份 gate:读取失败可重试、无 Passkey 有恢复路径', async ({
         if (gateReads === 1) return { ok: false, error: new Error('Simulated vault failure') };
         return { ok: true, value: { ...mockIdentityVault(), passkeys: [] } };
       }`)
-    expect(body).not.toBe(source)
-    await route.fulfill({ response, body })
+    const withCapability = body.replace(/export async function getDeviceUnlockCapability\(\) \{[\s\S]*?\n\}/, `
+      export async function getDeviceUnlockCapability() {
+        await delay(600);
+        return { ok: true, value: { prfAvailable: true, localPasskeyCount: 0, canUseRecoveryKey: true, canRequestDeviceTransfer: false } };
+      }`)
+    expect(withCapability).not.toBe(source)
+    await route.fulfill({ response, body: withCapability })
   })
   await page.setViewportSize({ width: 375, height: 900 })
   await page.goto('/')
@@ -117,8 +124,8 @@ test('身份 gate:读取失败可重试、无 Passkey 有恢复路径', async ({
   await expect(gate.getByRole('alert')).toContainText('暂时无法读取身份')
   await page.screenshot({ path: testInfo.outputPath('gate-error-375.png') })
   await gate.getByRole('button', { name: '重试', exact: true }).click()
-  await expect(gate).toContainText('尚未配置 Passkey')
-  await expect(gate.getByRole('button', { name: '使用 Passkey 解锁', exact: true })).toBeDisabled()
+  await expect(gate).toContainText('本设备没有可解锁的 Passkey')
+  await expect(gate.getByRole('button', { name: '使用 Passkey 解锁', exact: true })).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('gate-no-passkeys-375.png') })
   await gate.getByRole('button', { name: '使用恢复密钥', exact: true }).click()
   await gate.getByTestId('recovery-key-input').fill('MIA-DEMO-RECOVERY-2026')
@@ -156,4 +163,72 @@ test('身份 gate:英文窄屏与深色最差纹理底对比度', async ({ page 
   })
   for (const value of Object.values(ratios)) expect(value).toBeGreaterThanOrEqual(4.5)
   console.log('Gate contrast ratios', ratios)
+})
+
+
+async function mockGateFactors(page: Page, vault: IdentityVault, capability: DeviceUnlockCapability): Promise<void> {
+  await page.route(/\/src\/api\/workspace\.ts(?:\?.*)?$/, async (route) => {
+    const response = await route.fetch()
+    const source = await response.text()
+    const withVault = source.replace(/export async function getIdentityVault\(\) \{[\s\S]*?\n\}/, `export async function getIdentityVault() { await delay(200); return { ok: true, value: ${JSON.stringify(vault)} }; }`)
+    const body = withVault.replace(/export async function getDeviceUnlockCapability\(\) \{[\s\S]*?\n\}/, `export async function getDeviceUnlockCapability() { await delay(200); return { ok: true, value: ${JSON.stringify(capability)} }; }`)
+    expect(body).not.toBe(source)
+    await route.fulfill({ response, body })
+  })
+}
+function gateVault(passkeys: IdentityVault['passkeys'], recoveryKeyConfigured = true): IdentityVault {
+  return { state: 'locked', publicKey: 'mock-user-public-key:v1', fingerprint: 'DEMO 0075 0120 01BF 0279 02E1 03D7 043F 0530', keyVersion: 1, passkeys, unlockMethods: [...(passkeys.some((item) => item.canUnlock) ? ['passkey' as const] : []), ...(recoveryKeyConfigured ? ['recoveryKey' as const] : [])], recoveryKeyConfigured, lastUnlockedAt: '' }
+}
+const remotePasskey = { id: 'remote', label: '1Password · Pixel', createdAt: '2026-10-01T08:00:00Z', lastUsedAt: '', prfSupported: true, canUnlock: true, backupEligible: true, isThisDevice: false }
+const loginOnlyPasskey = { ...remotePasskey, id: 'login-only', prfSupported: false, canUnlock: false, backupEligible: false }
+
+test('Gate:本机计数、登录与解锁分层及信任边界', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await openGate(page)
+  const gate = page.getByTestId('identity-vault-dialog')
+  await expect(gate.locator('#identity-gate-description')).toHaveText('你已登录。用 Passkey 解锁身份，进入工作台。')
+  await expect(gate.locator('.identity-gate__footer')).toContainText('此设备 · 1 把 Passkey')
+  await expect(gate.locator('.identity-gate__trust li')).toHaveText(['Passkey 由设备或密码管理器保管', '本地解密', 'Mia 服务端无法解密'])
+})
+
+test('Gate:无本地因子但有同步 Passkey 时走跨设备确认', async ({ page }, testInfo) => {
+  await mockGateFactors(page, gateVault([remotePasskey]), { prfAvailable: true, localPasskeyCount: 0, canUseRecoveryKey: true, canRequestDeviceTransfer: false })
+  await page.setViewportSize({ width: 375, height: 900 })
+  await openGate(page)
+  const gate = page.getByTestId('identity-vault-dialog')
+  await gate.getByRole('button', { name: '使用另一台设备上的 Passkey', exact: true }).click()
+  await expect(gate.locator('#identity-vault-title')).toHaveText('在另一台设备上确认')
+  await expect(gate.locator('#identity-gate-description')).toContainText('密码管理器')
+  await page.screenshot({ path: testInfo.outputPath('gate-hybrid-375.png') })
+  await gate.getByTestId('mock-passkey-unlock').click()
+  await expect(gate).toBeHidden()
+})
+
+test('Gate:仅登录 Passkey 不被当作解锁因子', async ({ page }) => {
+  await mockGateFactors(page, gateVault([loginOnlyPasskey]), { prfAvailable: true, localPasskeyCount: 0, canUseRecoveryKey: true, canRequestDeviceTransfer: false })
+  await openGate(page)
+  const gate = page.getByTestId('identity-vault-dialog')
+  await expect(gate.getByRole('button', { name: '使用 Passkey 解锁', exact: true })).toHaveCount(0)
+  await expect(gate.getByRole('button', { name: '使用恢复密钥', exact: true })).toBeVisible()
+  await expect(gate.locator('#identity-gate-description')).toContainText('本设备没有可解锁的 Passkey')
+})
+
+test('Gate:PRF 不可用时明确降级到恢复密钥', async ({ page }) => {
+  await mockGateFactors(page, gateVault([remotePasskey]), { prfAvailable: false, localPasskeyCount: 0, canUseRecoveryKey: true, canRequestDeviceTransfer: false })
+  await openGate(page)
+  const gate = page.getByTestId('identity-vault-dialog')
+  await expect(gate.locator('#identity-gate-description')).toContainText('不支持身份解锁')
+  await expect(gate.getByRole('button', { name: '使用恢复密钥', exact: true })).toBeVisible()
+})
+
+test('Gate:无任何解锁因子时主路径是重置身份', async ({ page }, testInfo) => {
+  await mockGateFactors(page, gateVault([], false), { prfAvailable: true, localPasskeyCount: 0, canUseRecoveryKey: false, canRequestDeviceTransfer: false })
+  await page.setViewportSize({ width: 375, height: 900 })
+  await openGate(page, '没有可用的解锁方式')
+  const gate = page.getByTestId('identity-vault-dialog')
+  await expect(gate.getByRole('button', { name: '使用恢复密钥', exact: true })).toHaveCount(0)
+  await expect(gate.getByRole('button', { name: '重置身份', exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('gate-no-factors-375.png') })
+  await gate.getByRole('button', { name: '重置身份', exact: true }).click()
+  await expect(gate.getByTestId('reset-identity-confirm')).toBeVisible()
 })

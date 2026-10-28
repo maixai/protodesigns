@@ -89,7 +89,7 @@ function requestDelete(): void {
 </script>
 
 <template>
-  <section class="security-console" data-testid="agent-identity-security">
+  <section class="security-console" data-testid="agent-identity-security" aria-labelledby="agent-identity-heading">
     <!-- 状态:一眼看到「这台设备是否仍被信任」,以及对应设备的最近在线时间。 -->
     <section class="security-hero" :data-state="identity.trustState">
       <div class="security-hero__glyph" aria-hidden="true">
@@ -99,8 +99,7 @@ function requestDelete(): void {
         </svg>
       </div>
       <div class="security-hero__body">
-        <p class="security-hero__eyebrow">{{ copy.trustState }}</p>
-        <h3 class="security-hero__title">
+        <h3 id="agent-identity-heading" class="security-hero__title" tabindex="-1">
           <span class="security-hero__lamp" aria-hidden="true" />
           {{ copy[identity.trustState] }}
           <span v-if="agent.builtIn" class="security-chip">{{ t.workspace.agentAdmin.builtIn }}</span>
@@ -166,7 +165,7 @@ function requestDelete(): void {
     <!-- 危险操作:一个入口,两种互斥后果;默认保留数据,删除需显式选择。 -->
     <section class="security-danger">
       <header class="security-danger__head">
-        <h3 class="security-danger__title">{{ copy.dangerZone }}</h3>
+        <h3 class="security-danger__title">{{ copy.dangerZone }}<span class="security-danger__immediate">{{ t.workspace.agentAdmin.immediate }}</span></h3>
         <p class="security-danger__hint">{{ copy.dangerHint }}</p>
       </header>
 
@@ -202,6 +201,7 @@ function requestDelete(): void {
   min-inline-size: 0;
 }
 
+.security-danger__immediate { margin-inline-start: var(--dl-space-2); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
 /* ---- 状态卡 ---- */
 .security-hero {
   position: relative;
@@ -209,7 +209,6 @@ function requestDelete(): void {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--dl-space-4);
-  overflow: hidden;
   padding: var(--dl-space-4);
   border: var(--dl-border-width) solid var(--dl-border-base);
   border-radius: var(--dl-radius-xl);
@@ -223,6 +222,7 @@ function requestDelete(): void {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  border-radius: inherit;
   background-image:
     linear-gradient(var(--security-grid) var(--dl-border-width), transparent var(--dl-border-width)),
     linear-gradient(90deg, var(--security-grid) var(--dl-border-width), transparent var(--dl-border-width));
@@ -272,27 +272,26 @@ function requestDelete(): void {
 }
 
 .security-hero__body {
+  position: relative;
+  background: var(--dl-bg-base);
   display: grid;
   gap: var(--dl-space-1);
   min-inline-size: 0;
 }
 
-.security-hero__eyebrow {
-  font-family: var(--dl-font-mono);
-  font-size: var(--dl-font-size-xs);
-  letter-spacing: var(--dl-tracking-caps);
-  color: var(--dl-text-tertiary);
-}
-
 .security-hero__title {
+  scroll-margin-block-start: var(--dl-space-6);
+  border-radius: var(--dl-radius-sm);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--dl-space-2);
-  font-size: var(--dl-font-size-xl);
-  font-weight: 600;
-  line-height: var(--dl-line-tight);
+  font-size: var(--dl-font-size-md);
+  font-weight: 500;
+  line-height: var(--dl-line-body);
 }
+
+.security-hero__title:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
 
 .security-hero__lamp {
   inline-size: calc(var(--dl-space-1) * 1.5);
@@ -306,12 +305,14 @@ function requestDelete(): void {
 .security-hero[data-state='revoked'] .security-hero__lamp { background: var(--dl-error); box-shadow: 0 0 0 var(--dl-space-1) color-mix(in oklab, var(--dl-error) 16%, transparent); }
 
 .security-hero__device {
+  font-family: var(--dl-font-mono);
   color: var(--dl-text-secondary);
   font-size: var(--dl-font-size-sm);
   line-height: var(--dl-line-snug);
 }
 
 .security-hero__seen {
+  font-family: var(--dl-font-mono);
   color: var(--dl-text-tertiary);
   font-size: var(--dl-font-size-xs);
   line-height: var(--dl-line-snug);
@@ -363,6 +364,7 @@ function requestDelete(): void {
   align-items: center;
   gap: var(--dl-space-1) var(--dl-space-3);
   inline-size: 100%;
+  min-block-size: var(--dl-target-size);
   padding: var(--dl-space-3) var(--dl-space-4);
   border-radius: var(--dl-radius-lg);
   text-align: left;
@@ -531,6 +533,7 @@ function requestDelete(): void {
 
 /* ---- 危险操作 ---- */
 .security-danger {
+  margin-block-start: var(--dl-space-4);
   display: grid;
   gap: var(--dl-space-3);
   padding: var(--dl-space-4);
@@ -688,7 +691,7 @@ function requestDelete(): void {
   }
 
   /* 375 首屏要给危险操作留出完整按钮:收紧卡片间距,并去掉折叠行里重复的「公钥指纹」标签。 */
-  .security-console { gap: var(--dl-space-3); }
+
   .security-hero { padding: var(--dl-space-3); }
   .security-key__toggle { padding-block: var(--dl-space-2); }
   .security-key__summary-label,

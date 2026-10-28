@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Agent 设置包含基本、模型与身份安全;添加 Agent 由独立的配对流程承担。
+// Agent 设置分为基本、模型与安全;添加 Agent 由独立的配对流程承担。
 //
 // 用原生 dialog.showModal():自带焦点陷阱、Esc 与 aria-modal;top layer 内仍继承
 // .dl-scope--dark 的 CSS 变量,故不 Teleport。
@@ -22,7 +22,7 @@ import AgentIdentitySecurity from './agent-identity-security.vue'
 
 const props = defineProps<{
   open: boolean
-  securityTab: boolean
+  focusSecurity: boolean
   // 当前编辑的 Agent。
   agent?: AgentSummary | undefined
   canDelete: boolean
@@ -98,8 +98,7 @@ const subjectDescription = computed(() => {
   const agent = props.agent
   if (agent === undefined) return ''
   const admin = t.value.workspace.agentAdmin
-  const note = agent.note === '' ? '' : `${admin.settingsSubjectNoteSeparator}${agent.note}`
-  return `${admin.settingsSubjectLabel} ${agent.name}${note}${admin.settingsSubjectSeparator}`
+  return `${admin.settingsSubjectLabel} ${agent.name}${admin.settingsSubjectSeparator}`
 })
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
 const baselineSerialized = ref('')
@@ -1264,7 +1263,7 @@ function reset(): void {
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
   // 编辑设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
-  activeTab.value = props.securityTab ? 'security' : 'model'
+  activeTab.value = props.focusSecurity ? 'security' : 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
   sourceQuery.value = ''
@@ -1356,8 +1355,12 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   reset()
   await nextTick()
   dialog.showModal()
-  if (activeTab.value === 'security') securityTabRef.value?.focus()
-  else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
+  if (props.focusSecurity) {
+    await nextTick()
+    const heading = dialog.querySelector<HTMLElement>('#agent-identity-heading')
+    heading?.scrollIntoView({ block: 'start' })
+    heading?.focus({ preventScroll: true })
+  } else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -1375,16 +1378,17 @@ onBeforeUnmount(() => {
     @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
     <div class="agent-editor__head">
-      <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
-      <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
-      <p v-if="agent" :id="subjectId" class="agent-editor__subject" data-testid="agent-editor-subject">
-        <span class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
-        <span aria-hidden="true" class="agent-editor__subject-label">{{ t.workspace.agentAdmin.settingsSubjectLabel }}</span>
-        <span aria-hidden="true" class="agent-editor__subject-name">{{ agent.name }}</span>
-        <span v-if="agent.note !== ''" aria-hidden="true" class="agent-editor__subject-note">{{ agent.note }}</span>
-      </p>
-      <p v-if="hint !== ''" :id="hintId" class="agent-editor__hint">{{ hint }}</p>
+      <div class="agent-editor__heading-group">
+        <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
+        <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
+      </div>
+      <span v-if="agent" class="agent-editor__agent-chip" data-testid="agent-editor-subject" :title="agent.name">
+        <span class="agent-editor__agent-mark" aria-hidden="true">{{ [...agent.name.trim()][0] ?? '' }}</span>
+        <span class="agent-editor__agent-name">{{ agent.name }}</span>
+      </span>
     </div>
+    <span v-if="agent" :id="subjectId" class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
+    <span v-if="hint !== ''" :id="hintId" class="agent-editor__visually-hidden">{{ hint }}</span>
 
     <div class="agent-editor__tabbar">
       <div class="agent-editor__tabs" role="tablist" :aria-label="t.workspace.agentAdmin.tabsLabel" @keydown="onTabKeydown">
@@ -1401,7 +1405,7 @@ onBeforeUnmount(() => {
         <button :id="`${dialogId}-tab-security`" ref="securityTabRef" type="button" role="tab"
           :aria-selected="activeTab === 'security'" :aria-controls="`${dialogId}-panel-security`"
           :tabindex="activeTab === 'security' ? 0 : -1" @click="activateTab('security')"
-        >{{ t.workspace.security.title }}</button>
+        >{{ t.workspace.agentAdmin.tabSecurity }}</button>
       </div>
       <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
       <button
@@ -1431,6 +1435,8 @@ onBeforeUnmount(() => {
           <input v-model="note" :disabled="busy" type="text" class="field__input" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
         </label>
       </div>
+      <p class="agent-editor__basic-hint">{{ t.workspace.agentAdmin.basicInfoHint }}</p>
+
       </div>
 
       <div
@@ -2045,15 +2051,14 @@ onBeforeUnmount(() => {
 .agent-editor { color-scheme: dark; }
 .agent-editor[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 
-.agent-editor__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-2); }
+.agent-editor__head { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); min-inline-size: 0; }
+.agent-editor__heading-group { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
 .agent-editor__title { font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
 .agent-editor__badge { padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-/* 当前编辑对象:标题下单独一行,避免「这是在设置哪个 Agent」需要回想。 */
-.agent-editor__subject { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--dl-space-2); min-inline-size: 0; }
-.agent-editor__subject-label { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
-.agent-editor__subject-name { color: var(--dl-text-primary); font-size: var(--dl-font-size-md); font-weight: 600; line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
-.agent-editor__subject-note { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
-.agent-editor__hint { flex-basis: 100%; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+/* 当前对象作为右侧非交互 chip，完整名称仍由 title 与隐藏描述提供。 */
+.agent-editor__agent-chip { display: inline-flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; max-inline-size: 45%; padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); }
+.agent-editor__agent-mark { display: inline-grid; flex: none; place-items: center; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); border-radius: var(--dl-radius-sm); background: var(--dl-bg-elevated); font-size: var(--dl-font-size-xs); }
+.agent-editor__agent-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-sm); font-weight: 500; }
 
 .agent-editor__head, .agent-editor__tabbar, .agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
 .agent-editor__tabbar { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
@@ -2071,6 +2076,7 @@ onBeforeUnmount(() => {
 .agent-editor__body::-webkit-scrollbar-thumb { background: var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
 .agent-editor__body::-webkit-scrollbar-track { background: transparent; }
 .agent-editor__panel { display: grid; gap: var(--dl-space-6); min-inline-size: 0; }
+.agent-editor__basic-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .agent-editor__panel--model { gap: var(--dl-space-3); }
 /* 动效只落在实际内容上:模型外层保留吸顶 tab,来源子视图也不叠加父级位移。
    v-show 恢复显示时自动重播;不保留 transform,避免改变来源菜单的 fixed 定位参照。 */
@@ -2400,6 +2406,5 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 @media (max-width: 560px) {
   .agent-editor { padding: var(--dl-space-4); }
   .agent-editor__head { gap: var(--dl-space-1); }
-  .agent-editor__hint { display: none; }
 }
 </style>

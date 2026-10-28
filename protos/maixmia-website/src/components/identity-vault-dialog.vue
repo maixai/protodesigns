@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { IdentityVault } from '../contracts/generated/identity-vault'
-import { getIdentityVault, lockIdentityVault, resetIdentity, unlockIdentityVault } from '../api/workspace'
+import type { DeviceUnlockCapability } from '../contracts/generated/device-unlock-capability'
+import { getDeviceUnlockCapability, getIdentityVault, lockIdentityVault, resetIdentity, unlockIdentityVault } from '../api/workspace'
 import { identityAction } from '../auth/identity'
 import { readIdentityVaultState } from '../mocks/identity'
 import { waitForMotion } from '../auth/transition'
@@ -21,6 +22,9 @@ function formatTime(value: string, empty = '—'): string {
 }
 const dialog = ref<HTMLDialogElement | null>(null)
 const vault = ref<IdentityVault | null>(null)
+const capability = ref<DeviceUnlockCapability | null>(null)
+// 区分「首次进入/刷新后的锁定」与用户主动点「锁定控制台」，后者要在 Gate 文案里说明。
+const lockedByUser = ref(false)
 const shouldOpenInitially = readIdentityVaultState() !== 'unlocked'
 const view = ref<'loading' | 'gate' | 'security' | 'closed' | 'error' | 'success' | 'exiting'>('loading')
 const method = ref<'choice' | 'reset'>('choice')
@@ -35,10 +39,11 @@ const isGate = computed(() => view.value !== 'security')
 async function load(): Promise<void> {
   view.value = 'loading'
   error.value = ''
-  const result = await getIdentityVault()
+  const [result, capabilityResult] = await Promise.all([getIdentityVault(), getDeviceUnlockCapability()])
   if (!isAlive) return
-  if (!result.ok || result.value.state === 'unavailable') { view.value = 'error'; return }
+  if (!result.ok || !capabilityResult.ok || result.value.state === 'unavailable') { view.value = 'error'; return }
   vault.value = result.value
+  capability.value = capabilityResult.value
   view.value = result.value.state === 'locked' ? 'gate' : 'closed'
   if (view.value === 'closed') emit('unlocked')
 }
@@ -92,6 +97,7 @@ async function unlock(methodId: 'passkey' | 'recoveryKey', secret = ''): Promise
   if (!isAlive) return
   if (!result.ok) { error.value = result.error.message; return }
   vault.value = result.value
+  lockedByUser.value = false
   method.value = 'choice'
   finishGate()
 }
@@ -100,9 +106,12 @@ async function lock(): Promise<void> {
   if (!isAlive) return
   if (!result.ok) { error.value = result.error.message; return }
   vault.value = result.value
+  const capabilityResult = await getDeviceUnlockCapability()
+  if (capabilityResult.ok) capability.value = capabilityResult.value
   method.value = 'choice'
   error.value = ''
   view.value = 'gate'
+  lockedByUser.value = true
   emit('locked')
 }
 async function reset(): Promise<void> {
@@ -113,6 +122,7 @@ async function reset(): Promise<void> {
   if (!isAlive) return
   if (!result.ok) { error.value = result.error.message; return }
   vault.value = result.value
+  lockedByUser.value = false
   method.value = 'choice'
   error.value = ''
   emit('reset')
@@ -142,7 +152,7 @@ onBeforeUnmount(() => { isAlive = false; clearTimeout(successTimer); dialog.valu
 
 <template>
   <dialog ref="dialog" tabindex="-1" :class="isGate ? 'identity-gate' : 'identity-flow dl-modal-scrim'" data-testid="identity-vault-dialog" aria-modal="true" aria-labelledby="identity-vault-title" :aria-describedby="isGate ? 'identity-gate-description' : undefined" @keydown.stop="trapGateFocus" @cancel.prevent="close">
-    <IdentityGatePanel v-if="view === 'loading' || view === 'gate' || view === 'success' || view === 'exiting' || view === 'error'" :vault="vault" :view="view" :is-busy="isBusy" :error="error" @passkey="unlock('passkey')" @recovery="unlock('recoveryKey', $event)" @reset="reset" @retry="load" @back="error = ''" @sign-out="signOut" />
+    <IdentityGatePanel v-if="view === 'loading' || view === 'gate' || view === 'success' || view === 'exiting' || view === 'error'" :vault="vault" :capability="capability" :locked-by-user="lockedByUser" :view="view" :is-busy="isBusy" :error="error" @passkey="unlock('passkey')" @recovery="unlock('recoveryKey', $event)" @reset="reset" @retry="load" @back="error = ''" @sign-out="signOut" />
     <div v-else-if="view === 'security'" class="identity-stack">
       <h2 id="identity-vault-title" tabindex="-1">{{ copy.title }}</h2>
       <template v-if="vault !== null">

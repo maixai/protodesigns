@@ -16,8 +16,9 @@ import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 import GlobalSettingsPanel from './global-settings-panel.vue'
 import SettingsDrawer from './settings-drawer.vue'
+import AccountSecurityDialog from './account-security-dialog.vue'
 import { session } from '../auth/session'
-import { toInitials } from './account-avatar'
+import AccountAvatar from './account-avatar.vue'
 
 const props = defineProps<{
   groups: MinimizedGroup[]
@@ -49,13 +50,20 @@ const root = ref<HTMLElement | null>(null)
 const settingsTrigger = ref<HTMLButtonElement | null>(null)
 const notificationTrigger = ref<HTMLButtonElement | null>(null)
 const activePanel = ref('')
-const settingsSection = ref<'' | 'accountSecurity' | 'languageRegion' | 'shortcuts'>('')
-function openSettings(section: Exclude<typeof settingsSection.value, ''>): void {
+const settingsSection = ref<'' | 'shortcuts'>('')
+const isAccountSecurityOpen = ref(false)
+function openSettings(section: 'accountSecurity' | 'shortcuts'): void {
+  // 打开中央账户窗体前先收起一级面板，关闭后焦点不会落在已卸载的面板行上。
   activePanel.value = ''
+  if (section === 'accountSecurity') {
+    isAccountSecurityOpen.value = true
+    return
+  }
   settingsSection.value = section
 }
 function closeSettings(): void {
   settingsSection.value = ''
+  isAccountSecurityOpen.value = false
   settingsTrigger.value?.focus()
 }
 const panelRef = ref<HTMLElement | null>(null)
@@ -289,10 +297,10 @@ onBeforeUnmount(() => {
       <button
         ref="settingsTrigger" type="button" class="workspace-dock__settings-trigger"
         :aria-label="`${t.workspace.settings.label}: ${session.profile?.name ?? ''}`"
-        :aria-expanded="activePanel === 'settings' || settingsSection !== ''" aria-controls="workspace-settings-panel"
+        :aria-expanded="activePanel === 'settings' || settingsSection !== '' || isAccountSecurityOpen" aria-controls="workspace-settings-panel"
         @click="toggle('settings', $event)"
       >
-        <span class="workspace-dock__account-avatar" aria-hidden="true">{{ toInitials(session.profile?.name ?? '') }}</span>
+        <AccountAvatar size="sm" :name="session.profile?.name ?? ''" />
       </button>
       <span class="workspace-dock__settings-tooltip" aria-hidden="true">{{ t.workspace.settings.label }}</span>
     </div>
@@ -331,6 +339,7 @@ onBeforeUnmount(() => {
     </div>
     </Transition>
     <SettingsDrawer v-if="settingsSection" :section="settingsSection" @close="closeSettings" />
+    <AccountSecurityDialog v-if="isAccountSecurityOpen" @close="closeSettings" />
     <Transition name="workspace-notification-drawer">
       <div v-if="activePanel === 'notifications'" id="workspace-notifications-panel" ref="panelRef" class="workspace-dock__drawer" role="dialog" aria-labelledby="workspace-notifications-title" :aria-busy="notificationsStatus === 'loading'">
         <header class="workspace-dock__notification-head">
@@ -431,7 +440,6 @@ onBeforeUnmount(() => {
 .workspace-dock__restore, .workspace-dock__menu, .workspace-dock__settings-trigger, .workspace-dock__notification-trigger { min-height: var(--workspace-nav-control-size); color: var(--dl-text-primary); }
 /* 头像入口属于横向密集导航行；完整账户名由 aria-label 提供。 */
 .workspace-dock__settings-trigger { display: flex; flex: none; align-items: center; justify-content: center; width: var(--workspace-nav-control-size); height: var(--workspace-nav-control-size); color: var(--dl-text-secondary); }
-.workspace-dock__account-avatar { display: grid; place-items: center; flex: none; inline-size: var(--dl-icon-lg); block-size: var(--dl-icon-lg); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-pill); font-size: var(--dl-font-size-xs); font-weight: 500; }
 .workspace-dock__notification-trigger { position: relative; display: flex; flex: none; align-items: center; justify-content: center; }
 /* 所有宽度提供提示，菜单或抽屉打开后隐藏以免遮挡内容。 */
 .workspace-dock__settings-tooltip { position: absolute; inset-block-end: calc(100% + var(--dl-space-2)); inset-inline-start: 0; z-index: var(--dl-z-overlay); padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }

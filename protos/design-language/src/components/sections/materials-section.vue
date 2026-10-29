@@ -28,6 +28,10 @@
         <p class="material__body">
           正文落在实色表面上,不随材质变化而牺牲对比度 —— 这是玻璃效果的适用边界。
         </p>
+        <div class="material__raised-sample" data-raised-surface>
+          <code>--dl-bg-raised</code>
+          <span>窗体内的抬升内容面 · 只靠明度与发丝描边分层</span>
+        </div>
         <div class="material__actions">
           <button type="button" class="material__btn material__btn--primary">主要操作</button>
           <button type="button" class="material__btn">次要操作</button>
@@ -109,6 +113,22 @@
   font-size: var(--dl-font-size-sm);
   line-height: var(--dl-line-body);
   color: var(--dl-text-secondary);
+}
+
+.material__raised-sample {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dl-space-2);
+  padding: var(--dl-space-3);
+  border: var(--dl-border-width) solid var(--dl-border-base);
+  border-radius: var(--dl-radius-md);
+  background: var(--dl-bg-raised);
+  color: var(--dl-text-secondary);
+  font-size: var(--dl-font-size-xs);
+}
+
+.material__raised-sample code {
+  color: var(--dl-text-primary);
 }
 
 .material__actions {

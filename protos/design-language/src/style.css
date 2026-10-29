@@ -50,6 +50,8 @@
 [data-dl-theme] {
   --dl-bg-base: var(--dl-neutral-50);
   --dl-bg-elevated: var(--dl-neutral-0);
+  /* 抬升内容面:浅色仅掺入少量暖灰,与纯白窗体面保持可取样区分。 */
+  --dl-bg-raised: color-mix(in oklab, var(--dl-neutral-0), var(--dl-neutral-100) 12%);
   --dl-bg-sunken: var(--dl-neutral-100);
   --dl-bg-hover: var(--dl-neutral-100);
 
@@ -308,6 +310,8 @@
   --dl-neutral-950: #fdfbf7;
 
   --dl-bg-hover: #26221d;
+  /* 深色抬升靠变亮表达:落在窗体 neutral-0 与 hover neutral-100 之间。 */
+  --dl-bg-raised: color-mix(in oklab, var(--dl-neutral-0), var(--dl-neutral-100) 50%);
 
   --dl-accent-50: #16302b;
   --dl-accent-500: #6fb3a4;

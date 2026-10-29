@@ -132,6 +132,15 @@
      不共享它的 1520px 上限 —— 品牌/账号因此能贴到视口两侧,
      把宽屏的横向空间用起来(内容区仍限宽居中)。 */
   --dl-chrome-gutter: var(--dl-space-6);
+
+  /* 设置窗体共用一套几何:账户与 Agent 不得各自漂移。 */
+  --workspace-settings-dialog-width: 720px;
+  --workspace-settings-dialog-max-height: 720px;
+  --workspace-settings-dialog-padding: var(--dl-space-6);
+}
+
+@media (max-width: 560px) {
+  :root { --workspace-settings-dialog-padding: var(--dl-space-4); }
 }
 
 /* ==========================================================================
@@ -140,6 +149,7 @@
 .dl-scope {
   --dl-bg-base: var(--dl-neutral-50);
   --dl-bg-elevated: var(--dl-neutral-0);
+  --dl-bg-raised: color-mix(in oklab, var(--dl-neutral-0), var(--dl-neutral-100) 12%);
   --dl-bg-sunken: var(--dl-neutral-100);
   --dl-bg-hover: var(--dl-neutral-100);
   --dl-text-primary: var(--dl-neutral-900);
@@ -236,6 +246,7 @@
        - border-subtle:提到 neutral-100 与 neutral-200 之间,从 1.19:1
          提到约 1.32:1,恢复发丝描边的可辨识性(仍低于 border-base 的 1.50:1)。 */
   --dl-bg-sunken: color-mix(in oklab, var(--dl-neutral-50), #000000 30%);
+  --dl-bg-raised: color-mix(in oklab, var(--dl-neutral-0), var(--dl-neutral-100) 50%);
   --dl-bg-hover: var(--dl-neutral-100);
   --dl-border-subtle: color-mix(
     in oklab,

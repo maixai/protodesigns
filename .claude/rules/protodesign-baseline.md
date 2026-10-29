@@ -38,6 +38,7 @@
 | 组 | Token 与取值 |
 | --- | --- |
 | 中性色 | `--dl-neutral-0…950`,暖调 chromatic neutral(色相 35°、饱和约 8%),**不用纯灰** |
+| 语义面 | `--dl-bg-raised`,窗体内的抬升内容面;浅色 `neutral-0 → neutral-100 12%`、深色 `50%`(OKLab),只用明度与发丝描边分层 |
 | 强调色 | `--dl-accent-50…900`,青瓷 `#2E6F63`(深色 `#8CC7B9`) |
 | 标识色 | `--dl-identity-1…8`,低彩度色相(浅色 `#2C5568…#75896F` / 深色 `#4B7081…#A0B39A`),**只作图形**(色条 / 色点 / 描边),对比度按 **3:1** 断言 |
 | 正文色 | `--dl-neutral-900`,暖近黑 `#221D18`,**不用纯黑** |
@@ -231,22 +232,24 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 
 ## ⑧ 共享验收清单
 
-实现完成后逐项自检;核对分两层进行 —— **机械可判定的交给 `make smoke` 脚本(L1),需要判断力的才派评审 SubAgent(L3)**,详见 `protodesign` Skill 的「三层验收的分工」。
+实现完成后逐项自检。日常回路只做 L1 快检;需要判断力的 L3 由用户手动触发 `/protodesign-review`,全量校准由 `/protodesign-verify` 手动触发。
 
-### L1:机械可判定(`make smoke` 覆盖,每次必跑,不阻塞)
+### L1:机械可判定(每次必跑,不阻塞)
 
 - [ ] **可运行**:子目录内 `make run` 可启动,可访问。
-- [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错;`make build` 通过。
+- [ ] **契约一致**:类型来自生成物,无手写重复定义;`make contracts` 无报错;`make typecheck` 通过。
 - [ ] **运行时无错误**:无未捕获异常、无 console error、关键请求无 4xx/5xx 失败。
 - [ ] **多宽度不破版**:375 / 768 / 1280 / 1600 无横向溢出(由断言判定,不靠目视)。
 
-> 这四项由仓库级通用冒烟规格 `tests/smoke/` 保证,任何原型(含新建的)都有。其余可机械化的项(对比度、触达尺寸、四态可达、交互行为)由各原型在 `tests/calibrate/` 自行断言 —— **写了就归 L1,没写就归 L3**。
+> 这四项由仓库级通用冒烟规格 `tests/smoke/` 保证,任何原型(含新建的)都有。其余可机械化的项(对比度、触达尺寸、四态可达、交互行为)由各原型在 `tests/calibrate/` 自行断言,按本次改动用 `make smoke SPECS="..."` 执行 —— **写了就参与快检,没写就归 L3**。
+>
+> 全量单引擎归 `make smoke-full`,双引擎与像素基线归 `make calibrate`,两者都不进日常回路,由 `/protodesign-verify` 手动触发。
 
-### L3:需要判断力(完整评审 SubAgent 核对,按风险节点触发)
+### L3:需要判断力(手动触发 `/protodesign-review`)
 
 - [ ] **token 合规**:颜色 / 字号 / 行高 / 圆角 / 间距 / 阴影 / 动效均走 token 或主题覆盖,无 hardcode magic number;**判据见 [`design-language.md`](./design-language.md) 第 ② 节**。
 - [ ] **中文排版合规**:正文行高 ≥ 1.5、行宽按 em 计、字重 ≤ 600、左对齐。
-- [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态(该原型若已在 calibrate 里断言,则此项目动由 L1 保证)。
+- [ ] **四态完备**:异步视图有 loading / empty / error / 有数据四态(若该原型已在 `tests/calibrate/` 里断言,则由快检在 `SPECS` 覆盖到的范围内保证;未覆盖的仍按本项核对)。
 - [ ] **交互态完备**:hover / focus / active / disabled(触屏端按端基线调整)。
 - [ ] **a11y 底线**:见第 ⑦ 节。
 - [ ] **端基线**:按 `meta.md` 的 `targets` 逐份核对对应端基线。

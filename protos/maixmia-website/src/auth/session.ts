@@ -2,6 +2,7 @@ import { computed, readonly, ref } from 'vue'
 import type { AccountSession } from '../contracts/generated/account-session'
 import { ACCOUNT_PROFILE } from '../mocks/account'
 import { mockLockIdentity } from '../mocks/identity'
+import { resetAccountAvatar } from '../components/account-avatar'
 
 // 刻意仅保留内存态:刷新即重置,不写 localStorage、sessionStorage 或 cookie。
 const sessionRef = ref<AccountSession>({ status: 'anonymous', profile: null })
@@ -15,5 +16,6 @@ export function signIn(): void {
 
 export function signOut(): void {
   mockLockIdentity()
+  resetAccountAvatar()
   sessionRef.value = { status: 'anonymous', profile: null }
 }

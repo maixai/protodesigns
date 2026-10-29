@@ -4,6 +4,7 @@
 const ROLES = [
   { token: '--dl-bg-base', maps: 'neutral-50', usage: '页面底色' },
   { token: '--dl-bg-elevated', maps: 'neutral-0', usage: '卡片 / 浮层表面' },
+  { token: '--dl-bg-raised', maps: 'neutral-0 / 100 · 浅 12% / 深 50%', usage: '窗体内的抬升内容面' },
   { token: '--dl-bg-sunken', maps: 'neutral-100', usage: '凹陷区 / 代码块' },
   { token: '--dl-border-base', maps: 'neutral-200', usage: '默认描边 / 分割线' },
   { token: '--dl-border-strong', maps: 'neutral-300', usage: '强调描边' },

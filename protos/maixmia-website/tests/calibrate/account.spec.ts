@@ -11,6 +11,19 @@ async function tabTo(page: Page, target: Locator): Promise<void> {
   }
 }
 
+async function openAccountDialog(page: Page): Promise<Locator> {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await unlockDemoIdentity(page)
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('[data-settings-section="accountSecurity"]').click()
+  const dialog = page.locator('#workspace-account-security-dialog')
+  await expect(dialog.locator('[data-account-profile]')).toBeVisible()
+  return dialog
+}
+
+const VALID_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+
 test('账户 disclosure:键盘可达、Esc 关闭、登出二次确认与还焦', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
@@ -37,7 +50,7 @@ test('账户 disclosure:键盘可达、Esc 关闭、登出二次确认与还焦'
   await page.keyboard.press('ArrowDown')
   await expect(security).toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(page.locator('#workspace-settings-drawer-title')).toBeFocused()
+  await expect(page.locator('#workspace-account-security-title')).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(account).toBeFocused()
   await expect(account).toHaveAttribute('aria-expanded', 'false')
@@ -132,44 +145,77 @@ for (const width of [375, 768, 1280, 1600]) {
     await expect(group.getByRole('heading', { name: 'Global settings', exact: true })).toHaveCount(0)
     await expect(group).not.toContainText('Identity unlocked')
     await page.keyboard.press('Escape')
-    // 一级菜单仅选择入口；模态抽屉接管焦点，退出后归还头像。
-    const drawerWidths = new Map<string, number>()
-    for (const section of ['accountSecurity', 'languageRegion', 'shortcuts']) {
+    // 一级菜单仅选择入口；账户走中央窗体，快捷键继续走左侧抽屉。
+    const surfaceWidths = new Map<string, number>()
+    for (const section of ['accountSecurity', 'shortcuts']) {
       await account.click()
       await group.locator(`[data-settings-section="${section}"]`).click()
-      const drawer = page.locator('#workspace-settings-drawer')
-      await expect(drawer.locator('#workspace-settings-drawer-title')).toBeFocused()
       await expect(group).toHaveCount(0)
       await expect(tooltip).toBeHidden()
-      const bounds = await drawer.boundingBox()
-      expect(bounds?.x).toBe(0)
-      expect(bounds?.y).toBe(0)
-      expect(bounds?.height).toBe(900)
-      const expectedWidth = width <= 767 ? width : section === 'accountSecurity' ? Math.min(680, Math.max(600, width * 0.44)) : section === 'shortcuts' ? Math.min(600, Math.max(520, width * 0.38)) : Math.min(520, Math.max(440, width * 0.32))
-      expect(bounds?.width).toBe(expectedWidth)
-      drawerWidths.set(section, bounds?.width ?? 0)
-      expect(await drawer.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
-      const controls = await drawer.locator('button:visible, label').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height))
-      expect(controls.every((height) => height >= 44)).toBe(true)
       if (section === 'accountSecurity') {
-        await expect(drawer.locator('[data-settings-passkeys] li')).toHaveCount(3)
-        await expect(drawer).not.toContainText(/Identity unlocked|身份已解锁/)
-        await expect(drawer.getByRole('button', { name: /Manage identity|Lock/ })).toHaveCount(0)
+        const dialog = page.locator('#workspace-account-security-dialog')
+        await expect(dialog.locator('#workspace-account-security-title')).toBeFocused()
+        const bounds = await dialog.boundingBox()
+        const expectedWidth = Math.min(720, width - 48)
+        const expectedHeight = 720
+        expect(bounds?.width).toBe(expectedWidth)
+        expect(bounds?.height).toBe(expectedHeight)
+        expect(bounds?.x).toBeGreaterThanOrEqual(0)
+        expect(bounds?.y).toBeGreaterThanOrEqual(0)
+        expect((bounds?.x ?? 0) + expectedWidth).toBeLessThanOrEqual(width)
+        expect((bounds?.y ?? 0) + expectedHeight).toBeLessThanOrEqual(900)
+        surfaceWidths.set(section, bounds?.width ?? 0)
+        expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+        await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveText(['Account', 'Identity security'])
+        await expect(dialog.locator('[data-account-profile]')).toContainText('林一舟')
+        await expect(dialog.locator('[data-security-posture]')).toBeHidden()
+        const publicKeyRow = dialog.locator('[data-public-key]')
+        expect(await publicKeyRow.evaluate((element) => element.previousElementSibling?.textContent)).toContain('Identity status')
+        const fingerprint = publicKeyRow.locator('[data-public-fingerprint]')
+        await expect(fingerprint).toContainText('DEMO')
+        expect(await fingerprint.getAttribute('title')).toBe(await fingerprint.textContent())
+        const fingerprintStyle = await fingerprint.evaluate((element) => ({ whiteSpace: getComputedStyle(element).whiteSpace, textOverflow: getComputedStyle(element).textOverflow }))
+        expect(fingerprintStyle).toEqual({ whiteSpace: 'nowrap', textOverflow: 'ellipsis' })
+        await expect(publicKeyRow.locator('.account-security__key-version')).toHaveText('v1')
+        await expect(publicKeyRow.locator('[data-copy-public-key]')).toHaveAttribute('aria-label', 'Copy full identity public key fingerprint')
+        await dialog.getByRole('tab', { name: 'Identity security', exact: true }).click()
+        await expect(dialog.locator('[data-settings-passkeys] li')).toHaveCount(3)
+        await expect(dialog.locator('[data-security-posture]')).toContainText('2 unlock methods')
+        await expect(dialog.locator('[data-public-key]')).toBeHidden()
+        await expect(dialog.locator('#workspace-account-security-section-panel-passkeys')).toContainText('without changing its public key')
+        await expect(dialog.locator('#workspace-account-security-section-panel-passkeys')).toContainText('never requires paired agents to pair again')
+        const controls = await dialog.locator('button:visible').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height))
+        expect(controls.every((height) => height >= 36)).toBe(true)
+        await page.screenshot({ path: testInfo.outputPath(`settings-${section}-${width}.png`) })
+        await page.keyboard.press('Escape')
+        await expect(dialog).toHaveCount(0)
+      } else {
+        const drawer = page.locator('#workspace-settings-drawer')
+        await expect(drawer.locator('#workspace-settings-drawer-title')).toBeFocused()
+        const bounds = await drawer.boundingBox()
+        expect(bounds?.x).toBe(0)
+        expect(bounds?.y).toBe(0)
+        expect(bounds?.height).toBe(900)
+        const expectedWidth = width <= 767 ? width : Math.min(600, Math.max(520, width * 0.38))
+        expect(bounds?.width).toBe(expectedWidth)
+        surfaceWidths.set(section, bounds?.width ?? 0)
+        expect(await drawer.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+        const controls = await drawer.locator('button:visible, label').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height))
+        expect(controls.every((height) => height >= 44)).toBe(true)
+        await expect(drawer.locator('[data-settings-shortcuts] kbd')).toHaveCount(8)
+        await page.screenshot({ path: testInfo.outputPath(`settings-${section}-${width}.png`) })
+        await drawer.locator('[data-settings-close]').click()
+        await expect(drawer).toHaveCount(0)
       }
-      if (section === 'shortcuts') await expect(drawer.locator('[data-settings-shortcuts] kbd')).toHaveCount(8)
-      await page.screenshot({ path: testInfo.outputPath(`settings-${section}-${width}.png`) })
-      if (section === 'shortcuts') await drawer.locator('[data-settings-close]').click()
-      else await page.keyboard.press('Escape')
-      await expect(drawer).toHaveCount(0)
       await expect(account).toBeFocused()
     }
-    if (width > 767) expect(drawerWidths.get('accountSecurity') ?? 0).toBeGreaterThan(drawerWidths.get('languageRegion') ?? Number.POSITIVE_INFINITY)
+    if (width > 767) expect(surfaceWidths.get('accountSecurity') ?? 0).toBeGreaterThan(surfaceWidths.get('shortcuts') ?? Number.POSITIVE_INFINITY)
     expect(errors).toEqual([])
   })
 }
 
 
-test('账户抽屉:读取中、失败重试、无 Passkey 与遮罩关闭', async ({ page }, testInfo) => {
+test('账户窗体:读取中、失败重试、空态与遮罩关闭', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1280, height: 900 })
   // 测试替换 API 返回值，不修改契约与运行时 DOM；首次 gate 读取仍走原始数据。
@@ -193,19 +239,216 @@ test('账户抽屉:读取中、失败重试、无 Passkey 与遮罩关闭', asyn
   const trigger = page.locator('.workspace-dock__settings-trigger')
   await trigger.click()
   await page.locator('[data-settings-section="accountSecurity"]').click()
-  const drawer = page.locator('#workspace-settings-drawer')
-  await expect(drawer.getByRole('status')).toHaveText('Loading identity information…')
+  const dialog = page.locator('#workspace-account-security-dialog')
+  await expect(dialog.getByRole('status')).toHaveText('Loading identity information…')
+  await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('settings-loading.png') })
-  await expect(drawer.getByRole('alert')).toContainText('Unable to load identity information')
+  await expect(dialog.getByRole('alert')).toContainText('Unable to load identity information')
+  await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('settings-error.png') })
-  await drawer.getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect(drawer.getByRole('status')).toBeVisible()
-  await expect(drawer).toContainText('No Passkeys yet')
-  await expect(drawer).not.toContainText('Identity unlocked')
+  await dialog.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(dialog.getByRole('status')).toBeVisible()
+  await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveCount(2)
+  await dialog.getByRole('tab', { name: 'Identity security', exact: true }).click()
+  await expect(dialog).toContainText('No Passkeys yet')
+  await expect(dialog.locator('[data-security-posture]')).toContainText('2 unlock methods')
   await page.screenshot({ path: testInfo.outputPath('settings-empty.png') })
-  await page.mouse.click(800, 400)
-  await expect(drawer).toHaveCount(0)
+  await page.mouse.click(4, 4)
+  await expect(dialog).toHaveCount(0)
   await expect(trigger).toBeFocused()
+})
+
+test('账户与 Agent 窗体:共享几何、下划线一级 tab 与内容左缘', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const dialog = await openAccountDialog(page)
+  await expect(dialog.locator('.account-security__eyebrow')).toHaveCount(0)
+  await expect(dialog.locator('.account-security__posture')).toBeHidden()
+  await expect(dialog.locator('[data-account-security-close]')).toBeVisible()
+  const account = await dialog.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const firstTab = element.querySelector('.account-security__tabs button')
+    const content = element.querySelector('[data-account-profile-row]')
+    const selected = element.querySelector('.account-security__tabs [aria-selected="true"]')
+    if (!(firstTab instanceof HTMLElement) || !(content instanceof HTMLElement) || !(selected instanceof HTMLElement)) throw new Error('Missing account dialog geometry')
+    const tabStyle = getComputedStyle(firstTab)
+    const selectedStyle = getComputedStyle(selected)
+    return {
+      width: element.getBoundingClientRect().width,
+      height: element.getBoundingClientRect().height,
+      padding: style.padding,
+      colorScheme: style.colorScheme,
+      contentLeft: content.getBoundingClientRect().left,
+      firstTabTextLeft: firstTab.getBoundingClientRect().left + Number.parseFloat(tabStyle.paddingLeft),
+      selectedBackground: selectedStyle.backgroundColor,
+      selectedBorder: selectedStyle.borderBottomColor,
+    }
+  })
+  expect(account.width).toBe(720)
+  expect(account.height).toBe(720)
+  expect(account.padding).toBe('24px')
+  expect(account.colorScheme).toBe('dark')
+  expect(account.firstTabTextLeft).toBeCloseTo(account.contentLeft, 0)
+  expect(account.selectedBackground).toBe('rgba(0, 0, 0, 0)')
+  expect(account.selectedBorder).not.toBe('rgba(0, 0, 0, 0)')
+  await page.keyboard.press('Escape')
+  await page.locator('.agent-context-switcher__trigger').click()
+  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  const agentDialog = page.locator('.agent-editor')
+  await expect(agentDialog).toBeVisible()
+  const agent = await agentDialog.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const firstTab = element.querySelector('.agent-editor__tabs button')
+    const content = element.querySelector('.agent-editor__panel--model')
+    if (!(firstTab instanceof HTMLElement) || !(content instanceof HTMLElement)) throw new Error('Missing agent dialog geometry')
+    const tabStyle = getComputedStyle(firstTab)
+    return {
+      width: element.getBoundingClientRect().width,
+      height: element.getBoundingClientRect().height,
+      padding: style.padding,
+      colorScheme: style.colorScheme,
+      contentLeft: content.getBoundingClientRect().left,
+      firstTabTextLeft: firstTab.getBoundingClientRect().left + Number.parseFloat(tabStyle.paddingLeft),
+    }
+  })
+  expect(agent.width).toBe(account.width)
+  expect(agent.height).toBe(account.height)
+  expect(agent.padding).toBe(account.padding)
+  expect(agent.colorScheme).toBe(account.colorScheme)
+  expect(agent.firstTabTextLeft).toBeCloseTo(agent.contentLeft, 0)
+  await expect(agentDialog.locator('[data-account-security-close]')).toHaveCount(0)
+  await expect(agentDialog.locator('.agent-editor__actions')).toBeVisible()
+})
+
+test('账户资料:资料行居首、深色三档表面与邮箱排版不降级', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const dialog = await openAccountDialog(page)
+  const profile = dialog.locator('[data-account-profile]')
+  const row = profile.locator('[data-account-profile-row]')
+  expect(await row.evaluate((element) => element.previousElementSibling?.querySelector('h3')?.textContent)).toBe('Account profile')
+  await expect(profile.locator('#workspace-account-profile-hint')).toContainText('You can change your avatar; your name and email cannot be edited.')
+  await expect(profile.locator('#workspace-account-profile-hint')).not.toContainText('read-only')
+  const email = profile.locator('.account-security__email')
+  const emailStyle = await email.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { fontFamily: style.fontFamily, overflowWrap: style.overflowWrap, textOverflow: style.textOverflow }
+  })
+  expect(emailStyle.fontFamily).toContain('mono')
+  expect(emailStyle.overflowWrap).toBe('anywhere')
+  expect(emailStyle.textOverflow).not.toBe('ellipsis')
+  const before = await row.evaluate((element) => getComputedStyle(element).backgroundColor)
+  await dialog.locator('[data-avatar-button]').hover()
+  await expect(dialog.locator('[data-avatar-badge]')).toHaveCSS('opacity', '1')
+  const sampled = await dialog.evaluate((element) => {
+    const rowElement = element.querySelector('[data-account-profile-row]')
+    const button = element.querySelector('[data-avatar-button]')
+    const badge = element.querySelector('[data-avatar-badge]')
+    if (!(rowElement instanceof HTMLElement) || !(button instanceof HTMLElement) || !(badge instanceof HTMLElement)) throw new Error('Missing profile surfaces')
+    const canvas = document.createElement('canvas')
+    canvas.width = 1
+    canvas.height = 1
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (context === null) throw new Error('Canvas unavailable')
+    const rgb = (color: string): number[] => {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = color
+      context.fillRect(0, 0, 1, 1)
+      return Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3))
+    }
+    const luminance = (color: string): number => {
+      const channels = rgb(color).map((channel) => {
+        const value = channel / 255
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      })
+      return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0)
+    }
+    const badgeStyle = getComputedStyle(badge)
+    const badgeText = luminance(badgeStyle.color)
+    const badgeSurface = luminance(badgeStyle.backgroundColor)
+    return {
+      window: luminance(getComputedStyle(element).backgroundColor),
+      row: luminance(getComputedStyle(rowElement).backgroundColor),
+      hover: luminance(getComputedStyle(button).backgroundColor),
+      rowAfterHover: getComputedStyle(rowElement).backgroundColor,
+      badgeOpacity: badgeStyle.opacity,
+      badgeContrast: (Math.max(badgeText, badgeSurface) + 0.05) / (Math.min(badgeText, badgeSurface) + 0.05),
+    }
+  })
+  expect(sampled.row).toBeGreaterThan(sampled.window)
+  expect(sampled.hover).toBeGreaterThan(sampled.row)
+  expect(sampled.rowAfterHover).toBe(before)
+  expect(sampled.badgeOpacity).toBe('1')
+  expect(sampled.badgeContrast).toBeGreaterThanOrEqual(3)
+  await page.screenshot({ path: testInfo.outputPath('account-profile-raised-dark.png') })
+})
+
+test('头像编辑:键盘焦点常驻角标,Enter 与 Space 都打开文件选择器', async ({ page }) => {
+  const dialog = await openAccountDialog(page)
+  const avatar = dialog.locator('[data-avatar-button]')
+  await expect(avatar).toHaveAttribute('aria-label', 'Change avatar')
+  await tabTo(page, avatar)
+  await expect(avatar).toBeFocused()
+  await expect(dialog.locator('[data-avatar-badge]')).toHaveCSS('opacity', '1')
+  const enterChooser = page.waitForEvent('filechooser')
+  await page.keyboard.press('Enter')
+  await (await enterChooser).setFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: VALID_PNG })
+  await expect(dialog.locator('[data-avatar-feedback]')).toContainText('this session only')
+  await expect(avatar).toBeFocused()
+  const spaceChooser = page.waitForEvent('filechooser')
+  await page.keyboard.press('Space')
+  await (await spaceChooser).setFiles([])
+  await expect(avatar).toBeFocused()
+})
+
+test.describe('触屏头像', () => {
+  test.use({ hasTouch: true })
+
+  test('无 hover 设备角标常驻,且只有头像一个点击目标', async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize({ width: 375, height: 900 })
+    const dialog = await openAccountDialog(page)
+    const avatar = dialog.locator('[data-avatar-button]')
+    await expect(dialog.locator('[data-avatar-badge]')).toHaveCSS('opacity', '1')
+    await expect(dialog.locator('[data-account-profile-row]').getByRole('button')).toHaveCount(1)
+    const bounds = await avatar.boundingBox()
+    expect(bounds?.width).toBeGreaterThanOrEqual(44)
+    expect(bounds?.height).toBeGreaterThanOrEqual(44)
+    await page.screenshot({ path: testInfo.outputPath('account-avatar-coarse-375.png') })
+  })
+})
+
+test('头像替换:账户窗体、底栏与全局设置同步,刷新后还原', async ({ page }) => {
+  const dialog = await openAccountDialog(page)
+  await dialog.locator('[data-avatar-input]').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: VALID_PNG })
+  await expect(dialog.locator('[data-avatar-feedback]')).toHaveAttribute('role', 'status')
+  await expect(dialog.locator('[data-avatar-feedback]')).toContainText('It will reset after refresh')
+  const source = await dialog.locator('[data-avatar-button] img').getAttribute('src')
+  expect(source).toMatch(/^data:image\/png;base64,/)
+  await page.keyboard.press('Escape')
+  const dockAvatar = page.locator('.workspace-dock__settings-trigger .account-avatar img')
+  await expect(dockAvatar).toHaveAttribute('src', source ?? '')
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await expect(page.locator('.global-settings__identity .account-avatar img')).toHaveAttribute('src', source ?? '')
+  await page.reload()
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await unlockDemoIdentity(page)
+  await expect(page.locator('.workspace-dock__settings-trigger .account-avatar img')).toHaveCount(0)
+})
+
+test('头像校验:类型、大小与解码失败均保留原图并说明原因', async ({ page }) => {
+  const dialog = await openAccountDialog(page)
+  const input = dialog.locator('[data-avatar-input]')
+  await input.setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: VALID_PNG })
+  await expect(dialog.locator('[data-avatar-feedback]')).toContainText('Avatar changed')
+  const source = await dialog.locator('[data-avatar-button] img').getAttribute('src')
+  await input.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })
+  await expect(dialog.getByRole('alert')).toContainText('choose a PNG, JPEG, or WebP image')
+  await expect(dialog.locator('[data-avatar-button] img')).toHaveAttribute('src', source ?? '')
+  await input.setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: Buffer.alloc(5 * 1024 * 1024 + 1) })
+  await expect(dialog.getByRole('alert')).toContainText('5 MB or smaller')
+  await expect(dialog.locator('[data-avatar-button] img')).toHaveAttribute('src', source ?? '')
+  await input.setInputFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.from('broken image') })
+  await expect(dialog.getByRole('alert')).toContainText('previous avatar was kept')
+  await expect(dialog.locator('[data-avatar-button] img')).toHaveAttribute('src', source ?? '')
 })
 
 test('未登录裸片段保留原生锚点语义；已登录刷新清空内存会话', async ({ page }) => {
@@ -277,3 +520,79 @@ for (const reducedMotion of ['reduce', 'no-preference']) {
     await expect(trigger).toBeFocused()
   })
 }
+
+
+test('语言二级菜单:radio 即时切换、Esc 分层关闭与 375 不溢出', async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize({ width: 375, height: 900 })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await unlockDemoIdentity(page)
+  const trigger = page.locator('.workspace-dock__settings-trigger')
+  await trigger.click()
+  const panel = page.locator('#workspace-settings-panel')
+  const language = panel.locator('[data-settings-language]')
+  const panelBox = await panel.boundingBox()
+  await language.click()
+  const menu = panel.locator('[data-language-menu]')
+  await expect(menu).toBeVisible()
+  // 二级菜单是浮层:展开不改变设置面板的尺寸(内联展开会撑高面板)。
+  expect((await panel.boundingBox())?.height).toBe(panelBox?.height)
+  const english = menu.getByRole('radio', { name: 'English', exact: true })
+  await expect(english).toBeChecked()
+  await expect(english).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(language).toBeFocused()
+  await expect(language).toContainText('中文')
+  await language.click()
+  await menu.getByRole('radio', { name: 'English', exact: true }).click()
+  await expect(language).toContainText('English')
+  await expect(panel).toBeVisible()
+  await expect(page.locator('#workspace-settings-drawer')).toHaveCount(0)
+  await language.click()
+  await expect(menu.getByRole('radio', { name: /English/ })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(language).toBeFocused()
+  await expect(panel).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0)
+  await page.screenshot({ path: testInfo.outputPath('language-submenu-375.png') })
+})
+
+for (const method of ['button', 'backdrop', 'escape']) {
+  test(`抽屉退出动画: ${method} 先 closing 再卸载`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await unlockDemoIdentity(page)
+    const trigger = page.locator('.workspace-dock__settings-trigger')
+    await trigger.click()
+    await page.locator('[data-settings-section="shortcuts"]').click()
+    const drawer = page.locator('#workspace-settings-drawer')
+    await expect(drawer).toBeVisible()
+    if (method === 'button') await drawer.locator('[data-settings-close]').click()
+    else if (method === 'backdrop') await page.mouse.click(700, 400)
+    else await page.keyboard.press('Escape')
+    await expect(drawer).toHaveAttribute('data-closing', 'true')
+    await expect(drawer).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+  })
+}
+
+test('抽屉退出:reduced-motion 不等待动画直接卸载', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await unlockDemoIdentity(page)
+  const trigger = page.locator('.workspace-dock__settings-trigger')
+  await trigger.click()
+  await page.locator('[data-settings-section="shortcuts"]').click()
+  const drawer = page.locator('#workspace-settings-drawer')
+  await drawer.locator('[data-settings-close]').click()
+  await expect(drawer).toHaveCount(0)
+  await expect(page.locator('[data-closing="true"]')).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+})

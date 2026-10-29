@@ -1373,7 +1373,7 @@ onBeforeUnmount(() => {
 
 <template>
   <dialog
-    ref="dialogRef" class="agent-editor dl-modal-scrim" aria-modal="true"
+    ref="dialogRef" class="agent-editor dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true"
     :aria-labelledby="titleId" :aria-describedby="descriptionIds"
     @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
@@ -2036,11 +2036,12 @@ onBeforeUnmount(() => {
   --agent-matrix-tier: 80px;
   --agent-matrix-label: 140px;
   --agent-matrix-control: 132px;
-  width: min(720px, calc(100% - 2 * var(--dl-space-6)));
-  block-size: min(720px, calc(100dvh - 2 * var(--dl-space-6)));
-  max-block-size: min(720px, calc(100dvh - 2 * var(--dl-space-6)));
+  width: min(var(--workspace-settings-dialog-width), calc(100% - 2 * var(--dl-space-6)));
+  block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-6)));
+  max-block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-6)));
   margin: auto;
-  padding: var(--dl-space-6);
+  box-sizing: border-box;
+  padding: var(--workspace-settings-dialog-padding);
   border: var(--dl-border-width) solid var(--dl-border-strong);
   border-radius: var(--dl-radius-xl);
   background-color: var(--dl-bg-elevated);
@@ -2063,7 +2064,7 @@ onBeforeUnmount(() => {
 .agent-editor__head, .agent-editor__tabbar, .agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
 .agent-editor__tabbar { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
 .agent-editor__tabs { display: flex; gap: var(--dl-space-6); min-inline-size: 0; }
-.agent-editor__tabs button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-block-end: var(--dl-border-width) solid transparent; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
+.agent-editor__tabs button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1); border-block-end: var(--dl-border-width) solid transparent; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .agent-editor__tabs button[aria-selected='true'] { color: var(--dl-text-primary); border-block-end-color: var(--dl-accent); }
 .agent-editor__tabs button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); }
 /* 恢复默认是模型页的低频动作:只在非默认时出现,Tab 条右端的小字链,不占内容视野。 */
@@ -2402,9 +2403,8 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
   .model-matrix:not(.model-matrix--tiers) .model-matrix__field-label { display: block; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 }
 
-/* 窄屏 Header 收紧:保留当前 Agent,通用提示让位给危险操作首屏完整可见。 */
+/* 窄屏间距由全局设置窗体 token 统一收紧,当前 Agent 仍保留在标题行。 */
 @media (max-width: 560px) {
-  .agent-editor { padding: var(--dl-space-4); }
   .agent-editor__head { gap: var(--dl-space-1); }
 }
 </style>

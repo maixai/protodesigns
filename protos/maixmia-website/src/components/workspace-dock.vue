@@ -17,7 +17,7 @@ import DliIcon from './dl-icon.vue'
 import GlobalSettingsPanel from './global-settings-panel.vue'
 import SettingsDrawer from './settings-drawer.vue'
 import AccountSecurityDialog from './account-security-dialog.vue'
-import { session } from '../auth/session'
+import { accountName } from '../auth/session'
 import AccountAvatar from './account-avatar.vue'
 
 const props = defineProps<{
@@ -296,11 +296,11 @@ onBeforeUnmount(() => {
     <div class="workspace-dock__global-settings" role="group" :aria-label="t.workspace.settings.label">
       <button
         ref="settingsTrigger" type="button" class="workspace-dock__settings-trigger"
-        :aria-label="`${t.workspace.settings.label}: ${session.profile?.name ?? ''}`"
+        :aria-label="`${t.workspace.settings.label}: ${accountName}`"
         :aria-expanded="activePanel === 'settings' || settingsSection !== '' || isAccountSecurityOpen" aria-controls="workspace-settings-panel"
         @click="toggle('settings', $event)"
       >
-        <AccountAvatar size="sm" :name="session.profile?.name ?? ''" />
+        <AccountAvatar size="sm" :name="accountName" />
       </button>
       <span class="workspace-dock__settings-tooltip" aria-hidden="true">{{ t.workspace.settings.label }}</span>
     </div>

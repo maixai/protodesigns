@@ -30,7 +30,7 @@ import { FILE_DRAG_TYPE, MAX_ATTACHMENTS, toFileAttachment } from '../data/attac
 import { MAIN_SURFACE, activateTab, agentDomainKey, blurSurface, closeGroup, groupOfWindow, isMinimizedWindow, minimizeGroup, minimizeSurface as minimizeSurfaceOp, minimizedGroupsOf, restoreAreaGroup, restoreGroup, visibleMemberWindows, visibleChildSurfaces, childSurfaces, closeTab as closeSurfaceTab, dockWindow, dropWindows, emptyWorkspace, fileBaseName, fileWindowId, floatWindow, floatingWindowsIntersecting, focusWindow, focusedWindow, hideWindow, hideWindows, layoutOf, layoutViolations, memberWindows, openFloating, openTab, reassignChatWindow, removeSurface, reorderChatMembers, reorderFileMembers, rootSurface, seedChatWindow, setSeparatorPercent, setWindowRect, surfaceOf, surfaceOwning, visibleWindows, windowIdOf, windowPath, withLayout, withSurfaceSplit } from '../data/windows'
 import { closeProject as closeProjectRequest, createSession, deleteAgent, getAgentRuntime, getConfirmationRequest, getFileContent, getProjectTree, getTranscript, listAgentNotifications, listSystemNotifications, listAgents, listProjects, listProjectSkills, listSessions, openProject, saveResponse, searchConversations, sendMessage, updateAgent } from '../api/workspace'
 import { useI18n } from '../i18n'
-import { session } from '../auth/session'
+import { accountName as userName } from '../auth/session'
 import { currentRoute, navigateTo } from '../router'
 import { useFlightGhost } from '../composables/use-flight-ghost'
 import type { FlightRect } from '../composables/use-flight-ghost'
@@ -404,7 +404,6 @@ function confirmationOwnerId(): string {
   const found = Object.entries(chatRuntimes.value).find(([, item]) => item.confirmation !== null)
   return found?.[0] ?? ''
 }
-const userName = computed(() => session.value.profile?.name ?? '')
 const openProjectPaths = computed(() => projects.value.map((project) => project.path))
 // 每个项目的可渲染行(只对有已加载树的项目);目录展开状态变了就重算。
 const projectRows = computed<Record<string, ProjectTreeRow[]>>(() => {

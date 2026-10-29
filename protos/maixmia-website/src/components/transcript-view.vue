@@ -13,6 +13,7 @@ import type { TranscriptState } from '../contracts/generated/transcript-state'
 import type { ConfirmationRequest } from '../contracts/generated/confirmation-request'
 import { useI18n } from '../i18n'
 import ConfirmationCard from './confirmation-card.vue'
+import { toInitials } from './account-avatar'
 
 // 客户端的实时生成阶段(视图状态,不进契约):由页面驱动流式输出,转录据此渲染光标 / 重生成 / 排队。
 export type GenerationPhase = 'idle' | 'queued' | 'streaming' | 'complete' | 'stopped'
@@ -44,12 +45,6 @@ const { t, locale } = useI18n()
 
 const isGenerating = computed(() => props.generation === 'queued' || props.generation === 'streaming')
 
-// 头像首字:按码点取首个字符(中文取首字,英文名取首字母)。头像纯装饰(aria-hidden),
-// 身份由消息的可见作者名承担。
-function avatarInitial(name: string): string {
-  return [...name.trim()][0] ?? ''
-}
-
 // 消息时间戳:日期 + 时分(UTC,与演示数据同源),随当前语言格式化;样式走等宽数字,列宽不跳动。
 function formatMessageTime(timestamp: string): string {
   return new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(timestamp))
@@ -80,10 +75,10 @@ function formatMessageTime(timestamp: string): string {
         :data-message-id="message.id"
       >
         <!-- 圆形头像纯装饰:身份由下方可见的作者名给出,故 aria-hidden,避免屏幕阅读器重复朗读。 -->
-        <span class="message-avatar" aria-hidden="true">{{ message.role === 'user' ? avatarInitial(userName) : avatarInitial(assistantName) }}</span>
+        <span class="message-avatar" aria-hidden="true">{{ message.role === 'user' ? toInitials(userName) : toInitials(assistantName) }}</span>
         <div class="message-content">
           <p class="message-meta">
-            <span class="message-author">{{ message.role === 'user' ? t.workspace.you : assistantName }}</span>
+            <span class="message-author">{{ message.role === 'user' ? userName : assistantName }}</span>
             <span class="message-meta-sep" aria-hidden="true">·</span>
             <time class="message-time" :datetime="message.createdAt">{{ formatMessageTime(message.createdAt) }}</time>
           </p>
@@ -95,7 +90,7 @@ function formatMessageTime(timestamp: string): string {
       <ConfirmationCard v-if="confirmation" :request="confirmation" :outcome="confirmationOutcome" @resolve="emit('resolve', $event)" />
       <!-- 处理后的 Agent 后续消息,排在确认卡留痕之后。 -->
       <article v-if="followUp" class="chat-message assistant" :data-message-id="followUp.id">
-        <span class="message-avatar" aria-hidden="true">{{ avatarInitial(assistantName) }}</span>
+        <span class="message-avatar" aria-hidden="true">{{ toInitials(assistantName) }}</span>
         <div class="message-content">
           <p class="message-meta">
             <span class="message-author">{{ assistantName }}</span>
@@ -132,8 +127,8 @@ function formatMessageTime(timestamp: string): string {
 /* 搜索命中的轮次高亮:静态描边(不做过渡 / 动画),reduced-motion 下同样可见。 */
 .chat-message.is-highlighted { outline: var(--dl-border-width) solid var(--dl-accent); outline-offset: var(--dl-space-2); border-radius: var(--dl-radius-md); }
 /* 作者名 + 时间戳的顶部行。身份由**可见的作者名**给出。 */
-.message-meta { display: flex; align-items: baseline; gap: var(--dl-space-2); margin-bottom: var(--dl-space-2); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-.message-author { color: var(--dl-text-primary); font-weight: 500; }
+.message-meta { display: flex; flex-wrap: wrap; max-inline-size: 100%; align-items: baseline; gap: var(--dl-space-2); margin-bottom: var(--dl-space-2); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
+.message-author { overflow-wrap: anywhere; min-inline-size: 0; color: var(--dl-text-primary); font-weight: 500; }
 .message-meta-sep { color: var(--dl-text-tertiary); }
 /* 时间戳走等宽字体 + 等宽数字:本仓「技术信息一律走等宽」。 */
 .message-time { color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }

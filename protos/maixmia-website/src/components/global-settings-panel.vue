@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 一级菜单只派发分区入口；抽屉与身份动作由外层管理。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { session, signOut } from '../auth/session'
+import { accountName, session, signOut } from '../auth/session'
 import { requestIdentityLock } from '../auth/identity'
 import { useI18n } from '../i18n'
 import AccountAvatar from './account-avatar.vue'
@@ -193,9 +193,9 @@ onBeforeUnmount(() => {
   <div ref="root" class="global-settings" tabindex="-1" @keydown="onKeydown" @click="onRootClick">
 
       <div class="global-settings__identity">
-        <AccountAvatar :name="profile?.name ?? ''" />
+        <AccountAvatar :name="accountName" />
         <div class="global-settings__profile">
-          <span class="global-settings__name">{{ profile?.name }}</span>
+          <span class="global-settings__name">{{ accountName }}</span>
           <span class="global-settings__email">{{ profile?.email }}</span>
         </div>
       </div>
@@ -223,7 +223,7 @@ onBeforeUnmount(() => {
 .global-settings:focus { outline: none; }
 .global-settings__identity { display: flex; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-3) var(--dl-space-2); }
 .global-settings__profile { display: grid; min-inline-size: 0; gap: var(--dl-space-1); }
-.global-settings__name { font-size: var(--dl-font-size-md); font-weight: 500; }
+.global-settings__name { overflow-wrap: anywhere; font-size: var(--dl-font-size-md); font-weight: 500; }
 .global-settings__email { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); color: var(--dl-text-secondary); overflow-wrap: anywhere; }
 section { padding-block: var(--dl-space-2); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 h3 { padding-inline: var(--dl-space-2); margin-block-end: var(--dl-space-1); font-size: var(--dl-font-size-xs); font-weight: 400; color: var(--dl-text-tertiary); letter-spacing: var(--dl-tracking-label); }

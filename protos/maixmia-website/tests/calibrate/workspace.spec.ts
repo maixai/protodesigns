@@ -5503,9 +5503,9 @@ test('助手作者名 = 会话所属 Agent 名(三档各验一次),不出现「M
   await login(page)
   await waitForStable(page)
 
-  // 默认(规划助手 / weekly):助手消息作者名 = 规划助手;用户侧 = 你;全页作者名不含产品名「Mia」。
+  // 默认(规划助手 / weekly):助手消息作者名 = 规划助手;用户侧 = 账户昵称;全页作者名不含产品名「Mia」。
   await expect(page.locator('.chat-message.assistant .message-author').first()).toHaveText(AGENT_NAMES['zh-CN'].planning)
-  await expect(page.locator('.chat-message.user .message-author').first()).toHaveText('你')
+  await expect(page.locator('.chat-message.user .message-author').first()).toHaveText('林一舟')
   await expect(page.locator('.message-author', { hasText: 'Mia' }), '作者名不再出现产品名 Mia').toHaveCount(0)
 
   // 换 Agent 到研究助手 → 助手作者名随之变。

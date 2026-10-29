@@ -64,7 +64,7 @@ function formatMessageTime(timestamp: string): string {
       <button class="workspace-button retry-button" @click="emit('retry')">{{ t.workspace.retry }}</button>
     </div>
     <div v-else-if="transcript.status === 'empty'" class="conversation-empty">
-      <h2>{{ t.workspace.emptyTitle }}</h2>
+      <h2>{{ t.workspace.emptyTitle.replace('{name}', userName) }}</h2>
       <p>{{ t.workspace.emptyBody }}</p>
     </div>
     <template v-else>

@@ -8,8 +8,15 @@ import { useI18n } from '../i18n'
 import { isAuthenticated, signIn } from '../auth/session'
 import { authPhase, waitForMotion } from '../auth/transition'
 import { navigateTo } from '../router'
+import { scrollToPageTop } from '../composables/scroll-to-top'
 
 const { t } = useI18n()
+
+// 品牌链接回到首页顶部;保留 href 供无脚本场景。
+function onBrandClick(event: MouseEvent): void {
+  event.preventDefault()
+  scrollToPageTop()
+}
 
 async function onLogin(): Promise<void> {
   if (authPhase.value !== 'idle') return
@@ -31,7 +38,7 @@ async function onLogin(): Promise<void> {
   <n-config-provider abstract :theme-overrides="darkOverrides">
     <header id="top" class="site-header dl-scope dl-scope--dark">
       <div id="site-header-inner" class="site-header__inner">
-        <a class="site-header__brand" href="#top" aria-label="Mia">
+        <a class="site-header__brand" href="#top" aria-label="Mia" @click="onBrandClick">
           <span class="site-header__mark" aria-hidden="true">M</span>
           <span class="site-header__word">Mia</span>
         </a>
@@ -69,6 +76,8 @@ async function onLogin(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: var(--dl-space-2);
+  min-block-size: var(--dl-target-size);
+  min-inline-size: var(--dl-target-size);
   font-weight: 600;
   font-size: var(--dl-font-size-md);
   color: var(--dl-text-primary);
@@ -94,6 +103,11 @@ async function onLogin(): Promise<void> {
   align-items: center;
   gap: var(--dl-space-3);
   margin-inline-start: auto;
+}
+
+/* 顶栏独立控件不在密集行例外内:视觉沿用按钮基础高度,命中区抬到 44px。 */
+.site-header__actions .dl-btn {
+  min-block-size: var(--dl-target-size);
 }
 
 </style>

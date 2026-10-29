@@ -3,8 +3,15 @@
 import { computed } from 'vue'
 import { useI18n } from '../i18n'
 import type { Locale } from '../i18n'
+import { scrollToPageTop } from '../composables/scroll-to-top'
 
 const { t, locale, setLocale } = useI18n()
+
+// 页脚字标与顶栏一致:真正回到页面顶部,而不是只改 hash。
+function onBrandClick(event: MouseEvent): void {
+  event.preventDefault()
+  scrollToPageTop()
+}
 
 const navItems = computed(() => [
   { href: '#form-factors', label: t.value.nav.formFactors },
@@ -24,7 +31,7 @@ const languages: readonly { key: Locale; label: string }[] = [
     <div class="dl-container site-footer__inner">
       <div class="site-footer__grid">
         <div class="site-footer__brand">
-          <a class="site-footer__wordmark" href="#top" aria-label="Mia">
+          <a class="site-footer__wordmark" href="#top" aria-label="Mia" @click="onBrandClick">
             <span class="site-footer__mark" aria-hidden="true">M</span>
             <span>Mia</span>
           </a>

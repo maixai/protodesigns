@@ -455,7 +455,6 @@ export const workspace = {
     lastUnlockedAt: 'Last unlocked',
     noUnlockRecord: 'No unlock record',
     vaultStates: { locked: 'Locked', unlocked: 'Unlocked', unavailable: 'Unavailable' },
-    unlockMethodTotal: '{count} unlock methods',
     currentSafetyNet: 'Current safety net',
     language: 'Language',
     shortcuts: 'Keyboard shortcuts',
@@ -607,7 +606,7 @@ export const workspace = {
   assistant: 'Mia',
   transcript: 'Conversation',
   loading: 'Loading conversation…',
-  emptyTitle: 'Yizhou, what shall we work on?',
+  emptyTitle: 'What shall we work on today, {name}?',
   emptyBody: 'Start with an idea. Tell Mia your goal, and we will work out the next step together.',
   inputLabel: 'Message to Mia',
   // 每个输入框按会话可区分(见 zh-CN 同名键的说明);无标题时回落到 inputLabel。

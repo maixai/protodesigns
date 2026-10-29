@@ -376,7 +376,7 @@ for (const width of WIDTHS) {
         await expect(page.locator('.suggestion-card')).toHaveCount(0)
         await expect(page.locator('.suggestions')).toHaveCount(0)
         await expect(page.getByRole('log').getByRole('heading').first()).toBeVisible()
-        await expect(page.getByRole('log')).toContainText('一舟，今天一起完成什么？')
+        await expect(page.getByRole('log')).toContainText('林一舟，今天一起完成什么？')
         // 空位占位**没有输入坞**(见上方断言),故「输入框为空」改由「新对话不再被卡片预填」来验:
         // 点区域 ＋ 建一段新会话 → 输入框必为空。这也替换了原先「点卡片 → 输入框出现建议正文」那条链。
         await startNewConversation(page)

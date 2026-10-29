@@ -459,7 +459,6 @@ export const workspace = {
     lastUnlockedAt: '上次解锁',
     noUnlockRecord: '暂无解锁记录',
     vaultStates: { locked: '已锁定', unlocked: '已解锁', unavailable: '不可用' },
-    unlockMethodTotal: '{count} 种解锁方式',
     currentSafetyNet: '当前安全网',
     language: '语言',
     shortcuts: '键盘快捷键',
@@ -606,7 +605,7 @@ export const workspace = {
   assistant: 'Mia',
   transcript: '对话记录',
   loading: '正在加载对话…',
-  emptyTitle: '一舟，今天一起完成什么？',
+  emptyTitle: '{name}，今天一起完成什么？',
   emptyBody: '从一个想法开始。告诉 Mia 你的目标，我们一起把下一步理清楚。',
   inputLabel: '给 Mia 的消息',
   // 输入框按**会话**可区分:读屏要能告知「正在给哪段对话打字」。{name} 由载体替换为会话标题;

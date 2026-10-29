@@ -469,7 +469,6 @@ onBeforeUnmount(() => {
       <p class="account-security__remove-name">{{ removeTarget.label }}</p>
       <dl class="account-security__safety" data-remove-safety-net>
         <div><dt>{{ copy.currentSafetyNet }}</dt><dd>{{ copy.recoveryKey }} · {{ state.vault.recoveryKeyConfigured ? copy.configured : copy.notConfigured }}</dd></div>
-        <div><dt>{{ copy.unlockMethodTotal.replace('{count}', String(state.vault.unlockMethods.length)) }}</dt><dd>{{ removalWarnsRecoveryOnly ? copy.lastPasskeyWarning : removalBlocked ? copy.lastFactorBlocked : copy.removePasskeyHint }}</dd></div>
       </dl>
       <p v-if="removalBlocked" role="alert">{{ copy.lastFactorBlocked }}</p>
       <template v-else><p>{{ copy.removePasskeyHint }}</p><p v-if="removalWarnsRecoveryOnly" role="alert">{{ copy.lastPasskeyWarning }}</p></template>
@@ -530,7 +529,9 @@ h3 { font-size: var(--dl-font-size-lg); font-weight: 500; line-height: var(--dl-
 .account-security__nickname-actions { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); }
 .account-security__email, .account-security__mono, time { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .account-security__email { color: var(--dl-text-secondary); }
-.account-security__tabs { display: flex; flex: none; gap: var(--dl-space-6); border-block-end: var(--dl-border-width) solid var(--dl-border-base); overflow-x: auto; }
+/* 滚动容器会裁掉外扩焦点环:四周留一档内边距,再用负外边距抵消外部占位,
+   按钮与内容左缘的相对位置不变,焦点环获得不被裁切的缓冲。 */
+.account-security__tabs { display: flex; flex: none; gap: var(--dl-space-6); border-block-end: var(--dl-border-width) solid var(--dl-border-base); overflow-x: auto; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
 .account-security__tabs button { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1); border: 0; border-block-end: var(--dl-border-width) solid transparent; border-radius: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); white-space: nowrap; }
 .account-security__tabs button:hover { background: transparent; }
 .account-security__tabs button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); }

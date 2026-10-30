@@ -72,16 +72,19 @@ contracts/main.tsp ──┬─→ contracts/generated/openapi/openapi.yaml
 
 | 目标 | 层 | 覆盖 | 何时跑 |
 | --- | --- | --- | --- |
-| `make smoke` | **L1 机械可判定** | 未捕获异常与 console error、失败请求、375/768/1280/1600 横向溢出;外加本原型在 `tests/calibrate/` 自写的断言(对比度、触达尺寸、四态、交互) | **每次改动后必跑**,不阻塞交付 |
-| `make calibrate` | 回归比对 | 双引擎(Chromium + WebKit)逐宽度截图 + 断言不破版 | 确认布局变化是预期的之前 |
-| `make calibrate-update` | 基线更新 | 重新生成截图基线(改动的图需过目) | 确认变化是预期的之后 |
+| `make smoke` | **快速冒烟** | 仓库级通用兜底(`tests/smoke/`:未捕获异常与 console error、失败请求、375/768/1280/1600 横向溢出);加 `SPECS` 指定的本原型断言 | **每次改动后必跑**,不阻塞交付 |
+| `make smoke-full` | 全量冒烟 | 全部 `tests/calibrate/` 断言(单引擎、不看像素) | 手动,或 `/protodesign-verify` |
+| `make calibrate` | 回归比对 | 双引擎(Chromium + WebKit)逐宽度截图 + 断言不破版 | 手动,或 `/protodesign-verify` |
+| `make calibrate-update` | 基线更新 | 重新生成截图基线(改动的图需过目) | 人工确认变化预期之后 |
 
 ```bash
-make smoke        # 冒烟:秒级,零 LLM 判定
-make calibrate    # 双引擎校准(慢,含像素比对)
+make smoke                                              # 通用兜底,秒级
+make smoke SPECS="tests/calibrate/account.spec.ts"      # 加上本次相关的断言
+make smoke-full                                         # 全量单引擎
+make calibrate                                           # 双引擎校准(慢,含像素比对)
 ```
 
-**`make smoke` 的判定来源有两块**:仓库级通用冒烟规格 `tests/smoke/`(任何原型都有,复制样板目录即得),以及本原型在 `tests/calibrate/` 里自写的断言。它跑 chromium 单引擎并跳过像素比对 —— 截图基线按创建时的 OS 生成,跨 OS 必然假失败,而冒烟本就不看像素。
+**`make smoke` 默认只跑通用兜底**;本原型在 `tests/calibrate/` 里写的断言按改动范围用 `SPECS` 显式指定,不会自动全量执行。全量单引擎归 `make smoke-full`,双引擎与像素归 `make calibrate` —— 这两者都通过 `/protodesign-verify` 手动触发。
 
 **改动原型后至少跑一次 `make smoke`**;`baseline-web.md` 的四宽度要求由它断言,不靠目视。
 
@@ -131,7 +134,7 @@ protodesigns/
 ├── .claude/
 │   ├── rules/                    # 共享基线 + 三份端基线 + 契约规则 + 设计语言
 │   ├── skills/protodesign/       # 原型设计 Skill
-│   └── agents/                   # 实现 / 评审 SubAgent(按载体各一套)
+│   └── agents/                   # 调研 / 实现 / 评审 SubAgent(按载体各一套)
 ├── scripts/                      # 聚合预览站(aggregate / build / serve)
 ├── preview/                      # 聚合预览站源码
 └── protos/

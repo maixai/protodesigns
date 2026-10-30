@@ -7,7 +7,13 @@ PNPM ?= pnpm
 PORT ?= 5173
 HOST ?= 0.0.0.0
 
-.PHONY: deps run build contracts contracts-schema contracts-ts contracts-dart contracts-clean smoke calibrate calibrate-update
+# PORT 必须导出:playwright.config.ts 从 process.env.PORT 推导 BASE_URL,
+# 只写成 make 变量时子进程读不到,会静默退回 5173 去测别的实例。
+export PORT
+BASE_URL ?= http://127.0.0.1:$(PORT)
+export BASE_URL
+
+.PHONY: deps run build typecheck contracts contracts-schema contracts-ts contracts-dart contracts-clean smoke smoke-full calibrate calibrate-update
 
 # ---- 依赖安装 ----
 # 新克隆的目录先跑一次 make deps:node_modules 是契约工具链与构建的共同前置。
@@ -22,6 +28,10 @@ run: contracts
 # 构建产物(先跑契约生成,否则 vue-tsc 找不到生成类型)。
 build: contracts
 	$(PNPM) build
+
+# 仅类型检查:开发回路内的快检用它,比完整 build 少了打包环节。
+typecheck: contracts
+	$(PNPM) exec vue-tsc --noEmit
 
 # ---- 契约生成(机制层,不含任何"本原型是哪个端"的判断)----
 # 输入:contracts/*.tsp —— 数据模型的单一事实源,手写
@@ -60,17 +70,28 @@ contracts-ts: contracts-schema
 contracts-clean:
 	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_TS_OUT)
 
-# ---- 冒烟检查(Tier 1:确定性、零 LLM 判定,每次改动后必跑,不阻塞交付)----
-# 一次跑两类检查,覆盖「新原型也天然有基础覆盖」与「本原型的深度断言」:
-#   - project=smoke   → tests/smoke 的仓库级通用兜底(console error / 请求失败 / 多宽度横向溢出);
-#   - project=chromium → tests/calibrate 的本原型断言(溢出 / 对比度 / 触达尺寸 / 四态 / 交互),
-#     其中像素比对被 SMOKE=1 降级为不判定(基线按 OS 生成,跨 OS 必然假失败)。
-# 只跑单引擎:冒烟求快,双引擎的跨端渲染差异由 `make calibrate` 覆盖。
-# 需要人 / LLM 判断的项(信息层次、a11y 语义、桌面壳能力)不在本目标范围,归完整评审。
+# ---- 快速冒烟(开发回路内,秒级到分钟级,不阻塞交付)----
+# 默认只跑仓库级通用兜底(tests/smoke:console error / 请求失败 / 多宽度横向溢出);
+# 本原型在 tests/calibrate 里写的断言按改动范围挑,用 SPECS 显式指定,例如:
+#   make smoke SPECS="tests/calibrate/account.spec.ts"
+# 不指定 SPECS 时**不会**再跑全部 calibrate —— 全量属于 `make smoke-full`
+# 与 `protodesign-verify` skill 的职责,不进每次改动的反馈回路。
+# 像素比对由 SMOKE=1 跳过(基线按 OS 生成,跨 OS 必然假失败)。
 # DEV_COMMAND 把当前可用的包管理器命令注入给 playwright 的 webServer(见 playwright.config.ts)。
 DEV_COMMAND ?= $(PNPM) dev --host 127.0.0.1 --port $(PORT)
 
 smoke: contracts
+	@if [ -n "$(SPECS)" ]; then \
+	  echo "smoke: tests/smoke + $(SPECS)"; \
+	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke --project=chromium $(SPECS); \
+	else \
+	  echo "smoke: tests/smoke(未指定 SPECS,跳过本原型断言)"; \
+	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke; \
+	fi
+
+# ---- 全量冒烟(手动触发,归 protodesign-verify)----
+# 跑全部 calibrate 断言 + 通用冒烟,仍是单引擎且不看像素。
+smoke-full: contracts
 	DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke --project=chromium
 
 # ---- 设计校准(双引擎)----

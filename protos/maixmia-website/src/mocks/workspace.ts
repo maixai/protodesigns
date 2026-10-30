@@ -41,6 +41,7 @@ interface AgentSeed {
   id: AgentId
   name?: string
   note?: string
+  avatarUrl?: AgentConfig['avatarUrl']
   nameKey?: keyof Messages['workspace']['agents']
   noteKey?: keyof Messages['workspace']['agentNotes']
   model: AgentModelConfig
@@ -191,6 +192,7 @@ function summaryOf(seed: AgentSeed): AgentSummary {
     id: seed.id,
     name: seed.nameKey !== undefined ? t.value.workspace.agents[seed.nameKey] : (seed.name ?? ''),
     note: seed.noteKey !== undefined ? t.value.workspace.agentNotes[seed.noteKey] : (seed.note ?? ''),
+    avatarUrl: seed.avatarUrl ?? '',
     model: cloneModelConfig(seed.model),
     builtIn: seed.builtIn,
     availability: seed.availability,
@@ -216,6 +218,7 @@ export function mockCreateAgent(config: AgentConfig): AgentSummary {
     id: `agent-${agentSequence}`,
     name: config.name.trim(),
     note: config.note.trim(),
+    avatarUrl: config.avatarUrl,
     model: cloneModelConfig(config.model),
     builtIn: false,
     availability: 'online',
@@ -232,6 +235,7 @@ export function mockUpdateAgent(agentId: AgentId, config: AgentConfig): AgentSum
   if (seed === undefined) return null
   seed.name = config.name.trim()
   seed.note = config.note.trim()
+  seed.avatarUrl = config.avatarUrl
   seed.model = cloneModelConfig(config.model)
   // 用户改过之后就是自定义文案,不再跟随界面语言。
   delete seed.nameKey

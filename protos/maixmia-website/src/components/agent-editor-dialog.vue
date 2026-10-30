@@ -20,6 +20,9 @@ import SubscriptionUsage from './subscription-usage.vue'
 import SubscriptionAuthFlow from './subscription-auth-flow.vue'
 import ModelSourceContext from './model-source-context.vue'
 import AgentIdentitySecurity from './agent-identity-security.vue'
+import { ACCOUNT_AVATAR_ACCEPT, readAccountAvatar } from './account-avatar'
+import type { AvatarReadError } from './account-avatar'
+import { agentInitial } from './agent-avatar'
 
 const props = defineProps<{
   open: boolean
@@ -58,6 +61,62 @@ const dialogRef = ref<HTMLDialogElement | null>(null)
 const returnFocusRef = ref<HTMLElement | null>(null)
 const name = ref('')
 const note = ref('')
+const avatarUrl = ref<AgentConfig['avatarUrl']>('')
+const baselineAvatarUrl = ref<AgentConfig['avatarUrl']>('')
+// 大图片不进入表单序列化；独立 computed 只在图片或其基线变化时比较。
+const isAvatarDirty = computed(() => avatarUrl.value !== baselineAvatarUrl.value)
+const avatarInputRef = ref<HTMLInputElement | null>(null)
+const avatarButtonRef = ref<HTMLButtonElement | null>(null)
+const avatarReadVersion = { value: 0 }
+const avatarFeedback = ref<'idle' | 'reading' | 'preview' | 'removed' | AvatarReadError>('idle')
+const isAvatarReading = computed(() => avatarFeedback.value === 'reading')
+const hasAvatarError = computed(() => ['type', 'size', 'read'].includes(avatarFeedback.value))
+const avatarFeedbackMessage = computed(() => {
+  const copy = t.value.workspace.agentAdmin
+  switch (avatarFeedback.value) {
+    case 'reading': return copy.avatarReading
+    case 'preview': return copy.avatarPreview
+    case 'removed': return copy.avatarRemoved
+    case 'type': return copy.avatarTypeError
+    case 'size': return copy.avatarSizeError
+    case 'read': return copy.avatarReadError
+    default: return ''
+  }
+})
+function discardAvatarDraft(): void {
+  avatarReadVersion.value += 1
+  avatarUrl.value = baselineAvatarUrl.value
+  avatarFeedback.value = 'idle'
+  if (avatarInputRef.value !== null) avatarInputRef.value.value = ''
+}
+function openAvatarPicker(): void {
+  if (!props.busy && !isAvatarReading.value) avatarInputRef.value?.click()
+}
+async function onAvatarChange(event: Event): Promise<void> {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement) || props.busy || isAvatarReading.value) return
+  const file = input.files?.[0]
+  input.value = ''
+  if (file === undefined) return
+  const version = ++avatarReadVersion.value
+  avatarFeedback.value = 'reading'
+  const result = await readAccountAvatar(file)
+  // 关闭、重新打开或切换对象后，不接受旧读取结果，也不抢回焦点。
+  if (version !== avatarReadVersion.value || !props.open) return
+  if (result.ok) {
+    avatarUrl.value = result.value
+    avatarFeedback.value = 'preview'
+  } else avatarFeedback.value = result.error
+  await nextTick()
+  if (version === avatarReadVersion.value && props.open && activeTab.value === 'basic') avatarButtonRef.value?.focus()
+}
+async function removeAvatar(): Promise<void> {
+  if (props.busy || isAvatarReading.value) return
+  avatarUrl.value = ''
+  avatarFeedback.value = 'removed'
+  await nextTick()
+  avatarButtonRef.value?.focus()
+}
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
 const activeTab = ref<'basic' | 'model'>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
@@ -127,7 +186,7 @@ const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
-const isDirty = computed(() => (gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
+const isDirty = computed(() => (isAvatarDirty.value || gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
 const isValid = computed(() => name.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
 type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'attention' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
@@ -443,7 +502,7 @@ function sourceRowReady(row: SourceRow): boolean {
 }
 const sourceReady = computed(() => activeSource.value !== undefined && sourceRowReady(activeSource.value))
 // 保存还要求来源可用:没有可用来源时不允许把模型配置写回。
-const canSubmit = computed(() => isValid.value && !props.busy && isDirty.value && sourceReady.value && authorizationFlow.value === null)
+const canSubmit = computed(() => isValid.value && !props.busy && !isAvatarReading.value && isDirty.value && sourceReady.value && authorizationFlow.value === null)
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
@@ -1268,6 +1327,8 @@ function reset(): void {
   abortAuthorization(false)
   name.value = props.agent?.name ?? ''
   note.value = props.agent?.note ?? ''
+  baselineAvatarUrl.value = props.agent?.avatarUrl ?? ''
+  discardAvatarDraft()
   const saved = props.agent?.model
   const model = saved === undefined ? defaultModelConfig() : cloneModelConfig(saved)
   // 旧数据归一:显式等于内置默认的档位模型折叠回空串;空 / 非法 effort 回到 high。
@@ -1321,13 +1382,14 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
     }
     if (hasUnavailableSourceModels.value) return
     if (!canSubmit.value) return
-    emit('submit', { name: name.value.trim(), note: note.value.trim(), model: cloneModelConfig(modelConfig.value) })
+    emit('submit', { name: name.value.trim(), note: note.value.trim(), avatarUrl: avatarUrl.value, model: cloneModelConfig(modelConfig.value) })
     return
   }
   if (action === 'delete') {
     emit('delete')
     return
   }
+  discardAvatarDraft()
   dismissConnectionTooltip()
   dialogRef.value?.close()
   if (returnFocusRef.value?.isConnected) returnFocusRef.value.focus()
@@ -1343,10 +1405,20 @@ function onBackdropClick(event: MouseEvent): void {
     || event.clientY < bounds.top || event.clientY > bounds.bottom) finish('cancel')
 }
 
+// 文件选择器的原生 cancel 会冒泡到 dialog;只响应 dialog 自身的 Esc 取消,
+// 否则用户在选图时点「取消」会把整个设置弹窗关掉并丢掉草稿。
+function onDialogCancel(event: Event): void {
+  if (event.target !== event.currentTarget) return
+  event.preventDefault()
+  finish('cancel')
+}
+
 // 父组件保存成功:把基线推进到刚提交的值,并显示常驻的 inline 状态。
 watch(() => props.savedToken, (token) => {
   if (token === seenSavedToken.value) return
   seenSavedToken.value = token
+  baselineAvatarUrl.value = props.agent?.avatarUrl ?? avatarUrl.value
+  avatarFeedback.value = 'idle'
   baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
   baselineSourceId.value = modelConfig.value.source.activeSourceId
   savedAt.value = formatSavedAt()
@@ -1365,6 +1437,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   const dialog = dialogRef.value
   if (dialog === null) return
   if (!isOpen) {
+    discardAvatarDraft()
     dismissConnectionTooltip()
     abortAuthorization(false)
     clearSourceCheck()
@@ -1384,6 +1457,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  avatarReadVersion.value += 1
   abortAuthorization(false)
   clearSourceCheck()
   closeSourceMenu()
@@ -1395,10 +1469,11 @@ onBeforeUnmount(() => {
   <dialog
     ref="dialogRef" class="agent-editor dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true"
     :aria-labelledby="titleId" :aria-describedby="descriptionIds"
-    @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
+    @cancel="onDialogCancel" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
     <div class="agent-editor__head">
       <span v-if="agent" class="agent-editor__subject" data-testid="agent-editor-subject" :title="agent.name">
+        <span class="agent-editor__avatar-mark" aria-hidden="true"><img v-if="agent.avatarUrl" :src="agent.avatarUrl" alt=""><template v-else>{{ agentInitial(agent.name) }}</template></span>
         <span class="agent-editor__agent-name">{{ agent.name }}</span>
         <span v-if="connectionStatus" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="showConnectionTooltip($event, agent)" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
           <span class="agent-editor__connection-dot" aria-hidden="true" />
@@ -1442,15 +1517,34 @@ onBeforeUnmount(() => {
         v-if="agent && open" :key="agent.id" :agent="agent" :can-delete="canDelete" :busy="busy" :initially-expanded="focusIdentity"
         @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" @delete="finish('delete')"
       >
-      <div class="agent-editor__fields">
-        <label class="field">
-          <span class="field__label">{{ t.workspace.agentAdmin.name }}</span>
-          <input v-model="name" :disabled="busy" required type="text" class="field__input" maxlength="40" :placeholder="t.workspace.agentAdmin.namePlaceholder" autocomplete="off">
-        </label>
-        <label class="field">
-          <span class="field__label">{{ t.workspace.agentAdmin.note }}</span>
-          <input v-model="note" :disabled="busy" type="text" class="field__input" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
-        </label>
+      <div class="agent-editor__profile">
+        <div class="agent-editor__profile-header">
+          <button
+            ref="avatarButtonRef" type="button" class="agent-editor__avatar-button" data-testid="agent-avatar-button"
+            :aria-label="t.workspace.agentAdmin.avatarChange" :title="t.workspace.agentAdmin.avatarChange"
+            :aria-describedby="avatarFeedbackMessage ? `${dialogId}-avatar-feedback` : undefined"
+            :aria-busy="isAvatarReading" :disabled="busy || isAvatarReading" @click="openAvatarPicker"
+          >
+            <img v-if="avatarUrl" :src="avatarUrl" alt="">
+            <span v-else aria-hidden="true">{{ agentInitial(name) }}</span>
+            <span class="agent-editor__avatar-pencil" aria-hidden="true"><DliIcon name="pencil" size="sm" /></span>
+          </button>
+          <div class="agent-editor__profile-text">
+            <div class="agent-editor__profile-field">
+              <label class="agent-editor__profile-label" :for="`${dialogId}-name`">{{ t.workspace.agentAdmin.name }}</label>
+              <input :id="`${dialogId}-name`" v-model="name" :disabled="busy" required type="text" class="field__input agent-editor__profile-name" maxlength="40" :placeholder="t.workspace.agentAdmin.namePlaceholder" autocomplete="off">
+            </div>
+            <div class="agent-editor__profile-field">
+              <label class="agent-editor__profile-label" :for="`${dialogId}-note`">{{ t.workspace.agentAdmin.note }}</label>
+              <input :id="`${dialogId}-note`" v-model="note" :disabled="busy" type="text" class="field__input agent-editor__profile-note" maxlength="80" :placeholder="t.workspace.agentAdmin.notePlaceholder" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <input ref="avatarInputRef" type="file" hidden data-testid="agent-avatar-input" :aria-label="t.workspace.agentAdmin.avatar" :accept="ACCOUNT_AVATAR_ACCEPT" :disabled="busy || isAvatarReading" @change="onAvatarChange" @cancel.stop="avatarButtonRef?.focus()">
+        <div v-if="avatarUrl || avatarFeedbackMessage !== ''" class="agent-editor__profile-feedback">
+          <button v-if="avatarUrl" type="button" class="agent-editor__avatar-remove" :disabled="busy || isAvatarReading" @click="removeAvatar">{{ t.workspace.agentAdmin.avatarRemove }}</button>
+          <p v-if="avatarFeedbackMessage !== ''" :id="`${dialogId}-avatar-feedback`" class="agent-editor__avatar-feedback" :data-error="hasAvatarError" :role="hasAvatarError ? 'alert' : 'status'" aria-atomic="true">{{ avatarFeedbackMessage }}</p>
+        </div>
       </div>
       <p class="agent-editor__basic-hint">{{ t.workspace.agentAdmin.basicInfoHint }}</p>
       </AgentIdentitySecurity>
@@ -2102,7 +2196,7 @@ onBeforeUnmount(() => {
 .agent-editor__body::-webkit-scrollbar-thumb { background: var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
 .agent-editor__body::-webkit-scrollbar-track { background: transparent; }
 .agent-editor__panel { display: grid; gap: var(--dl-space-6); min-inline-size: 0; }
-.agent-editor__basic-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
+.agent-editor__basic-hint { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .agent-editor__panel--model { gap: var(--dl-space-3); }
 /* 动效只落在实际内容上:模型外层保留吸顶 tab,来源子视图也不叠加父级位移。
    v-show 恢复显示时自动重播;不保留 transform,避免改变来源菜单的 fixed 定位参照。 */
@@ -2323,7 +2417,30 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 
 .agent-editor__legend { margin-block-end: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
 
-.agent-editor__fields { display: grid; gap: var(--dl-space-3); }
+.agent-editor__profile { display: grid; gap: var(--dl-space-2); min-inline-size: 0; }
+.agent-editor__profile-header { display: flex; align-items: center; gap: var(--dl-space-3); min-inline-size: 0; }
+/* 两行字段共享一个容器与标签轨道;可编辑性来自发丝描边和交互态,而不是展示级字号。 */
+.agent-editor__profile-text { flex: 1; display: grid; grid-template-columns: max-content minmax(0, 1fr); min-inline-size: 0; border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
+.agent-editor__profile-text:hover { border-color: var(--dl-border-strong); }
+.agent-editor__profile-field { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; column-gap: var(--dl-space-3); min-inline-size: 0; padding-inline: var(--dl-space-3); }
+.agent-editor__profile-field + .agent-editor__profile-field { border-block-start: var(--dl-border-width) solid var(--dl-border-subtle); }
+.agent-editor__profile-label { grid-column: 1; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); letter-spacing: var(--dl-tracking-label); }
+.agent-editor__avatar-mark { display: inline-grid; place-items: center; flex: none; inline-size: var(--dl-icon-lg); block-size: var(--dl-icon-lg); border-radius: var(--dl-radius-sm); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.agent-editor__avatar-mark img, .agent-editor__avatar-button img { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; border-radius: inherit; }
+.agent-editor__avatar-button { position: relative; display: inline-grid; place-items: center; flex: none; inline-size: var(--dl-space-12); block-size: var(--dl-space-12); min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); padding: 0; border: 0; border-radius: var(--dl-radius-lg); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-lg); }
+/* 上传入口常显:触屏与无 hover 环境也能直接发现,不再依赖悬停或聚焦才出现。 */
+.agent-editor__avatar-pencil { position: absolute; inset-inline-end: calc(-1 * var(--dl-space-1)); inset-block-end: calc(-1 * var(--dl-space-1)); display: grid; place-items: center; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); background: var(--dl-bg-elevated); color: var(--dl-text-primary); pointer-events: none; }
+.agent-editor__avatar-button:hover:not(:disabled) .agent-editor__avatar-pencil,
+.agent-editor__avatar-button:focus-visible .agent-editor__avatar-pencil { border-color: var(--dl-border-strong); color: var(--dl-accent); }
+.agent-editor__profile-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-1) var(--dl-space-3); min-inline-size: 0; }
+.agent-editor__avatar-remove { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.agent-editor__avatar-feedback { min-inline-size: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.agent-editor__avatar-feedback:empty { display: none; }
+.agent-editor__avatar-feedback[data-error='true'] { color: var(--dl-error); }
+.agent-editor__avatar-button:hover:not(:disabled), .agent-editor__avatar-remove:hover:not(:disabled) { background: var(--dl-bg-hover); }
+.agent-editor__avatar-button:disabled, .agent-editor__avatar-remove:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
+.agent-editor__avatar-button:disabled .agent-editor__avatar-pencil { color: var(--dl-text-disabled); }
+.agent-editor__avatar-button:active:not(:disabled), .agent-editor__avatar-remove:active:not(:disabled) { transform: translateY(var(--dl-lift-press)); }
 .field { display: grid; gap: var(--dl-space-1); }
 .field__label { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .field__input { inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
@@ -2332,6 +2449,16 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .field__input:focus-visible:not(:disabled) { border-color: var(--dl-focus-border); outline: none; box-shadow: var(--dl-focus-halo); border-radius: var(--dl-radius-md); }
 .field__input:active:not(:disabled) { border-color: var(--dl-accent); }
 .field__input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
+/* 常驻输入保留草稿与校验;每个输入不再各自成盒,焦点环只标记当前编辑行。 */
+.agent-editor__profile-text .field__input { grid-column: 2; box-sizing: border-box; min-inline-size: 0; padding-inline: 0; border-color: transparent; border-radius: var(--dl-radius-sm); background: transparent; }
+.agent-editor__profile-text .field__input:hover:not(:disabled) { border-color: transparent; background: var(--dl-bg-hover); }
+.agent-editor__profile-text .field__input:focus-visible:not(:disabled) { border-color: var(--dl-focus-border); background: var(--dl-bg-elevated); box-shadow: var(--dl-focus-ring); }
+.agent-editor__profile-text .field__input:active:not(:disabled) { border-color: var(--dl-accent); }
+.agent-editor__profile-text .field__input:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); }
+.agent-editor__profile-field:has(.field__input:disabled) .agent-editor__profile-label { color: var(--dl-text-disabled); }
+/* 可编辑值统一落在正文尺度:名称与头部 subject 同号,身份由头像、标签与行序承担。 */
+.agent-editor__profile-name { font-size: var(--dl-font-size-md); font-weight: 500; }
+.agent-editor__profile-note { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
 .field__select { appearance: none; min-inline-size: 0; max-inline-size: 100%; padding-inline-end: var(--dl-space-8); }
 /* 思考强度是 SDK 原始值(low/medium/high/xhigh/max),用等宽字保留技术感。 */
 .model-effort-select { font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; }

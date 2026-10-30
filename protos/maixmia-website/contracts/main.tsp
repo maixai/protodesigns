@@ -587,6 +587,8 @@ model AgentSummary {
   id: AgentId;
   name: string;
   note: string;
+  @doc("头像图片地址；空串表示未设置。本原型用 Data URL 承载，刷新后重置。")
+  avatarUrl: string;
   `model`: AgentModelConfig;
   builtIn: boolean;
   availability: AgentAvailabilityId;
@@ -599,6 +601,8 @@ model AgentSummary {
 model AgentConfig {
   name: string;
   note: string;
+  @doc("头像图片地址；空串表示未设置。本原型用 Data URL 承载，刷新后重置。")
+  avatarUrl: string;
   `model`: AgentModelConfig;
 }
 

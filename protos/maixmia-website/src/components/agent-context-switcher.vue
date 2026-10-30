@@ -13,6 +13,7 @@ import type { AgentSummary } from '../contracts/generated/agent-summary'
 import { useI18n } from '../i18n'
 import { agentDisplayStatus, useAgentStatusTooltip } from '../data/agent-status'
 import DliIcon from './dl-icon.vue'
+import { agentInitial } from './agent-avatar'
 
 const props = withDefaults(defineProps<{
   value: AgentId
@@ -50,10 +51,6 @@ const {
     return anchor.closest('.agent-context-switcher__panel')?.getBoundingClientRect() ?? header
   },
 )
-// 首字标记:窄屏只留它 + chevron 时,用户仍能认出当前 Agent(名称在 aria-label 里保留)。
-function initialOf(name: string): string {
-  return name.slice(0, 1)
-}
 function close(restoreFocus = false): void {
   hideTooltip()
   isOpen.value = false
@@ -118,7 +115,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 <template>
   <div ref="root" class="agent-context-switcher" :data-variant="variant" @keydown="onKeydown" @focusout="onFocusOut">
     <button ref="trigger" type="button" class="agent-context-switcher__trigger" :data-agent="value" :aria-label="triggerLabel" :aria-expanded="isOpen" aria-controls="agent-context-panel" :aria-describedby="isTooltipOpen && tooltipAnchor === trigger ? tooltipId : undefined" @pointerenter="showTooltip($event, current)" @pointerleave="leaveTooltip" @focus="showTooltip($event, current)" @blur="leaveTooltip" @click="toggle">
-      <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}<span v-if="current" class="agent-context-switcher__status-dot" :data-state="statusOf(current).state" aria-hidden="true" /></span>
+      <span class="agent-context-switcher__mark" aria-hidden="true"><img v-if="current?.avatarUrl" class="agent-context-switcher__avatar" :src="current.avatarUrl" alt=""><template v-else>{{ agentInitial(current?.name ?? '') }}</template><span v-if="current" class="agent-context-switcher__status-dot" :data-state="statusOf(current).state" aria-hidden="true" /></span>
       <span class="agent-context-switcher__body">
         <span class="agent-context-switcher__name"><span class="agent-context-switcher__name-text">{{ current?.name ?? '' }}</span><span v-if="current && statusOf(current).state === 'authenticationFailed'" class="agent-context-switcher__trust"> · {{ statusOf(current).label }}</span></span>
         <span class="agent-context-switcher__note">{{ current?.note ?? '' }}</span>
@@ -129,7 +126,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
       <div v-if="isOpen" id="agent-context-panel" ref="panel" class="agent-context-switcher__panel" role="group" :aria-label="t.workspace.agentSwitcher.menu">
         <p class="agent-context-switcher__title">{{ t.workspace.agentSwitcher.menu }}</p>
         <button v-for="agent in agents" :key="agent.id" type="button" class="agent-context-switcher__option" :data-agent="agent.id" :aria-label="optionLabel(agent)" :aria-describedby="isTooltipOpen && tooltipAnchor !== trigger && tooltipAgentId === agent.id ? tooltipId : undefined" @pointerenter="showTooltip($event, agent)" @pointerleave="leaveTooltip" @focus="showTooltip($event, agent)" @blur="leaveTooltip" :aria-current="agent.id === value ? 'true' : undefined" @click="select(agent.id)">
-          <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}<span class="agent-context-switcher__status-dot" :data-state="statusOf(agent).state" aria-hidden="true" /></span>
+          <span class="agent-context-switcher__option-mark" aria-hidden="true"><img v-if="agent.avatarUrl" class="agent-context-switcher__avatar" :src="agent.avatarUrl" alt=""><template v-else>{{ agentInitial(agent.name) }}</template><span class="agent-context-switcher__status-dot" :data-state="statusOf(agent).state" aria-hidden="true" /></span>
           <span class="agent-context-switcher__option-body">
             <span class="agent-context-switcher__option-name"><span class="agent-context-switcher__name-text">{{ agent.name }}</span><span v-if="statusOf(agent).state === 'authenticationFailed'" class="agent-context-switcher__trust"> · {{ statusOf(agent).label }}</span></span>
             <span class="agent-context-switcher__option-note">{{ agent.note }}</span>
@@ -153,7 +150,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 </template>
 
 <style scoped>
-.agent-context-switcher__mark, .agent-context-switcher__option-mark { position: relative; }
+.agent-context-switcher__mark, .agent-context-switcher__option-mark { position: relative; isolation: isolate; }
+/* 只裁图片自身，不裁标记容器，以保留伸到右下角外侧的连接状态点。 */
+.agent-context-switcher__avatar { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; border-radius: inherit; }
+.agent-context-switcher__status-dot { z-index: var(--dl-z-sticky); }
 .agent-context-switcher__status-dot { position: absolute; inset-inline-end: calc(-1 * var(--dl-border-width)); inset-block-end: calc(-1 * var(--dl-border-width)); inline-size: var(--dl-space-2); block-size: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-success); border-radius: var(--dl-radius-pill); background: var(--dl-success); box-shadow: 0 0 0 var(--dl-border-width) var(--dl-bg-elevated); }
 .agent-context-switcher__status-dot[data-state='offline'] { background: var(--dl-bg-elevated); border-color: var(--dl-text-tertiary); }
 .agent-context-switcher__status-dot[data-state='authenticationFailed'] { background: var(--dl-warning); border-color: var(--dl-warning); }

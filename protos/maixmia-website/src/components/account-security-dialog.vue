@@ -298,6 +298,14 @@ function requestClose(): void {
   emit('close')
 }
 
+// 文件选择器与嵌套确认框的原生 cancel 会冒泡到本窗体；只响应窗体自身的 Esc，
+// 否则取消选图或关闭确认框会把整个账户设置一起关掉。
+function onDialogCancel(event: Event): void {
+  if (event.target !== event.currentTarget) return
+  event.preventDefault()
+  requestClose()
+}
+
 function onBackdrop(event: MouseEvent): void {
   if (event.target !== dialog.value || dialog.value === null || removeTarget.value !== null) return
   const rect = dialog.value.getBoundingClientRect()
@@ -320,7 +328,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <dialog id="workspace-account-security-dialog" ref="dialog" class="account-security dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true" aria-labelledby="workspace-account-security-title" @cancel.prevent="requestClose" @click="onBackdrop" @keydown="onKeydown" @keydown.stop>
+  <dialog id="workspace-account-security-dialog" ref="dialog" class="account-security dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true" aria-labelledby="workspace-account-security-title" @cancel="onDialogCancel" @click="onBackdrop" @keydown="onKeydown" @keydown.stop>
     <header class="account-security__header">
       <h2 id="workspace-account-security-title" ref="heading" tabindex="-1">{{ copy.accountSecurity }}</h2>
       <button type="button" class="account-security__close" data-account-security-close :disabled="isEditingNickname" :aria-label="copy.close" @click="requestClose"><DliIcon name="close" /></button>
@@ -368,7 +376,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <p v-if="profileFeedback !== null" id="workspace-profile-feedback" class="account-security__avatar-feedback" :data-tone="profileFeedback.kind" :role="profileFeedback.kind === 'error' ? 'alert' : 'status'" data-avatar-feedback data-profile-feedback>{{ profileFeedback.message }}</p>
-            <input ref="avatarInput" class="account-security__avatar-input" data-avatar-input type="file" :accept="ACCOUNT_AVATAR_ACCEPT" @change="onAvatarChange">
+            <input ref="avatarInput" class="account-security__avatar-input" data-avatar-input type="file" :accept="ACCOUNT_AVATAR_ACCEPT" @change="onAvatarChange" @cancel.stop="avatarButton?.focus()">
             <section class="account-security__identity-group" aria-labelledby="workspace-account-identity-label">
               <h3 id="workspace-account-identity-label" class="account-security__group-label">{{ copy.identityGroup }}</h3>
               <dl class="account-security__facts" aria-labelledby="workspace-account-identity-label">
@@ -429,7 +437,7 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
-    <dialog v-if="removeTarget !== null && state.status === 'ready'" ref="removeDialog" class="account-security__confirm dl-modal-scrim" aria-modal="true" aria-labelledby="settings-remove-title" @cancel.prevent="cancelRemove" @keydown.stop>
+    <dialog v-if="removeTarget !== null && state.status === 'ready'" ref="removeDialog" class="account-security__confirm dl-modal-scrim" aria-modal="true" aria-labelledby="settings-remove-title" @cancel.prevent.stop="cancelRemove" @keydown.stop>
       <h3 id="settings-remove-title">{{ copy.removePasskeyTitle }}</h3>
       <p class="account-security__remove-name">{{ removeTarget.label }}</p>
       <dl class="account-security__safety" data-remove-safety-net>

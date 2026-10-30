@@ -117,7 +117,7 @@ export function mockConfirmPairing(id: string, displayName: string, note: string
   if (displayName.trim() === '') return { ok: false, error: new Error(t.value.workspace.agentAdmin.nameRequired) }
   const session = result.value
   const existing = mockAgentSummaries().find((agent) => agent.identity.fingerprint === session.fingerprint)
-  const config = { name: displayName, note, model: existing?.model ?? defaultAgentModelConfig() }
+  const config = { name: displayName, note, avatarUrl: existing?.avatarUrl ?? '', model: existing?.model ?? defaultAgentModelConfig() }
   const agent = existing === undefined ? mockCreateAgent(config) : mockUpdateAgent(existing.id, config)
   if (agent === null) return { ok: false, error: new Error(copy.invalidState) }
   logIndex += 1

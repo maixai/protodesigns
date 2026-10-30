@@ -536,14 +536,19 @@ test('标签条尺寸变化后活动标签补正横向对齐,且不引发页面�
   await page.evaluate(() => {
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' })
   })
-  // 竞态防线:instant 滚动在并行负载下未必在 resize 前落笔 —— 若缩窗时滚动
-  // 尚未生效,WebKit 会按未滚动的状态钳位,之后读到的 scrollY 恒为 0( flaky )。
-  // 先等纵向滚动真正落定再缩窗,断言的前提才确定。
-  // 用 expect.poll 而不是 waitForFunction:前者由 Playwright 以自己的节奏重试,不受页面
+  // 竞态防线:instant 滚动在并行负载下可能整次落空(滚动目标按当时的短文档钳位),
+  // 只滚一次再等会让 5s 全部空等。故把滚动本身放进 poll 里重试,直到文档真正滚起来。
+  // 用 expect.poll 而不是 waitForFunction:重试由 Playwright 驱动,不受页面
   // 主线程繁忙(满载时)的影响;waitForFunction 的轮询实现挂在页面侧,主线程被抢占时会整段
   // 卡住直到超时(此前的满载抖动正是这样来的)。
   await expect
-    .poll(async () => page.evaluate(() => window.scrollY), { message: '缩窗前纵向滚动已落定' })
+    .poll(
+      async () => {
+        await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }))
+        return page.evaluate(() => window.scrollY)
+      },
+      { message: '缩窗前纵向滚动已落定' },
+    )
     .toBeGreaterThan(0)
   await page.setViewportSize({ width: 375, height: VIEWPORT_HEIGHT })
 

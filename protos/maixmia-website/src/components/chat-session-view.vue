@@ -66,6 +66,11 @@ let previousScroll = 0
 // 已处理过的高亮轮次:滚动跳转只做一次(highlightTurnId 本身保留,高亮框继续可见)。
 let consumedHighlight = ''
 
+// 尺寸变化后若仍在粘底状态,落点要重算 —— 只跟随用户意图,不去抢已经上滚的阅读位置。
+const transcriptResize = new ResizeObserver(() => {
+  if (props.runtime.isPinned) void stickToBottom()
+})
+
 function setPinned(next: boolean): void {
   if (props.runtime.isPinned !== next) emit('update:pinned', next)
 }
@@ -139,11 +144,19 @@ onMounted(() => {
   // 指针抬起可能落在滚动容器之外(拖动滚动条时鼠标划出),故在 window 上收尾 —— 每个视图各自登记。
   window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('pointercancel', onPointerUp)
+  // 转录内容或可视高度的**后续**变化(坞随遥测换行变高、消息内区块完成布局)会改变最大滚动量;
+  // 若仍处于粘底状态却不重算,底部会差出一整行(实测 375 下差 24px,像素基线随之抖动)。
+  const log = logRef.value
+  if (log !== null) {
+    transcriptResize.observe(log)
+    if (log.firstElementChild !== null) transcriptResize.observe(log.firstElementChild)
+  }
   void stickToBottom()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
+  transcriptResize.disconnect()
 })
 
 const isGenerating = computed(() => props.runtime.generation === 'queued' || props.runtime.generation === 'streaming')

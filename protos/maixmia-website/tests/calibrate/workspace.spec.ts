@@ -171,6 +171,18 @@ async function waitForStable(page: Page, state = 'ready', heading: string = zhHe
   await page.evaluate(async () => { await document.fonts.ready })
 }
 
+// 转录贴底是截图的确定性前提:坞高、字体与消息内容都可能在首帧之后继续落定,
+// 滚动位置若停在旧落点,整段转录会相对窗口偏移 24px(实测 375 偶发,像素基线随之抖动)。
+// 只等「已贴底」,不替产品修正落点 —— 停在别处就应当确定性失败,而不是被悄悄抹平。
+async function expectTranscriptPinned(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () => page.getByRole('log').evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop),
+      { message: '转录已贴底' },
+    )
+    .toBeLessThanOrEqual(1)
+}
+
 async function expectComposerUnclipped(page: Page): Promise<void> {
   const input = page.getByRole('textbox')
   await expect(input).toHaveValue('')
@@ -344,6 +356,7 @@ for (const width of WIDTHS) {
     // 菜单隐去**正在显示**的那段(默认是 weekly)→ 6 条会话里列出 5 条。
     await expect(page.locator('.session-item')).toHaveCount(SESSIONS_IN_DEFAULT_PROJECT - 1)
     await closeSwitcher(page)
+    await expectTranscriptPinned(page)
     await expect(page).toHaveScreenshot(`workspace-ready-${width}.png`, { fullPage: true })
     expect(errors).toEqual([])
   })
@@ -1136,6 +1149,7 @@ test.describe('英文窄屏与无障碍回归', () => {
       if (state === 'empty') await expect(page.locator('.composer-dock'), '空位占位没有输入坞').toHaveCount(0)
       else await expectComposerUnclipped(page)
       if (state === 'empty') await expectEmptyAtTop(page)
+      if (state === 'ready') await expectTranscriptPinned(page)
       await expect(page).toHaveScreenshot(`workspace-${state}-375-en.png`, { fullPage: true })
       if (state === 'empty') await expectEmptyAtTop(page)
       else await expectComposerUnclipped(page)

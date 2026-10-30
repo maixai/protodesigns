@@ -1354,8 +1354,10 @@ test('手动上滚锁定位置，追加消息不抢滚动，返回底部恢复�
   const input = page.getByRole('textbox')
   await input.fill('请继续细化准备工作。')
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-  await log.focus()
-  await page.keyboard.press('Home')
+  // 用滚轮上滚建立前置条件,而不是聚焦后按 Home:Home 依赖焦点落在转录区,WebKit 下焦点与
+  // 滚动事件的时序不稳,同一条前置条件会随机落到「仍在贴底」,于是后续断言变成测两种状态。
+  await log.hover()
+  await page.mouse.wheel(0, -800)
   await expect(page.getByRole('button', { name: '回到底部' })).toBeVisible()
   await expect.poll(() => log.evaluate((element) => element.scrollTop)).toBe(0)
   await input.press('Enter')

@@ -1,15 +1,15 @@
 <script setup lang="ts">
-// 身份与安全(已配对的 Agent):只保留配对完成后仍有价值的信息。
-// 配对流程里的安全码人工核对、待确认的信任记录属于「添加 Agent」阶段,不在这里重复;
-// 页面结构因此收窄为 状态 → 身份密钥 → 危险操作。
+// 基本页按可编辑字段、身份事实、危险操作排列；异常信任提示优先出现在首屏。
+// 表单由父层插槽提供，身份动作不会重新创建或重置父层草稿。
 import { computed, ref } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import { revokeAgent, unlockIdentityVault } from '../api/workspace'
 import { useI18n } from '../i18n'
 import AgentRemoveDialog from './agent-remove-dialog.vue'
+import DliIcon from './dl-icon.vue'
 import './identity-flow.css'
 
-const props = defineProps<{ agent: AgentSummary; canDelete: boolean; busy: boolean }>()
+const props = defineProps<{ agent: AgentSummary; canDelete: boolean; busy: boolean; initiallyExpanded: boolean }>()
 const emit = defineEmits<{ updated: [agent: AgentSummary]; rePair: []; delete: [] }>()
 const { t, locale } = useI18n()
 const copy = computed(() => t.value.workspace.security)
@@ -22,15 +22,11 @@ function formatTime(value: string, empty = '—'): string {
 }
 
 const identity = computed(() => props.agent.identity)
-// 指纹按空格分组显示成数据栅格;一次取出,避免模板里反复 split。
-const fingerprintGroups = computed(() => identity.value.fingerprint.split(' ').filter((group) => group !== ''))
-// 折叠态的摘要只取首两组与末组,既能认出来是哪把钥匙,又不占一整块空间。
-const fingerprintPreview = computed(() => {
-  const groups = fingerprintGroups.value
-  if (groups.length <= 3) return groups.join(' ')
-  return `${groups.slice(0, 2).join(' ')} … ${groups.slice(-1).join(' ')}`
-})
-const isKeyOpen = ref(false)
+// 普通打开保持折叠，深链在组件挂载时展开；后续手动折叠不被属性覆盖。
+const isExpanded = ref(props.initiallyExpanded)
+// 危险区始终独立从折叠态开始，不随身份深链或身份披露联动。
+const isDangerExpanded = ref(false)
+const identitySummary = computed(() => `${copy.value.identityGroup} · ${copy.value[identity.value.trustState]} · ${identity.value.deviceName} · ${identity.value.platform}`)
 const removeOpen = ref(false)
 const isRemoving = ref(false)
 const error = ref('')
@@ -38,9 +34,9 @@ const notice = ref('')
 const copyNotice = ref('')
 const copyFailed = ref(false)
 
-async function copyFingerprint(): Promise<void> {
+async function copyPublicKey(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(identity.value.fingerprint)
+    await navigator.clipboard.writeText(identity.value.publicKey)
     copyFailed.value = false
     copyNotice.value = copy.value.copied
   } catch {
@@ -89,97 +85,80 @@ function requestDelete(): void {
 </script>
 
 <template>
-  <section class="security-console" data-testid="agent-identity-security" aria-labelledby="agent-identity-heading">
-    <!-- 状态:一眼看到「这台设备是否仍被信任」,以及对应设备的最近在线时间。 -->
-    <section class="security-hero" :data-state="identity.trustState">
-      <div class="security-hero__glyph" aria-hidden="true">
-        <svg viewBox="0 0 48 48" fill="none">
-          <path d="M24 6 39 12v11c0 9-6 15-15 19-9-4-15-10-15-19V12L24 6Z" />
-          <path d="M18 25a6 6 0 1 1 12 0c0 2.4-1.4 4.5-3.5 5.5V34h-5v-3.5C19.4 29.5 18 27.4 18 25Z" />
-        </svg>
-      </div>
-      <div class="security-hero__body">
-        <h3 id="agent-identity-heading" class="security-hero__title" tabindex="-1">
-          <span class="security-hero__lamp" aria-hidden="true" />
-          {{ copy[identity.trustState] }}
-          <span v-if="agent.builtIn" class="security-chip">{{ t.workspace.agentAdmin.builtIn }}</span>
-        </h3>
-        <p class="security-hero__device">{{ identity.deviceName }} · {{ identity.platform }}</p>
-        <p class="security-hero__seen">
-          {{ copy.lastSeen }} <time data-testid="agent-last-seen">{{ formatTime(identity.lastSeenAt) }}</time>
-        </p>
-      </div>
-    </section>
-
+  <div class="security-console" data-testid="agent-identity-security">
     <section v-if="identity.trustState !== 'trusted'" class="security-alert" role="alert">
-      <p>{{ copy.trustWarning }}</p>
-      <button type="button" class="security-button security-button--warning" data-testid="agent-re-pair" @click="emit('rePair')">{{ copy.rePair }}</button>
+      <p><strong>{{ copy[identity.trustState] }}</strong> · {{ copy.trustWarning }}</p>
+      <button type="button" class="security-button security-button--warning" data-testid="agent-re-pair" :disabled="busy" @click="emit('rePair')">{{ copy.rePair }}</button>
     </section>
 
-    <!-- 身份密钥是低频信息:默认折叠成一行摘要,展开后才显示完整指纹与配对信息。 -->
-    <section class="security-key">
-      <button
-        id="agent-key-toggle" type="button" class="security-key__toggle"
-        :aria-expanded="isKeyOpen" aria-controls="agent-key-panel"
-        data-testid="agent-key-toggle" @click="isKeyOpen = !isKeyOpen"
-      >
-        <span class="security-key__title">{{ copy.keySection }}</span>
-        <span class="security-key__summary">
-          <span class="security-key__summary-label">{{ copy.fingerprint }}</span>
-          <span class="security-key__summary-sep security-key__summary-sep--lead" aria-hidden="true">·</span>
-          <span class="identity-mono security-key__preview">{{ fingerprintPreview }}</span>
-          <span class="security-key__summary-tail">
-            <span aria-hidden="true">·</span>
-            <span class="identity-mono">v{{ identity.keyVersion }}</span>
-          </span>
-        </span>
-        <svg class="security-key__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-      </button>
+    <slot />
 
-      <div v-if="isKeyOpen" id="agent-key-panel" class="security-key__panel">
-        <div class="security-key__panel-head">
-          <span class="security-key__label">{{ copy.fingerprint }}</span>
-          <button type="button" class="security-button security-button--quiet" @click="copyFingerprint">{{ copy.copyFingerprint }}</button>
+    <section class="security-identity" aria-labelledby="agent-identity-heading">
+      <h3 id="agent-identity-heading" class="security-heading">
+        <button
+          type="button" class="security-disclosure" data-testid="agent-identity-toggle"
+          :data-state="identity.trustState" :aria-expanded="isExpanded" aria-controls="agent-identity-facts"
+          :aria-label="identitySummary" :title="identitySummary" @click="isExpanded = !isExpanded"
+        >
+          <span class="security-trust-mark" aria-hidden="true" />
+          <span class="security-disclosure__state">{{ copy[identity.trustState] }}</span>
+          <span class="security-disclosure__device">{{ identity.deviceName }}</span>
+          <span class="security-disclosure__platform">{{ identity.platform }}</span>
+          <svg class="security-disclosure__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+      </h3>
+      <dl v-show="isExpanded" id="agent-identity-facts" class="security-facts" :aria-label="copy.identityGroup">
+        <div>
+          <dt id="agent-trust-label">{{ copy.trustState }}</dt>
+          <dd :data-state="identity.trustState">
+            <span id="agent-identity-status" class="security-trust-state" role="group" tabindex="-1" aria-labelledby="agent-trust-label agent-trust-value">
+              <span class="security-trust-mark" aria-hidden="true" />
+              <span id="agent-trust-value">{{ copy[identity.trustState] }}</span>
+            </span>
+          </dd>
         </div>
-        <p v-if="copyNotice !== ''" class="security-copy-feedback" :data-tone="copyFailed ? 'error' : 'ok'" role="status">{{ copyNotice }}</p>
-        <p class="security-key__hint">{{ copy.keyHint }}</p>
-        <ol class="security-fingerprint" :aria-label="copy.fingerprint">
-          <li v-for="(group, index) in fingerprintGroups" :key="`${group}-${index}`" class="security-fingerprint__cell">
-            <span class="security-fingerprint__index" aria-hidden="true">{{ String(index + 1).padStart(2, '0') }}</span>
-            <span class="identity-mono security-fingerprint__value">{{ group }}</span>
-          </li>
-        </ol>
-        <dl class="security-specs">
-          <div class="security-specs__item">
-            <dt>{{ copy.version }}</dt>
-            <dd class="identity-mono">v{{ identity.keyVersion }}</dd>
-          </div>
-          <div class="security-specs__item">
-            <dt>{{ copy.pairedAt }}</dt>
-            <dd class="identity-mono" data-testid="agent-paired-at">{{ formatTime(identity.pairedAt) }}</dd>
-          </div>
-        </dl>
-      </div>
+        <div><dt>{{ copy.device }}</dt><dd>{{ identity.deviceName }}</dd></div>
+        <div><dt>{{ copy.platform }}</dt><dd>{{ identity.platform }}</dd></div>
+        <div><dt>{{ copy.lastSeen }}</dt><dd><time data-testid="agent-last-seen" :datetime="identity.lastSeenAt || undefined">{{ formatTime(identity.lastSeenAt) }}</time></dd></div>
+        <div data-public-key>
+          <dt>{{ copy.keySection }}</dt>
+          <dd class="security-public-key">
+            <div class="security-public-key__line">
+              <code class="security-public-key__value" data-public-key-value :title="identity.publicKey">{{ identity.publicKey }}</code>
+              <button type="button" class="security-button security-button--copy" data-copy-public-key :aria-label="copy.copyPublicKey" :title="copy.copyPublicKey" :disabled="busy" @click="copyPublicKey"><DliIcon name="copy" size="sm" /></button>
+            </div>
+            <p v-if="copyNotice !== ''" class="security-copy-feedback" :data-tone="copyFailed ? 'error' : 'ok'" role="status">{{ copyNotice }}</p>
+          </dd>
+        </div>
+        <div><dt>{{ copy.version }}</dt><dd><code>v{{ identity.keyVersion }}</code></dd></div>
+        <div><dt>{{ copy.pairedAt }}</dt><dd><time data-testid="agent-paired-at" :datetime="identity.pairedAt || undefined">{{ formatTime(identity.pairedAt) }}</time></dd></div>
+      </dl>
     </section>
 
-    <!-- 危险操作:一个入口,两种互斥后果;默认保留数据,删除需显式选择。 -->
-    <section class="security-danger">
-      <header class="security-danger__head">
-        <h3 class="security-danger__title">{{ copy.dangerZone }}<span class="security-danger__immediate">{{ t.workspace.agentAdmin.immediate }}</span></h3>
+    <!-- 危险操作与表单、只读事实明确分隔；一个入口，两种互斥后果。 -->
+    <section class="security-danger" aria-labelledby="agent-danger-heading">
+      <h3 id="agent-danger-heading" class="security-heading">
+        <button
+          type="button" class="security-disclosure security-disclosure--danger" data-testid="agent-danger-toggle"
+          :aria-expanded="isDangerExpanded" aria-controls="agent-danger-panel" @click="isDangerExpanded = !isDangerExpanded"
+        >
+          <span class="security-disclosure__state">{{ copy.dangerZone }}</span>
+          <span class="security-danger__immediate">{{ t.workspace.agentAdmin.immediate }}</span>
+          <svg class="security-disclosure__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+      </h3>
+      <div v-show="isDangerExpanded" id="agent-danger-panel" class="security-danger__content">
         <p class="security-danger__hint">{{ copy.dangerHint }}</p>
-      </header>
-
-      <div class="security-danger__action">
-        <div class="security-danger__row">
-          <div class="security-danger__copy">
-            <h4>{{ copy.removeAgent }}</h4>
-            <p>{{ copy.removeAgentHint }}</p>
+        <div class="security-danger__action">
+          <div class="security-danger__row">
+            <div class="security-danger__copy">
+              <h4>{{ copy.removeAgent }}</h4>
+              <p>{{ copy.removeAgentHint }}</p>
+            </div>
+            <button type="button" class="security-button security-button--danger" :disabled="busy" @click="openRemove">{{ copy.removeAgent }}</button>
           </div>
-          <button
-            type="button" class="security-button security-button--danger" :disabled="busy" @click="openRemove"
-          >{{ copy.removeAgent }}</button>
+          <p v-if="identity.trustState === 'revoked'" class="security-danger__hint">{{ copy.reconnectHint }}</p>
         </div>
-        <p v-if="identity.trustState === 'revoked'" class="security-danger__hint">{{ copy.reconnectHint }}</p>
       </div>
     </section>
 
@@ -187,520 +166,77 @@ function requestDelete(): void {
       :open="removeOpen" :agent="agent" :can-delete="canDelete" :busy="busy" :revoking="isRemoving" :error="error"
       @disconnect="revoke" @delete="requestDelete" @cancel="closeRemove"
     />
-
-    <p v-if="notice !== ''" role="status" class="security-feedback security-feedback--notice">{{ notice }}</p>
-  </section>
+    <p v-if="notice !== ''" role="status" class="security-feedback">{{ notice }}</p>
+  </div>
 </template>
 
 <style scoped>
-/* 安全控制台的局部几何;颜色、字号、间距、圆角一律取语义 / 结构 token。 */
-.security-console {
-  --security-grid: color-mix(in oklab, var(--dl-accent) 4%, transparent);
-  display: grid;
-  gap: var(--dl-space-4);
-  min-inline-size: 0;
-}
+.security-console { display: grid; gap: var(--dl-space-6); min-inline-size: 0; line-height: var(--dl-line-body); }
+.security-identity { display: grid; gap: var(--dl-space-3); min-inline-size: 0; scroll-margin-block-start: var(--dl-space-1); }
+.security-heading { margin: 0; font-size: var(--dl-font-size-md); font-weight: 500; line-height: var(--dl-line-body); }
 
-.security-danger__immediate { margin-inline-start: var(--dl-space-2); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
-/* ---- 状态卡 ---- */
-.security-hero {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--dl-space-4);
-  padding: var(--dl-space-4);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-xl);
-  background: var(--dl-bg-base);
-}
+/* 折叠摘要整行可点；状态文字不收缩，窄屏的平台信息由完整标题与展开事实补足。 */
+.security-disclosure { display: flex; align-items: center; gap: var(--dl-space-3); inline-size: 100%; min-inline-size: 0; min-block-size: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-4); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); background: var(--dl-bg-raised); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 400; line-height: var(--dl-line-body); text-align: left; white-space: nowrap; transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
+.security-disclosure:hover { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
+.security-disclosure:active { transform: translateY(var(--dl-lift-press)); }
+.security-disclosure:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+.security-disclosure__state { flex: none; font-weight: 500; }
+.security-disclosure__device { flex: 1; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
+.security-disclosure__platform { flex: 0 1 auto; min-inline-size: 0; max-inline-size: 40%; overflow: hidden; text-overflow: ellipsis; color: var(--dl-text-secondary); }
+.security-disclosure__chevron { flex: none; inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); color: var(--dl-text-secondary); stroke: currentColor; stroke-width: var(--dl-icon-stroke); stroke-linecap: round; stroke-linejoin: round; transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
+.security-disclosure[aria-expanded='true'] .security-disclosure__chevron { transform: rotate(180deg); }
 
-/* 右侧渐隐的技术网格:只提供结构感,线条取强调色的极低比例。
-   遮罩从 62% 才开始显影,把网格挡在文字区之外 —— 三级文字不压在纹理上。 */
-.security-hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background-image:
-    linear-gradient(var(--security-grid) var(--dl-border-width), transparent var(--dl-border-width)),
-    linear-gradient(90deg, var(--security-grid) var(--dl-border-width), transparent var(--dl-border-width));
-  background-size: var(--dl-space-6) var(--dl-space-6);
-  /* 渐变里的 #000 只取 alpha 通道参与遮罩,不是视觉颜色。 */
-  -webkit-mask-image: linear-gradient(90deg, transparent 62%, #000);
-  mask-image: linear-gradient(90deg, transparent 62%, #000);
-}
-
-.security-hero__glyph {
-  position: relative;
-  display: grid;
-  place-items: center;
-  inline-size: var(--dl-target-size);
-  block-size: var(--dl-target-size);
-  border: var(--dl-border-width) solid color-mix(in oklab, var(--dl-accent) 32%, transparent);
-  border-radius: var(--dl-radius-pill);
-  background: var(--dl-bg-elevated);
-  color: var(--dl-accent);
-}
-
-.security-hero__glyph::after {
-  content: '';
-  position: absolute;
-  inset: calc(-1 * var(--dl-space-1));
-  border: var(--dl-border-width) solid color-mix(in oklab, var(--dl-accent) 12%, transparent);
-  border-radius: inherit;
-}
-
-.security-hero__glyph svg {
-  inline-size: var(--dl-icon-lg);
-  block-size: var(--dl-icon-lg);
-  stroke: currentColor;
-  stroke-width: var(--dl-icon-stroke);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.security-hero[data-state='keyChanged'] .security-hero__glyph {
-  color: var(--dl-warning);
-  border-color: color-mix(in oklab, var(--dl-warning) 40%, transparent);
-}
-
-.security-hero[data-state='revoked'] .security-hero__glyph {
-  color: var(--dl-error);
-  border-color: color-mix(in oklab, var(--dl-error) 40%, transparent);
-}
-
-.security-hero__body {
-  position: relative;
-  background: var(--dl-bg-base);
-  display: grid;
-  gap: var(--dl-space-1);
-  min-inline-size: 0;
-}
-
-.security-hero__title {
-  scroll-margin-block-start: var(--dl-space-6);
-  border-radius: var(--dl-radius-sm);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--dl-space-2);
-  font-size: var(--dl-font-size-md);
-  font-weight: 500;
-  line-height: var(--dl-line-body);
-}
-
-.security-hero__title:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
-
-.security-hero__lamp {
-  inline-size: calc(var(--dl-space-1) * 1.5);
-  block-size: calc(var(--dl-space-1) * 1.5);
-  border-radius: var(--dl-radius-pill);
-  background: var(--dl-success);
-  box-shadow: 0 0 0 var(--dl-space-1) color-mix(in oklab, var(--dl-success) 16%, transparent);
-}
-
-.security-hero[data-state='keyChanged'] .security-hero__lamp { background: var(--dl-warning); box-shadow: 0 0 0 var(--dl-space-1) color-mix(in oklab, var(--dl-warning) 16%, transparent); }
-.security-hero[data-state='revoked'] .security-hero__lamp { background: var(--dl-error); box-shadow: 0 0 0 var(--dl-space-1) color-mix(in oklab, var(--dl-error) 16%, transparent); }
-
-.security-hero__device {
-  font-family: var(--dl-font-mono);
-  color: var(--dl-text-secondary);
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-snug);
-}
-
-.security-hero__seen {
-  font-family: var(--dl-font-mono);
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-snug);
-}
-
-/* 英文时间里的 AM/PM 不能被拆到下一行。 */
-.security-hero__seen time { white-space: nowrap; }
-
-.security-chip {
-  padding-inline: var(--dl-space-2);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-pill);
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-  font-weight: 400;
-  line-height: var(--dl-line-snug);
-}
-
-/* ---- 信任异常 ---- */
-.security-alert {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--dl-space-3);
-  padding: var(--dl-space-3) var(--dl-space-4);
-  border: var(--dl-border-width) solid color-mix(in oklab, var(--dl-warning) 45%, transparent);
-  border-radius: var(--dl-radius-lg);
-  background: var(--dl-warning-subtle);
-}
-
-.security-alert p {
-  flex: 1 1 12em;
-  color: var(--dl-warning);
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-body);
-}
-
-/* ---- 身份密钥(渐进披露) ---- */
-.security-key {
-  min-inline-size: 0;
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-lg);
-  background: var(--dl-bg-base);
-}
-
-.security-key__toggle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--dl-space-1) var(--dl-space-3);
-  inline-size: 100%;
-  min-block-size: var(--dl-target-size);
-  padding: var(--dl-space-3) var(--dl-space-4);
-  border-radius: var(--dl-radius-lg);
-  text-align: left;
-  transition: background-color var(--dl-duration-fast) var(--dl-ease-standard);
-}
-
-.security-key__toggle:hover { background: var(--dl-bg-hover); }
-
-.security-key__toggle[aria-expanded='true'] {
-  border-radius: var(--dl-radius-lg) var(--dl-radius-lg) 0 0;
-}
-
-/* 全局焦点环会把圆角收成 sm;这里恢复卡片自身的圆角。 */
-.security-key__toggle:focus-visible {
-  box-shadow: var(--dl-focus-ring);
-  border-radius: var(--dl-radius-lg);
-}
-
-.security-key__toggle:focus-visible[aria-expanded='true'] {
-  border-radius: var(--dl-radius-lg) var(--dl-radius-lg) 0 0;
-}
-
-.security-key__title {
-  flex: none;
-  font-size: var(--dl-font-size-md);
-  font-weight: 500;
-  line-height: var(--dl-line-snug);
-}
-
-.security-key__chevron {
-  flex: none;
-  margin-inline-start: auto;
-  inline-size: var(--dl-icon-sm);
-  block-size: var(--dl-icon-sm);
-  color: var(--dl-text-tertiary);
-  stroke: currentColor;
-  stroke-width: var(--dl-icon-stroke);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform var(--dl-duration-fast) var(--dl-ease-standard);
-}
-
-.security-key__toggle[aria-expanded='true'] .security-key__chevron {
-  transform: rotate(180deg);
-}
-
-.security-key__summary {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--dl-space-1);
-  min-inline-size: 0;
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-snug);
-}
-
-.security-key__preview { color: var(--dl-text-secondary); }
-
-/* 版本号与分隔符绑成一组,窄屏换行时不会出现「·」落单或 v1 孤立。 */
-.security-key__summary-tail {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--dl-space-1);
-  white-space: nowrap;
-}
-
-.security-key__panel {
-  display: grid;
-  gap: var(--dl-space-3);
-  padding: var(--dl-space-3) var(--dl-space-4) var(--dl-space-4);
-  border-block-start: var(--dl-border-width) solid var(--dl-border-subtle);
-  animation: security-key-panel-enter var(--dl-duration-base) var(--dl-ease-standard);
-}
-
-.security-key__panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--dl-space-2);
-}
-
-.security-key__label {
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-}
-
-.security-key__hint {
-  color: var(--dl-text-secondary);
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-body);
-}
-
-@keyframes security-key-panel-enter {
-  from { opacity: 0; transform: translateY(calc(-1 * var(--dl-space-1))); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* 复制结果贴着动作出现,不把它丢到页面底部的全局反馈里。 */
-.security-copy-feedback {
-  color: var(--dl-success);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-body);
-}
-
+/* 与账户窗体共用标签 / 值对齐范式；长值可换行，只有公钥单行省略。 */
+.security-facts { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: var(--dl-space-3); margin: 0; padding-inline: var(--dl-space-4); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-xl); background: var(--dl-bg-raised); }
+.security-facts > div { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; padding-block: var(--dl-space-2); }
+.security-facts > div + div { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.security-facts dt { min-inline-size: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); overflow-wrap: anywhere; }
+.security-facts dd { display: flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; min-block-size: var(--dl-target-size); margin: 0; font-size: var(--dl-font-size-sm); overflow-wrap: anywhere; border-radius: var(--dl-radius-sm); }
+.security-facts code { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+.security-trust-state { display: flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; border-radius: var(--dl-radius-sm); }
+.security-trust-state:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+.security-trust-mark { flex: none; inline-size: var(--dl-space-2); block-size: var(--dl-space-2); border-radius: var(--dl-radius-pill); background: var(--dl-success); }
+[data-state='keyChanged'] .security-trust-mark { background: var(--dl-warning); }
+[data-state='revoked'] .security-trust-mark { background: var(--dl-error); }
+.security-facts .security-public-key { display: grid; gap: var(--dl-space-1); }
+.security-public-key__line { display: flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; }
+.security-public-key__value { flex: 1; min-inline-size: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.security-copy-feedback { color: var(--dl-success); font-size: var(--dl-font-size-xs); }
 .security-copy-feedback[data-tone='error'] { color: var(--dl-error); }
 
-/* ---- 指纹栅格 ---- */
-.security-fingerprint {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--dl-border-width);
-  padding: var(--dl-border-width);
-  overflow: hidden;
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-md);
-  background: var(--dl-border-base);
-}
+.security-alert { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-3); padding: var(--dl-space-3) var(--dl-space-4); border: var(--dl-border-width) solid var(--dl-warning); border-radius: var(--dl-radius-lg); background: var(--dl-warning-subtle); }
+.security-alert p { flex: 1 1 12em; color: var(--dl-warning); font-size: var(--dl-font-size-sm); }
+.security-alert strong { font-weight: 500; }
 
-.security-fingerprint__cell {
-  display: grid;
-  gap: var(--dl-space-1);
-  min-inline-size: 0;
-  padding: var(--dl-space-2);
-  background: var(--dl-bg-elevated);
-}
+/* 危险披露沿用身份区的开合反馈，以标题色与描边保留危险语义。 */
+.security-danger { display: grid; gap: var(--dl-space-4); padding-block-start: var(--dl-space-6); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.security-disclosure--danger { color: var(--dl-error); border-color: color-mix(in oklab, var(--dl-error) 45%, var(--dl-border-base)); }
+.security-disclosure--danger:hover { border-color: var(--dl-error); }
+.security-danger__content { display: grid; gap: var(--dl-space-3); }
+.security-danger__action { display: grid; gap: var(--dl-space-2); }
+.security-danger__immediate { flex: 1; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 400; }
+.security-danger__hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
+.security-danger__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-3); }
+.security-danger__copy { display: grid; flex: 1 1 14em; gap: var(--dl-space-1); min-inline-size: 0; }
+.security-danger__copy h4 { font-size: var(--dl-font-size-sm); font-weight: 500; }
+.security-danger__copy p { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 
-.security-fingerprint__index {
-  font-family: var(--dl-font-mono);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-tight);
-  color: var(--dl-text-tertiary);
-}
-
-.security-fingerprint__value {
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-snug);
-  color: var(--dl-text-primary);
-  overflow-wrap: anywhere;
-}
-
-.security-specs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--dl-space-2) var(--dl-space-4);
-}
-
-.security-specs__item {
-  display: grid;
-  gap: var(--dl-space-1);
-  min-inline-size: 0;
-}
-
-.security-specs dt {
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-}
-
-.security-specs dd {
-  margin: 0;
-  color: var(--dl-text-primary);
-  font-size: var(--dl-font-size-sm);
-  overflow-wrap: anywhere;
-}
-
-/* ---- 危险操作 ---- */
-.security-danger {
-  margin-block-start: var(--dl-space-4);
-  display: grid;
-  gap: var(--dl-space-3);
-  padding: var(--dl-space-4);
-  border: var(--dl-border-width) solid color-mix(in oklab, var(--dl-error) 34%, transparent);
-  border-radius: var(--dl-radius-lg);
-  background: color-mix(in oklab, var(--dl-error) 4%, var(--dl-bg-base));
-}
-
-.security-danger__head {
-  display: grid;
-  gap: var(--dl-space-1);
-  padding-block-end: var(--dl-space-3);
-  border-block-end: var(--dl-border-width) solid var(--dl-border-subtle);
-}
-
-.security-danger__title {
-  color: var(--dl-error);
-  font-size: var(--dl-font-size-md);
-  font-weight: 500;
-  line-height: var(--dl-line-snug);
-}
-
-.security-danger__hint {
-  color: var(--dl-text-tertiary);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-body);
-}
-
-.security-danger__action {
-  display: grid;
-  gap: var(--dl-space-3);
-}
-
-.security-danger__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--dl-space-3);
-}
-
-.security-danger__copy {
-  display: grid;
-  flex: 1 1 14em;
-  gap: var(--dl-space-1);
-  min-inline-size: 0;
-}
-
-.security-danger__copy h4 {
-  font-size: var(--dl-font-size-sm);
-  font-weight: 500;
-  line-height: var(--dl-line-snug);
-}
-
-.security-danger__copy p {
-  color: var(--dl-text-secondary);
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-body);
-}
-
-/* ---- 按钮 / 反馈 ---- */
-.security-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--dl-space-2);
-  min-block-size: var(--dl-target-size);
-  padding-inline: var(--dl-space-3);
-  border: var(--dl-border-width) solid var(--dl-border-base);
-  border-radius: var(--dl-radius-md);
-  color: var(--dl-text-primary);
-  font-size: var(--dl-font-size-sm);
-  line-height: var(--dl-line-snug);
-  transition:
-    background-color var(--dl-duration-fast) var(--dl-ease-standard),
-    border-color var(--dl-duration-fast) var(--dl-ease-standard),
-    color var(--dl-duration-fast) var(--dl-ease-standard),
-    transform var(--dl-duration-fast) var(--dl-ease-standard);
-}
-
-.security-button:hover:not(:disabled) {
-  background: var(--dl-bg-hover);
-  border-color: var(--dl-border-strong);
-}
-
+.security-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--dl-space-2); min-block-size: var(--dl-target-size); min-inline-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
+.security-button:hover:not(:disabled) { background: var(--dl-bg-hover); border-color: var(--dl-border-strong); }
 .security-button:active:not(:disabled) { transform: translateY(var(--dl-lift-press)); }
+.security-button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
+.security-button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+.security-button--copy { flex: none; padding: 0; border-color: transparent; color: var(--dl-text-secondary); }
+.security-button--warning { color: var(--dl-warning); border-color: var(--dl-warning); }
+.security-button--danger { color: var(--dl-error); border-color: var(--dl-error); }
+.security-button--danger:hover:not(:disabled) { background: color-mix(in oklab, var(--dl-error) 10%, var(--dl-bg-elevated)); border-color: var(--dl-error); }
+.security-feedback { color: var(--dl-success); font-size: var(--dl-font-size-xs); }
 
-.security-button:disabled {
-  background: var(--dl-bg-sunken);
-  color: var(--dl-text-disabled);
-  cursor: not-allowed;
-}
-
-.security-button:focus-visible {
-  box-shadow: var(--dl-focus-ring);
-  border-radius: var(--dl-radius-md);
-}
-
-.security-button--quiet {
-  color: var(--dl-text-secondary);
-  font-size: var(--dl-font-size-xs);
-}
-
-.security-button--warning {
-  color: var(--dl-warning);
-  border-color: color-mix(in oklab, var(--dl-warning) 45%, transparent);
-}
-
-.security-button--warning:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--dl-warning) 10%, transparent);
-  border-color: var(--dl-warning);
-}
-
-.security-button--danger {
-  color: var(--dl-error);
-  border-color: color-mix(in oklab, var(--dl-error) 45%, transparent);
-}
-
-.security-button--danger:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--dl-error) 10%, transparent);
-  border-color: var(--dl-error);
-}
-
-.security-button--danger-solid {
-  background: var(--dl-error);
-  border-color: var(--dl-error);
-  color: var(--dl-text-on-accent);
-}
-
-.security-button--danger-solid:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--dl-error), var(--dl-text-primary) 8%);
-  border-color: color-mix(in oklab, var(--dl-error), var(--dl-text-primary) 8%);
-}
-
-.security-button--danger-solid:disabled {
-  background: var(--dl-bg-sunken);
-  border-color: transparent;
-  color: var(--dl-text-disabled);
-}
-
-.security-feedback {
-  font-size: var(--dl-font-size-xs);
-  line-height: var(--dl-line-body);
-}
-
-.security-feedback--notice { color: var(--dl-success); }
-
-/* ---- 窄屏:单列信息,指纹不挤压 ---- */
 @media (max-width: 560px) {
-  /* 窄屏右侧没有可依附的结构,隐藏装饰网格。 */
-  .security-hero::before { display: none; }
-
-  .security-specs {
-    grid-template-columns: 1fr;
-  }
-
-  /* 375 首屏要给危险操作留出完整按钮:收紧卡片间距,并去掉折叠行里重复的「公钥指纹」标签。 */
-
-  .security-hero { padding: var(--dl-space-3); }
-  .security-key__toggle { padding-block: var(--dl-space-2); }
-  .security-key__summary-label,
-  .security-key__summary-sep--lead { display: none; }
-  .security-danger { padding: var(--dl-space-3); }
-  .security-danger__head { padding-block-end: var(--dl-space-2); }
+  .security-disclosure__platform { display: none; }
 }
-
 @media (prefers-reduced-motion: reduce) {
-  .security-button:active:not(:disabled) { transform: none; }
+  .security-button:active:not(:disabled), .security-disclosure:active { transform: none; }
+  .security-disclosure__chevron { transition: none; }
 }
 </style>

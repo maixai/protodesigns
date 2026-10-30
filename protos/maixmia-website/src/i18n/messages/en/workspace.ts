@@ -54,6 +54,10 @@ export const workspace = {
     hint: '↑↓ to choose · Enter to open · Esc to close',
     opened: 'Opened "{name}"',
   },
+  agentConnection: {
+    online: 'Online', offline: 'Offline', authenticationFailed: 'Auth failed',
+    offlineDetail: 'Last online: {time}', authenticationDetail: '{reason} · Pair again', unknownLastSeen: 'Time unknown',
+  },
   agentSwitcher: {
     label: 'Switch agent', current: 'Current', running: 'Running {count}', awaiting: 'Needs you {count}', idle: 'Idle', menu: 'All agents', badge: '{count} unseen',
     create: 'Add agent',

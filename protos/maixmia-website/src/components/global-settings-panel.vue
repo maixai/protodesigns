@@ -199,10 +199,6 @@ onBeforeUnmount(() => {
           <span class="global-settings__email">{{ profile?.email }}</span>
         </div>
       </div>
-      <section aria-labelledby="settings-account-label">
-        <h3 id="settings-account-label">{{ t.workspace.settings.groups.account }}</h3>
-        <button type="button" data-settings-section="accountSecurity" @click="emit('open', 'accountSecurity')"><DliIcon name="badge" /><span>{{ t.workspace.settings.accountSecurity }}</span></button>
-      </section>
       <section aria-labelledby="settings-preferences-label">
         <h3 id="settings-preferences-label">{{ t.workspace.settings.groups.preferences }}</h3>
         <button ref="languageTrigger" type="button" data-settings-language :aria-expanded="isLanguageOpen" aria-controls="settings-language-menu" @click="toggleLanguage" @pointerenter="onLanguagePointerEnter" @pointerleave="onLanguagePointerLeave"><DliIcon name="sliders" /><span>{{ t.workspace.settings.language }}</span><small>{{ t.workspace.settings.languages[locale] }}</small><DliIcon name="chevronRight" size="sm" /></button>
@@ -212,6 +208,10 @@ onBeforeUnmount(() => {
           <p>{{ t.workspace.settings.languageHint }}</p>
         </div>
         <button type="button" data-settings-section="shortcuts" @click="emit('open', 'shortcuts')"><DliIcon name="code" /><span>{{ t.workspace.settings.shortcuts }}</span></button>
+      </section>
+      <section aria-labelledby="settings-account-label">
+        <h3 id="settings-account-label">{{ t.workspace.settings.groups.account }}</h3>
+        <button type="button" data-settings-section="accountSecurity" @click="emit('open', 'accountSecurity')"><DliIcon name="badge" /><span>{{ t.workspace.settings.accountSecurity }}</span></button>
       </section>
       <div class="global-settings__signout"><button type="button" @click="lockConsole"><DliIcon name="lock" /><span>{{ t.workspace.settings.lockConsole }}</span></button><button type="button" class="global-settings__danger" @click="requestSignOut"><DliIcon name="power" /><span>{{ t.account.signOut }}</span></button></div>
     <ConfirmDialog :open="isConfirmOpen" @cancel="isConfirmOpen = false" @confirm="confirmSignOut" />

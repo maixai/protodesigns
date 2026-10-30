@@ -56,6 +56,10 @@ export const workspace = {
     hint: '↑↓ 选择 · Enter 打开 · Esc 关闭',
     opened: '已打开「{name}」',
   },
+  agentConnection: {
+    online: '在线', offline: '离线', authenticationFailed: '认证失败',
+    offlineDetail: '最后在线：{time}', authenticationDetail: '{reason} · 需要重新配对', unknownLastSeen: '时间未知',
+  },
   agentSwitcher: {
     label: '切换 Agent', current: '当前', running: '运行中 {count}', awaiting: '待你 {count}', idle: '空闲', menu: '全部 Agent', badge: '{count} 条未查看',
     create: '添加 Agent',

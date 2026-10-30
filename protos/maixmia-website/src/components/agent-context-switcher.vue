@@ -11,6 +11,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
 import type { AgentId } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import { useI18n } from '../i18n'
+import { agentDisplayStatus, useAgentStatusTooltip } from '../data/agent-status'
 import DliIcon from './dl-icon.vue'
 
 const props = withDefaults(defineProps<{
@@ -20,7 +21,7 @@ const props = withDefaults(defineProps<{
   variant?: 'dock' | 'sidebar'
 }>(), { variant: 'dock' })
 const emit = defineEmits<{ select: [agent: AgentId]; create: []; settings: [] }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
@@ -30,17 +31,37 @@ const current = computed<AgentSummary | undefined>(() => props.agents.find((agen
 // 触发钮的可访问名 = 控件用途 + 当前 Agent + 它的备注(视觉上备注是第二行,读屏也要读到)。
 const triggerLabel = computed(() => current.value === undefined
   ? t.value.workspace.agentSwitcher.label
-  : `${t.value.workspace.agentSwitcher.label} · ${current.value.name} · ${current.value.note}`)
+  : `${t.value.workspace.agentSwitcher.label} · ${optionLabel(current.value)}`)
+function statusOf(agent: AgentSummary) {
+  return agentDisplayStatus(agent, t.value.workspace, locale.value)
+}
+function optionLabel(agent: AgentSummary): string {
+  return `${agent.name} · ${agent.note} · ${statusOf(agent).label}`
+}
+const {
+  setTooltipRef, tooltipAnchor, tooltipAgentId, tooltipId, tooltipText, isTooltipOpen, isTooltipVisible,
+  showTooltip, hideTooltip, dismissTooltip, leaveTooltip, scheduleTooltipClose, clearTooltipTimer, onTooltipTransitionEnd,
+} = useAgentStatusTooltip(
+  (id) => props.agents.find((agent) => agent.id === id),
+  statusOf,
+  (anchor) => {
+    // 包含侧栏相邻关闭钮的整段头部，避免提示遮挡抽屉出口。
+    const header = anchor === trigger.value && props.variant === 'sidebar' ? root.value?.parentElement?.getBoundingClientRect() : undefined
+    return anchor.closest('.agent-context-switcher__panel')?.getBoundingClientRect() ?? header
+  },
+)
 // 首字标记:窄屏只留它 + chevron 时,用户仍能认出当前 Agent(名称在 aria-label 里保留)。
 function initialOf(name: string): string {
   return name.slice(0, 1)
 }
 function close(restoreFocus = false): void {
+  hideTooltip()
   isOpen.value = false
   if (restoreFocus) trigger.value?.focus()
 }
 async function toggle(): Promise<void> {
   if (isOpen.value) { close(); return }
+  hideTooltip()
   isOpen.value = true
   await nextTick()
   panel.value?.querySelector<HTMLElement>('[aria-current="true"]')?.focus()
@@ -52,20 +73,26 @@ function select(agent: AgentId): void {
 // 先把焦点还给触发钮再请求创建:随后打开的对话框会把它记作「关闭后回到这里」。
 function addAgent(): void {
   close(true)
+  // 还焦只为上层对话框记录返回目标，不在弹窗打开时重启提示。
+  dismissTooltip()
   emit('create')
 }
 // 设置入口与「新建」同住在身份菜单底部:Notion / Slack 的 workspace 菜单也是这个位置。
 // 头部因此只剩身份本身,不必再并排一枚 44px 的齿轮把名称挤掉。
 function openSettings(): void {
   close(true)
+  dismissTooltip()
   emit('settings')
 }
 function onKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') hideTooltip()
   if (!isOpen.value) return
   if (event.key === 'Escape') {
     event.preventDefault()
     event.stopPropagation()
     close(true)
+    // Esc 同时结束当前提示，取消还焦触发的异步重开。
+    hideTooltip()
     return
   }
   // 方向键只在 Agent 选项之间移动;底部「新建 / 设置」用 Tab 到达,不混进列表循环。
@@ -90,10 +117,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 
 <template>
   <div ref="root" class="agent-context-switcher" :data-variant="variant" @keydown="onKeydown" @focusout="onFocusOut">
-    <button ref="trigger" type="button" class="agent-context-switcher__trigger" :data-agent="value" :aria-label="triggerLabel" :aria-expanded="isOpen" aria-controls="agent-context-panel" @click="toggle">
-      <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}</span>
+    <button ref="trigger" type="button" class="agent-context-switcher__trigger" :data-agent="value" :aria-label="triggerLabel" :aria-expanded="isOpen" aria-controls="agent-context-panel" :aria-describedby="isTooltipOpen && tooltipAnchor === trigger ? tooltipId : undefined" @pointerenter="showTooltip($event, current)" @pointerleave="leaveTooltip" @focus="showTooltip($event, current)" @blur="leaveTooltip" @click="toggle">
+      <span class="agent-context-switcher__mark" aria-hidden="true">{{ initialOf(current?.name ?? '') }}<span v-if="current" class="agent-context-switcher__status-dot" :data-state="statusOf(current).state" aria-hidden="true" /></span>
       <span class="agent-context-switcher__body">
-        <span class="agent-context-switcher__name">{{ current?.name ?? '' }}<span v-if="current && current.identity.trustState !== 'trusted'" class="agent-context-switcher__trust"> · ! {{ t.workspace.security[current.identity.trustState] }}</span></span>
+        <span class="agent-context-switcher__name"><span class="agent-context-switcher__name-text">{{ current?.name ?? '' }}</span><span v-if="current && statusOf(current).state === 'authenticationFailed'" class="agent-context-switcher__trust"> · {{ statusOf(current).label }}</span></span>
         <span class="agent-context-switcher__note">{{ current?.note ?? '' }}</span>
       </span>
       <svg class="agent-context-switcher__chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
@@ -101,10 +128,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
     <Transition name="agent-context-panel">
       <div v-if="isOpen" id="agent-context-panel" ref="panel" class="agent-context-switcher__panel" role="group" :aria-label="t.workspace.agentSwitcher.menu">
         <p class="agent-context-switcher__title">{{ t.workspace.agentSwitcher.menu }}</p>
-        <button v-for="agent in agents" :key="agent.id" type="button" class="agent-context-switcher__option" :data-agent="agent.id" :aria-current="agent.id === value ? 'true' : undefined" @click="select(agent.id)">
-          <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}</span>
+        <button v-for="agent in agents" :key="agent.id" type="button" class="agent-context-switcher__option" :data-agent="agent.id" :aria-label="optionLabel(agent)" :aria-describedby="isTooltipOpen && tooltipAnchor !== trigger && tooltipAgentId === agent.id ? tooltipId : undefined" @pointerenter="showTooltip($event, agent)" @pointerleave="leaveTooltip" @focus="showTooltip($event, agent)" @blur="leaveTooltip" :aria-current="agent.id === value ? 'true' : undefined" @click="select(agent.id)">
+          <span class="agent-context-switcher__option-mark" aria-hidden="true">{{ initialOf(agent.name) }}<span class="agent-context-switcher__status-dot" :data-state="statusOf(agent).state" aria-hidden="true" /></span>
           <span class="agent-context-switcher__option-body">
-            <span class="agent-context-switcher__option-name">{{ agent.name }}<span v-if="agent.identity.trustState !== 'trusted'" class="agent-context-switcher__trust"> · ! {{ t.workspace.security[agent.identity.trustState] }}</span></span>
+            <span class="agent-context-switcher__option-name"><span class="agent-context-switcher__name-text">{{ agent.name }}</span><span v-if="statusOf(agent).state === 'authenticationFailed'" class="agent-context-switcher__trust"> · {{ statusOf(agent).label }}</span></span>
             <span class="agent-context-switcher__option-note">{{ agent.note }}</span>
           </span>
           <svg v-if="agent.id === value" class="agent-context-switcher__check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 4 4 9-9" /></svg>
@@ -121,11 +148,22 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         </div>
       </div>
     </Transition>
+    <div :id="tooltipId" :ref="setTooltipRef" class="agent-context-switcher__tooltip" popover="manual" role="tooltip" :data-visible="isTooltipVisible" @transitionend="onTooltipTransitionEnd" @pointerenter="clearTooltipTimer" @pointerleave="scheduleTooltipClose">{{ tooltipText }}</div>
   </div>
 </template>
 
 <style scoped>
-.agent-context-switcher__trust { color: var(--dl-warning); font-size: var(--dl-font-size-xs); }
+.agent-context-switcher__mark, .agent-context-switcher__option-mark { position: relative; }
+.agent-context-switcher__status-dot { position: absolute; inset-inline-end: calc(-1 * var(--dl-border-width)); inset-block-end: calc(-1 * var(--dl-border-width)); inline-size: var(--dl-space-2); block-size: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-success); border-radius: var(--dl-radius-pill); background: var(--dl-success); box-shadow: 0 0 0 var(--dl-border-width) var(--dl-bg-elevated); }
+.agent-context-switcher__status-dot[data-state='offline'] { background: var(--dl-bg-elevated); border-color: var(--dl-text-tertiary); }
+.agent-context-switcher__status-dot[data-state='authenticationFailed'] { background: var(--dl-warning); border-color: var(--dl-warning); }
+.agent-context-switcher__tooltip { position: fixed; inset: auto; inset-inline-start: var(--agent-status-left); inset-block-start: var(--agent-status-top); margin: 0; padding: var(--dl-space-2) var(--dl-space-3); inline-size: max-content; max-inline-size: min(var(--dl-measure), calc(100vw - 2 * var(--dl-space-2))); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-family: var(--dl-font-sans); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.agent-context-switcher__tooltip { opacity: 0; pointer-events: none; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.agent-context-switcher__tooltip[data-visible='true'] { opacity: 1; pointer-events: auto; }
+.agent-context-switcher__tooltip::backdrop { background: transparent; pointer-events: none; }
+.agent-context-switcher__name, .agent-context-switcher__option-name { display: flex; min-inline-size: 0; }
+.agent-context-switcher__name-text { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-context-switcher__trust { flex: none; margin-inline-start: var(--dl-space-1); color: var(--dl-warning); font-size: var(--dl-font-size-xs); }
 /* 触发钮是底栏横向密集行的行内控件:32px 档,圆角矩形(--dl-radius-md)。
    它坐在底栏的 elevated 底上,故只用发丝描边 + hover 变色来表明可点。 */
 .agent-context-switcher { position: relative; flex: none; min-width: 0; z-index: var(--dl-z-overlay); }
@@ -231,6 +269,7 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
   .agent-context-switcher[data-variant='dock'] .agent-context-switcher__trigger { max-inline-size: none; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .agent-context-switcher__tooltip { transition: none; }
   .agent-context-panel-enter-active, .agent-context-panel-leave-active { transition: none; }
   button:active { transform: none; }
 }

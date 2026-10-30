@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Agent 设置分为基本、模型与安全;添加 Agent 由独立的配对流程承担。
+// Agent 设置分为基本与模型;添加 Agent 由独立的配对流程承担。
 //
 // 用原生 dialog.showModal():自带焦点陷阱、Esc 与 aria-modal;top layer 内仍继承
 // .dl-scope--dark 的 CSS 变量,故不 Teleport。
@@ -13,6 +13,7 @@ import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
 import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS, defaultModelSource, modelById, modelsForSubscription, subscriptionIsReady, subscriptionSourceId, tierDefaultsForSource } from '../data/models'
 import { checkSubscription as checkSubscriptionConnection, authorizeSubscription, reauthorizeSubscription, probeModelGateway } from '../api/workspace'
 import { useI18n } from '../i18n'
+import { agentDisplayStatus, useAgentStatusTooltip } from '../data/agent-status'
 import DliIcon from './dl-icon.vue'
 import SelectField from './select-field.vue'
 import SubscriptionUsage from './subscription-usage.vue'
@@ -22,7 +23,7 @@ import AgentIdentitySecurity from './agent-identity-security.vue'
 
 const props = defineProps<{
   open: boolean
-  focusSecurity: boolean
+  focusIdentity: boolean
   // 当前编辑的 Agent。
   agent?: AgentSummary | undefined
   canDelete: boolean
@@ -58,7 +59,7 @@ const returnFocusRef = ref<HTMLElement | null>(null)
 const name = ref('')
 const note = ref('')
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
-const activeTab = ref<'basic' | 'model' | 'security'>('basic')
+const activeTab = ref<'basic' | 'model'>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
 const activeModelSection = ref<ModelSection>('defaults')
 const bodyRef = ref<HTMLElement | null>(null)
@@ -77,13 +78,31 @@ watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
 }, { flush: 'post' })
 const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
-const securityTabRef = ref<HTMLButtonElement | null>(null)
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 const subjectId = `${dialogId}-subject`
 const saveStateId = `${dialogId}-save-state`
 
+const connectionStatus = computed(() => props.agent === undefined ? null : agentDisplayStatus(props.agent, t.value.workspace, locale.value))
+const {
+  setTooltipRef: setConnectionTooltipRef, tooltipId: connectionTooltipId, tooltipText: connectionTooltipText,
+  isTooltipOpen: isConnectionTooltipOpen, isTooltipVisible: isConnectionTooltipVisible,
+  showTooltip: showConnectionTooltip, hideTooltip: hideConnectionTooltip, dismissTooltip: dismissConnectionTooltip,
+  leaveTooltip: leaveConnectionTooltip, scheduleTooltipClose: scheduleConnectionTooltipClose,
+  clearTooltipTimer: clearConnectionTooltipTimer, onTooltipTransitionEnd: onConnectionTooltipTransitionEnd,
+} = useAgentStatusTooltip(
+  (id) => props.agent?.id === id ? props.agent : undefined,
+  (agent) => agentDisplayStatus(agent, t.value.workspace, locale.value),
+  () => dialogRef.value?.querySelector('.agent-editor__head')?.getBoundingClientRect(),
+  true,
+)
+function onConnectionHintKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !isConnectionTooltipOpen.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  hideConnectionTooltip()
+}
 const title = computed(() => t.value.workspace.agentAdmin.settingsTitle)
 const hint = computed(() => t.value.workspace.agentAdmin.settingsHint)
 // 对话框的描述同时包含当前对象与通用提示:打开时读屏先听到「正在设置哪个 Agent」。
@@ -98,7 +117,7 @@ const subjectDescription = computed(() => {
   const agent = props.agent
   if (agent === undefined) return ''
   const admin = t.value.workspace.agentAdmin
-  return `${admin.settingsSubjectLabel} ${agent.name}${admin.settingsSubjectSeparator}`
+  return `${admin.settingsSubjectLabel} ${agent.name} · ${connectionStatus.value?.label ?? ''}${admin.settingsSubjectSeparator}`
 })
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
 const baselineSerialized = ref('')
@@ -1193,15 +1212,15 @@ function removeFallback(index: number): void {
   modelConfig.value = { ...modelConfig.value, fallbackModelIds: modelConfig.value.fallbackModelIds.filter((_, itemIndex) => itemIndex !== index) }
 }
 
-async function activateTab(tab: 'basic' | 'model' | 'security', focus = false): Promise<void> {
+async function activateTab(tab: 'basic' | 'model', focus = false): Promise<void> {
   activeTab.value = tab
   await nextTick()
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
-  if (focus) (tab === 'basic' ? basicTabRef.value : tab === 'model' ? modelTabRef.value : securityTabRef.value)?.focus()
+  if (focus) (tab === 'basic' ? basicTabRef.value : modelTabRef.value)?.focus()
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
-  const tabs = ['basic', 'model', 'security'] satisfies (typeof activeTab.value)[]
+  const tabs = ['basic', 'model'] satisfies (typeof activeTab.value)[]
   const current = tabs.indexOf(activeTab.value)
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
     : event.key === 'ArrowRight' ? (current + 1) % tabs.length
@@ -1263,7 +1282,7 @@ function reset(): void {
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
   // 编辑设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
-  activeTab.value = props.focusSecurity ? 'security' : 'model'
+  activeTab.value = props.focusIdentity ? 'basic' : 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
   sourceQuery.value = ''
@@ -1309,12 +1328,13 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
     emit('delete')
     return
   }
+  dismissConnectionTooltip()
   dialogRef.value?.close()
   if (returnFocusRef.value?.isConnected) returnFocusRef.value.focus()
   emit('cancel')
 }
 
-// 删除、解除关联与安全码核对的交互都在「身份与安全」面板内;本层只负责关闭与提交。
+// 删除与解除关联的交互都在基本页的身份组件内;本层只负责关闭与提交。
 function onBackdropClick(event: MouseEvent): void {
   const dialog = dialogRef.value
   if (dialog === null || event.target !== dialog) return
@@ -1345,6 +1365,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   const dialog = dialogRef.value
   if (dialog === null) return
   if (!isOpen) {
+    dismissConnectionTooltip()
     abortAuthorization(false)
     clearSourceCheck()
     if (dialog.open) dialog.close()
@@ -1355,11 +1376,10 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   reset()
   await nextTick()
   dialog.showModal()
-  if (props.focusSecurity) {
+  if (props.focusIdentity) {
     await nextTick()
-    const heading = dialog.querySelector<HTMLElement>('#agent-identity-heading')
-    heading?.scrollIntoView({ block: 'start' })
-    heading?.focus({ preventScroll: true })
+    dialog.querySelector('.security-identity')?.scrollIntoView({ block: 'start' })
+    dialog.querySelector<HTMLElement>('#agent-identity-status')?.focus({ preventScroll: true })
   } else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
 }, { immediate: true })
 
@@ -1378,15 +1398,18 @@ onBeforeUnmount(() => {
     @cancel.prevent="finish('cancel')" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
   >
     <div class="agent-editor__head">
-      <div class="agent-editor__heading-group">
-        <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
-        <span v-if="agent?.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
-      </div>
-      <span v-if="agent" class="agent-editor__agent-chip" data-testid="agent-editor-subject" :title="agent.name">
-        <span class="agent-editor__agent-mark" aria-hidden="true">{{ [...agent.name.trim()][0] ?? '' }}</span>
+      <span v-if="agent" class="agent-editor__subject" data-testid="agent-editor-subject" :title="agent.name">
         <span class="agent-editor__agent-name">{{ agent.name }}</span>
+        <span v-if="connectionStatus" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="showConnectionTooltip($event, agent)" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
+          <span class="agent-editor__connection-dot" aria-hidden="true" />
+          <span class="agent-editor__connection-label" aria-hidden="true">{{ connectionStatus.label }}</span>
+        </span>
+        <span v-if="agent.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
       </span>
+      <span v-if="agent" class="agent-editor__separator" aria-hidden="true">/</span>
+      <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
     </div>
+    <div :id="connectionTooltipId" :ref="setConnectionTooltipRef" class="agent-editor__connection-tooltip" popover="manual" role="tooltip" :data-visible="isConnectionTooltipVisible" @transitionend="onConnectionTooltipTransitionEnd" @pointerenter="clearConnectionTooltipTimer" @pointerleave="scheduleConnectionTooltipClose">{{ connectionTooltipText }}</div>
     <span v-if="agent" :id="subjectId" class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
     <span v-if="hint !== ''" :id="hintId" class="agent-editor__visually-hidden">{{ hint }}</span>
 
@@ -1402,10 +1425,6 @@ onBeforeUnmount(() => {
           :aria-selected="activeTab === 'model'" :aria-controls="`${dialogId}-panel-model`"
           :tabindex="activeTab === 'model' ? 0 : -1" @click="activateTab('model')"
         >{{ t.workspace.agentAdmin.tabModel }}</button>
-        <button :id="`${dialogId}-tab-security`" ref="securityTabRef" type="button" role="tab"
-          :aria-selected="activeTab === 'security'" :aria-controls="`${dialogId}-panel-security`"
-          :tabindex="activeTab === 'security' ? 0 : -1" @click="activateTab('security')"
-        >{{ t.workspace.agentAdmin.tabSecurity }}</button>
       </div>
       <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
       <button
@@ -1415,15 +1434,13 @@ onBeforeUnmount(() => {
     </div>
 
     <div ref="bodyRef" class="agent-editor__body">
-      <div v-if="activeTab === 'security'" :id="`${dialogId}-panel-security`" class="agent-editor__panel" role="tabpanel" :aria-labelledby="`${dialogId}-tab-security`" tabindex="0">
-        <AgentIdentitySecurity
-          v-if="agent" :agent="agent" :can-delete="canDelete" :busy="busy"
-          @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" @delete="finish('delete')"
-        />
-      </div>
       <div
         v-show="activeTab === 'basic'" :id="`${dialogId}-panel-basic`" class="agent-editor__panel"
         role="tabpanel" :aria-labelledby="`${dialogId}-tab-basic`" tabindex="0"
+      >
+      <AgentIdentitySecurity
+        v-if="agent && open" :key="agent.id" :agent="agent" :can-delete="canDelete" :busy="busy" :initially-expanded="focusIdentity"
+        @updated="emit('identityUpdated', $event)" @re-pair="emit('rePair')" @delete="finish('delete')"
       >
       <div class="agent-editor__fields">
         <label class="field">
@@ -1436,7 +1453,7 @@ onBeforeUnmount(() => {
         </label>
       </div>
       <p class="agent-editor__basic-hint">{{ t.workspace.agentAdmin.basicInfoHint }}</p>
-
+      </AgentIdentitySecurity>
       </div>
 
       <div
@@ -1990,7 +2007,7 @@ onBeforeUnmount(() => {
     <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
     <div class="agent-editor__actions">
       <!-- 探测与保存共用底部状态槽,不撑高滚动内容;成功探测短暂优先,失败保留。 -->
-      <p v-if="activeTab !== 'security'" :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
+      <p :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
         <template v-if="hasSourceCheck">
           <DliIcon v-if="sourceCheckOk" name="check" size="sm" />
           <span v-else class="agent-editor__probe-fail-icon" aria-hidden="true">×</span>
@@ -2015,7 +2032,7 @@ onBeforeUnmount(() => {
       <div class="agent-editor__buttons">
         <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish('cancel')">{{ t.workspace.agentAdmin.cancel }}</button>
         <button
-          v-if="activeTab !== 'security'" type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
+          type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
           :aria-disabled="!canSubmit ? 'true' : undefined" :aria-busy="busy ? 'true' : undefined"
           :aria-describedby="saveStateId"
           @click="finish('submit')"
@@ -2052,14 +2069,22 @@ onBeforeUnmount(() => {
 .agent-editor { color-scheme: dark; }
 .agent-editor[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 
-.agent-editor__head { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); min-inline-size: 0; }
-.agent-editor__heading-group { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
-.agent-editor__title { font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
-.agent-editor__badge { padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
-/* 当前对象作为右侧非交互 chip，完整名称仍由 title 与隐藏描述提供。 */
-.agent-editor__agent-chip { display: inline-flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; max-inline-size: 45%; padding: var(--dl-space-1) var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); }
-.agent-editor__agent-mark { display: inline-grid; flex: none; place-items: center; inline-size: var(--dl-icon-md); block-size: var(--dl-icon-md); border-radius: var(--dl-radius-sm); background: var(--dl-bg-elevated); font-size: var(--dl-font-size-xs); }
-.agent-editor__agent-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-sm); font-weight: 500; }
+/* 对象上下文不是导航；名称可以收缩，徽标、分隔符和可访问标题保持完整。 */
+.agent-editor__head { display: flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; white-space: nowrap; }
+.agent-editor__title { flex: none; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-body); }
+.agent-editor__badge { flex: none; padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.agent-editor__subject { display: inline-flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; color: var(--dl-text-secondary); }
+.agent-editor__connection { display: inline-flex; flex: none; align-items: center; gap: var(--dl-space-1); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.agent-editor__connection:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); border-radius: var(--dl-radius-sm); }
+.agent-editor__connection-tooltip { position: fixed; inset: auto; inset-inline-start: var(--agent-status-left); inset-block-start: var(--agent-status-top); margin: 0; padding: var(--dl-space-2) var(--dl-space-3); inline-size: max-content; max-inline-size: min(var(--dl-measure), calc(100vw - 2 * var(--dl-space-2))); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-family: var(--dl-font-sans); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); overflow-wrap: anywhere; opacity: 0; pointer-events: none; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
+.agent-editor__connection-tooltip[data-visible='true'] { opacity: 1; pointer-events: auto; }
+.agent-editor__connection-tooltip::backdrop { background: transparent; pointer-events: none; }
+.agent-editor__connection-dot { inline-size: var(--dl-space-2); block-size: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-success); border-radius: var(--dl-radius-pill); background: var(--dl-success); }
+.agent-editor__connection[data-state='offline'] .agent-editor__connection-dot { background: transparent; border-color: var(--dl-text-tertiary); }
+.agent-editor__connection[data-state='authenticationFailed'] { color: var(--dl-warning); }
+.agent-editor__connection[data-state='authenticationFailed'] .agent-editor__connection-dot { background: var(--dl-warning); border-color: var(--dl-warning); }
+.agent-editor__separator { flex: none; color: var(--dl-text-tertiary); }
+.agent-editor__agent-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-md); font-weight: 500; }
 
 .agent-editor__head, .agent-editor__tabbar, .agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
 .agent-editor__tabbar { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
@@ -2359,6 +2384,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .agent-editor__buttons { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: var(--dl-space-2); margin-inline-start: auto; }
 .agent-editor__visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) {
+  .agent-editor__connection-tooltip { transition: none; }
   .agent-editor__panel:not(.agent-editor__panel--model),
   .model-subpanel:not(.model-subpanel--source),
   .source-block > .gateway-form,
@@ -2405,6 +2431,9 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 
 /* 窄屏间距由全局设置窗体 token 统一收紧,当前 Agent 仍保留在标题行。 */
 @media (max-width: 560px) {
-  .agent-editor__head { gap: var(--dl-space-1); }
+  .agent-editor__head, .agent-editor__subject { gap: var(--dl-space-1); }
+  .agent-editor__title { font-size: var(--dl-font-size-lg); }
+  .agent-editor__badge { padding-inline: var(--dl-space-1); }
+  .agent-editor__connection:not([data-state='authenticationFailed']) .agent-editor__connection-label { display: none; }
 }
 </style>

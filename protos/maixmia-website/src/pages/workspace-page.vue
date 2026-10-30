@@ -125,7 +125,7 @@ const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
 }])
 // Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
-const agentEditorFocusSecurity = ref(false)
+const agentEditorFocusIdentity = ref(false)
 const isIdentityUnlocked = ref(false)
 const isPairingOpen = ref(false)
 const pairingSessionId = ref('')
@@ -1627,7 +1627,7 @@ function retryAgents(): void {
 }
 
 function openAgentSettings(): void {
-  agentEditorFocusSecurity.value = false
+  agentEditorFocusIdentity.value = false
   agentEditorError.value = ''
   isAgentEditorOpen.value = true
 }
@@ -1698,7 +1698,7 @@ async function onAgentPaired(summary: AgentSummary, details: boolean): Promise<v
   announcePlacement(t.value.workspace.agentAdmin.created.replace('{name}', summary.name))
   await onSelectAgent(summary.id)
   if (details) {
-    agentEditorFocusSecurity.value = true
+    agentEditorFocusIdentity.value = true
     agentEditorError.value = ''
     await nextTick()
     isAgentEditorOpen.value = true
@@ -2915,7 +2915,7 @@ onBeforeUnmount(() => {
     <AgentPairingDialog :open="isPairingOpen" :session-id="pairingSessionId" :link-secret="pairingLinkSecret" :re-pair="isAgentEditorOpen" @manual="resetPairingInvite" @cancel="closePairing" @added="onAgentPaired" @link="onPairingLink" />
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
     <AgentEditorDialog
-      :open="isAgentEditorOpen" :focus-security="agentEditorFocusSecurity"
+      :open="isAgentEditorOpen" :focus-identity="agentEditorFocusIdentity"
       :agent="currentAgent"
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"

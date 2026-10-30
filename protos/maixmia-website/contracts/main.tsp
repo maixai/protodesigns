@@ -579,6 +579,8 @@ model RecoveryKeyReveal {
 // Agent 的身份摘要:侧栏切换器 / 设置对话框只需要这些字段,不必背着项目树。
 // note 是一句话备注;model 是该 Agent 的默认模型、四档映射与高级配置。
 // builtIn 表示内置 Agent:名称与备注优先跟随界面语言;用户修改后改用字面值。
+// 可达性独立于任务运行状态；认证失败由 identity.trustState 派生。
+enum AgentAvailabilityId { online, offline }
 @summary("AgentSummary")
 @jsonSchema
 model AgentSummary {
@@ -587,6 +589,7 @@ model AgentSummary {
   note: string;
   `model`: AgentModelConfig;
   builtIn: boolean;
+  availability: AgentAvailabilityId;
   identity: AgentIdentity;
 }
 

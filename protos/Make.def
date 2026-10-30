@@ -6,6 +6,7 @@
 PNPM ?= pnpm
 PORT ?= 5173
 HOST ?= 0.0.0.0
+export PNPM
 
 # PORT 必须导出:playwright.config.ts 从 process.env.PORT 推导 BASE_URL,
 # 只写成 make 变量时子进程读不到,会静默退回 5173 去测别的实例。
@@ -13,7 +14,14 @@ export PORT
 BASE_URL ?= http://127.0.0.1:$(PORT)
 export BASE_URL
 
-.PHONY: deps run build typecheck contracts contracts-schema contracts-ts contracts-dart contracts-clean smoke smoke-full calibrate calibrate-update
+.PHONY: deps run build typecheck contracts contracts-schema contracts-ts contracts-dart contracts-clean smoke smoke-full calibrate calibrate-update quick-check quick-component quick-all storybook storybook-build storybook-test
+
+# Playwright 选测参数:空值展开为空,不污染命令。
+PLAYWRIGHT_GREP = $(if $(strip $(GREP)),--grep "$(GREP)",)
+PLAYWRIGHT_LAST_FAILED = $(if $(filter 1 true yes,$(LAST_FAILED)),--last-failed,)
+PLAYWRIGHT_MAX_FAILURES = $(if $(strip $(MAX_FAILURES)),--max-failures=$(MAX_FAILURES),)
+# 指定 tests/quick 的 spec 时补上 quick project;其它情况仍只用 smoke + chromium。
+SMOKE_PROJECTS = --project=smoke --project=chromium $(if $(findstring tests/quick,$(SPECS)),--project=quick,)
 
 # ---- 依赖安装 ----
 # 新克隆的目录先跑一次 make deps:node_modules 是契约工具链与构建的共同前置。
@@ -80,13 +88,67 @@ contracts-clean:
 # DEV_COMMAND 把当前可用的包管理器命令注入给 playwright 的 webServer(见 playwright.config.ts)。
 DEV_COMMAND ?= $(PNPM) dev --host 127.0.0.1 --port $(PORT)
 
+# ---- 快检选测与预算 ----
+# SPECS / GREP / LAST_FAILED 用于把日常快检收窄到本次改动:
+#   make quick-check SPECS="tests/quick/agent-settings.spec.ts" GREP="@area:agent-settings"
+#   make quick-check LAST_FAILED=1
+# 不传时跑 tests/quick 全部;AUTO=1 时按 tests/impact-map.json 从 git diff 自动选 area。
+SPECS ?=
+GREP ?=
+LAST_FAILED ?=
+AUTO ?= 0
+MAX_FAILURES ?= 5
+QUICK_TIMEOUT ?= 90
+QUICK_DIR ?= tests/quick
+export SPECS GREP LAST_FAILED AUTO MAX_FAILURES QUICK_TIMEOUT QUICK_DIR
+
 smoke: contracts
 	@if [ -n "$(SPECS)" ]; then \
-	  echo "smoke: tests/smoke + $(SPECS)"; \
-	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke --project=chromium $(SPECS); \
+	  echo "smoke: tests/smoke + $(SPECS) $(if $(GREP),grep=$(GREP),)"; \
+	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test $(SMOKE_PROJECTS) $(PLAYWRIGHT_GREP) $(PLAYWRIGHT_MAX_FAILURES) $(PLAYWRIGHT_LAST_FAILED) $(SPECS); \
 	else \
 	  echo "smoke: tests/smoke(未指定 SPECS,跳过本原型断言)"; \
-	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke; \
+	  DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 $(PNPM) exec playwright test --project=smoke $(PLAYWRIGHT_GREP) $(PLAYWRIGHT_MAX_FAILURES); \
+	fi
+
+# ---- 日常快检(开发回路唯一入口)----
+# 硬预算 90 秒:先跑通用冒烟(秒级),再跑 tests/quick 或 SPECS 指定的断言。
+# AUTO=1 时由 ../quick-check.mjs 读 tests/impact-map.json,按 git diff 自动选 area。
+# 超时/超预算直接失败,不做后台轮询 —— 需要更长时间说明选测太宽,应缩小 GREP。
+quick-check: contracts
+	DEV_COMMAND="$(DEV_COMMAND)" SMOKE=1 node ../quick-check.mjs
+
+# 组件级测试(Vitest + Vue Test Utils):纯逻辑 / 状态 / 事件,不启浏览器。
+quick-component: contracts
+	@if node -e "const p=require('./package.json');process.exit(p.scripts&&p.scripts['test:component']?0:1)"; then \
+	  $(PNPM) run test:component; \
+	else \
+	  echo "quick-component: 本原型未配置组件测试(无 test:component 脚本)"; \
+	fi
+
+# 一条命令跑完日常快检的两层。
+quick-all: quick-component quick-check
+
+# Storybook:组件预览与视觉基线。
+storybook:
+	@if node -e "const p=require('./package.json');process.exit(p.scripts&&p.scripts.storybook?0:1)"; then \
+	  $(PNPM) run storybook; \
+	else \
+	  echo "storybook: 本原型未配置 Storybook"; \
+	fi
+
+storybook-test:
+	@if node -e "const p=require('./package.json');process.exit(p.scripts&&p.scripts['test:storybook']?0:1)"; then \
+	  $(PNPM) run test:storybook; \
+	else \
+	  echo "storybook-test: 本原型未配置 Storybook 视觉测试"; \
+	fi
+
+storybook-build:
+	@if node -e "const p=require('./package.json');process.exit(p.scripts&&p.scripts['build-storybook']?0:1)"; then \
+	  $(PNPM) run build-storybook; \
+	else \
+	  echo "storybook-build: 本原型未配置 Storybook"; \
 	fi
 
 # ---- 全量冒烟(手动触发,归 protodesign-verify)----

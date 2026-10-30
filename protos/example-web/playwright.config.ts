@@ -7,9 +7,10 @@ import { defineConfig, devices } from '@playwright/test'
 // 注意:两个引擎的截图基线各自独立(文件名带 project 名),
 // 因为字体栅格化不同会导致逐像素差异 —— 跨引擎不做像素比对,只做布局断言。
 //
-// 三类 project:
+// 四类 project:
 //   - chromium / webkit:tests/calibrate 的逐原型深度断言 + 像素基线(`make calibrate`);
-//   - smoke:tests/smoke 的仓库级通用兜底(`make smoke`,见下方 SMOKE 开关)。
+//   - smoke:tests/smoke 的仓库级通用兜底(`make quick-check` 的第一段);
+//   - quick:tests/quick 的日常高价值断言(`make quick-check` 的第二段)。
 const PORT = Number(process.env['PORT'] ?? 5173)
 const BASE_URL = process.env['BASE_URL'] ?? `http://127.0.0.1:${PORT}`
 // dev server 启动命令:默认用 pnpm;由 make 调用时通过 DEV_COMMAND 注入实际可用的包管理器命令
@@ -54,6 +55,8 @@ export default defineConfig({
       ...CALIBRATE_SMOKE_OVERRIDES,
     },
     { name: 'smoke', testDir: './tests/smoke', use: { ...devices['Desktop Chrome'] } },
+    // 日常快检层:tests/quick 只放高价值、分钟级以内的断言。
+    { name: 'quick', testDir: './tests/quick', use: { ...devices['Desktop Chrome'] } },
   ],
   // 复用已在跑的 dev server,没有则自动拉起。
   webServer: {

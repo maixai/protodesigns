@@ -39,7 +39,8 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 4. **数据与 API**:按共享基线第 ⑤ 节写强类型 API(`Promise<Result<T>>`)+ dummy 真实内容 + `delay()`;不引入 MSW。
 5. **壳能力(targets 含 desktop 时)**:写 `src/shell/ports.ts` 接口 + `src/shell/mock/` 实现(菜单栏 / 快捷键 / 右键菜单 / 文件对话框 / 通知 / 深浅色跟随 / 窗口尺寸),**必须能在浏览器里演示**;`src/shell/real/` 留空,生产期替换为 Electron IPC,UI 零改动。
 6. **页面与交互**:按设计要点搭页面 / 组件,交互方向按 `research_brief`,具体实现由你决策;补齐四态(有数据 / loading / empty / error)与交互态(hover / focus / active / disabled);按端基线保证各宽度可用与 a11y 底线。
-7. **自检**:`make typecheck` 与 `make smoke SPECS="<Main 注入的相关 spec>"` 必须全绿;未注入 spec 时 `make smoke` 只跑通用兜底。**不要跑 `make smoke-full` 或 `make calibrate`** —— 全量校准归 `/protodesign-verify`,完整评审归 `/protodesign-review`,都不在实现者的职责内。**报红必须自己修到绿再交回** —— 不要把机械问题留给 Main。需要确认打包时再单独跑 `make build`。
+7. **组件测试与 story**:新增或修改组件时,按 [../rules/component-testing.md](../rules/component-testing.md) 补 `tests/component/*.spec.ts` 与同目录 `*.stories.ts`;纯逻辑 / props / emits / 键盘归 Vitest,不重复写进 Playwright。
+8. **自检**:收尾跑一次 `make typecheck`、`make quick-component`、`make quick-check`(可用 `AUTO=1`;Main 注入了 `SPECS` / `GREP` 时按注入值)。**总预算 90 秒**;超时立即停止,缩小 `GREP` / `SPECS` 或只跑 L0,并在返回里说明未跑项。失败用 `make quick-check LAST_FAILED=1` 只重跑失败项。**不要跑 `make smoke-full` / `make calibrate` / `make storybook-test`** —— 全量校准归 `/protodesign-verify`,完整评审归 `/protodesign-review`。**不要后台轮询测试进程,不要自行写截图脚本或读图** —— 视觉巡检归 reviewer / checker。报红必须自己修到绿再交回;修不动时返回 `partial` 并说明。需要确认打包时再单独跑 `make build`。
 
 ## 返回格式
 
@@ -47,9 +48,14 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 
 ```yaml
 ---
-verdict: completed | blocked
+verdict: completed | partial | blocked
 summary: <一段话:新建/修改了哪些文件与页面、契约新增了哪些实体、关键交互决策、若偏离设计要点或 research_brief 的约束说明偏了什么>
+checks:
+  component: <make quick-component 结果>
+  quick: <make quick-check 的 area / spec 与结果>
+  typecheck: <结果>
+not_run: [<超预算未跑 / 未覆盖项>]
 ---
 ```
 
-`verdict=blocked` 仅当环境不可用(如 node / 包管理器缺失、目标目录彻底不可写)。不要向用户提问或索取确认。
+`verdict=partial` 用于快检超预算或仍有未修失败;`blocked` 仅当环境不可用(如 node / 包管理器缺失、目标目录彻底不可写)。不要向用户提问或索取确认。

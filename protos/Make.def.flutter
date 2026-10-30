@@ -10,7 +10,15 @@ PNPM    ?= pnpm
 # 默认跑 Chrome:浏览器里看布局与视觉最快;真机 / 模拟器用 make run DEVICE=<设备 id>
 DEVICE  ?= chrome
 
-.PHONY: deps run build contracts contracts-schema contracts-dart contracts-clean smoke calibrate calibrate-update
+# 快检选测:flutter test 支持按名称与标签收窄。
+TEST_NAME ?=
+TEST_TAGS ?=
+# 默认排除 golden(视觉基线属 L2,归 make calibrate / /protodesign-verify);
+# 显式传 TEST_TAGS=golden 时才跑。
+EXCLUDE_TAGS ?= golden
+export TEST_NAME TEST_TAGS EXCLUDE_TAGS
+
+.PHONY: deps run build contracts contracts-schema contracts-dart contracts-clean smoke quick-check quick-component quick-all storybook storybook-build storybook-test calibrate calibrate-update
 
 # ---- 依赖安装 ----
 # 契约工具链(TypeSpec / quicktype)在 Node 侧,走 pnpm 安装;
@@ -66,11 +74,37 @@ contracts-dart: contracts-schema
 contracts-clean:
 	rm -rf $(CONTRACTS_TMP) $(CONTRACTS_DART_OUT)
 
-# ---- 冒烟检查(Tier 1:确定性、零 LLM 判定,每次改动后必跑,不阻塞交付)----
-# 移动端的确定性层与 calibrate 完全重合(静态分析 + 组件级 golden 回归,两者都不含 LLM 判定),
-# 故直接复用,不另写一套配方 —— 与 web 侧不同:web 的 calibrate 含双引擎与像素比对,
-# 冒烟要的是"单引擎 + 不判像素",两者才需要分开。
+# ---- 全量校准(兼容旧 smoke 入口)----
+# 日常用 quick-check(analyze + 非 golden 用例);smoke 保留为 calibrate 的别名,
+# 供旧脚本与 /protodesign-verify 使用。
 smoke: calibrate
+
+# ---- 日常快检(Tier 1)----
+# analyze 始终跑(秒级);test 默认排除 golden(视觉基线属 L2),只跑非 golden 用例。
+# 需要按名称 / 标签收窄时传 TEST_NAME / TEST_TAGS;显式跑 golden 用 TEST_TAGS=golden。
+quick-check:
+	$(FLUTTER) analyze
+	$(FLUTTER) test $(if $(TEST_NAME),--plain-name "$(TEST_NAME)") $(if $(TEST_TAGS),--tags "$(TEST_TAGS)",$(if $(strip $(EXCLUDE_TAGS)),--exclude-tags $(EXCLUDE_TAGS),))
+
+# Flutter 侧组件测试与 golden 同属 flutter test;没有独立的 Node 组件层。
+quick-component:
+	@echo "quick-component: Flutter 侧请用 make quick-check TEST_NAME=... 或 make quick-check TEST_TAGS=..."
+
+quick-all: quick-component quick-check
+
+# Flutter 侧不使用 Storybook;根级 verify-all 会调用本目标,保持幂等。
+storybook:
+	@echo "storybook: Flutter 侧无 Storybook,跳过"
+
+storybook-build:
+	@echo "storybook-build: Flutter 侧无 Storybook,跳过"
+
+storybook-test:
+	@echo "storybook-test: Flutter 侧无 Storybook,跳过"
+
+# 全量校准(手动触发,归 protodesign-verify)。
+# web 侧同名目标只跑单引擎;Flutter 侧的确定性层与 calibrate 完全重合,故直接复用。
+smoke-full: calibrate
 
 # ---- 设计校准 ----
 # 移动端的平台特有交互(手势返回 / 软键盘 / 安全区 / 权限弹窗)在浏览器里验不了,

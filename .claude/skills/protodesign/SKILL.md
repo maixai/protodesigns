@@ -1,6 +1,6 @@
 ---
 name: protodesign
-description: 在 protodesigns 仓库下创建或修改可独立运行、带 dummy 数据、可交互演示的前端原型(web / desktop / mobile)。用户用自然语言、参照物截图或链接提需求时使用:做一个 XX 产品的原型、设计一个 XX 页面、参考这张截图做个页面、把这个原型改成 XX 风格、加个 XX 功能,或输入 /protodesign。只负责开发回路:需求理解 → 现状探查 → 交互方向调研 → 确认 → 实现 → 快速检查 → 交付;含交互场景时先派 protodesign-researcher 调研业界最新做法,形成交互方向与核心约束,具体实现交给 developer 决策。全量校准与完整评审不在主流程自动执行,由用户手动触发 /protodesign-verify 与 /protodesign-review。
+description: 在 protodesigns 仓库下创建或修改可独立运行、带 dummy 数据、可交互演示的前端原型(web / desktop / mobile)。用户用自然语言、参照物截图或链接提需求时使用:做一个 XX 产品的原型、设计一个 XX 页面、参考这张截图做个页面、把这个原型改成 XX 风格、加个 XX 功能,或输入 /protodesign。只负责开发回路:需求理解 → 现状探查 → 交互方向调研 → 确认 → 实现 → 组件测试 + fresh-eyes 快检 → 交付;含交互场景时先派 protodesign-researcher 调研业界最新做法,形成交互方向与核心约束,具体实现交给 developer 决策;实现后派 protodesign-checker 做分钟级快检。全量校准与完整评审不在主流程自动执行,由用户手动触发 /protodesign-verify 与 /protodesign-review。
 ---
 
 # protodesign
@@ -46,11 +46,11 @@ description: 在 protodesigns 仓库下创建或修改可独立运行、带 dumm
 - **In-scope**:新原型创建、现有原型修改、契约定义与生成、dummy 数据 + 强类型 API、设计基线落地、交付。
 - **Out-of-scope**:真实后端 / 数据库 / 认证 / 部署;非仓库技术栈;交付用截图展示。
 
-## 工作流(六步)
+## 工作流
 
 ```text
 需求理解 → 现状探查(修改时) → 交互方向调研(含交互场景时)
-→ 确认门(仅复杂需求) → 派 SubAgent 实现 → 快检 → 交付
+→ 确认门(仅复杂需求) → 派 SubAgent 实现 → fresh-eyes 快检 → 交付
 ```
 
 ### 1. 需求理解
@@ -120,7 +120,7 @@ description: 在 protodesigns 仓库下创建或修改可独立运行、带 dumm
 - 页面级 / 风格级 / 结构性改动 → 按载体派 `protodesign-developer` 或 `protodesign-developer-flutter`;
 - 单点 tweak(颜色 / 间距 / 文案)→ Main 直接改,不下放。
 
-下发时注入:`设计要点` + `现状探查摘要` + **`research_brief`(researcher 的交互方向与核心约束)** + **本次需要的基线切片** + 明确改动范围。在 `scope` 里写明本期做什么、不做什么;brief 里的建议 / 备选方向不是必做项。切片规则见 [references/quick-check.md](references/quick-check.md)。research 未触发时 `research_brief` 留空;**已判定为交互场景却没有 `research_brief` 时,先补调研或向用户说明,不要把交互设计直接丢给 developer 自由发挥。**
+下发时注入:`设计要点` + `现状探查摘要` + **`research_brief`(researcher 的交互方向与核心约束)** + **本次需要的基线切片** + `scope` + **`areas` / `changed_files`**(供 impact map 选测)。在 `scope` 里写明本期做什么、不做什么;brief 里的建议 / 备选方向不是必做项。切片规则见 [references/quick-check.md](references/quick-check.md)。research 未触发时 `research_brief` 留空;**已判定为交互场景却没有 `research_brief` 时,先补调研或向用户说明,不要把交互设计直接丢给 developer 自由发挥。**
 
 **实现硬约束**(细节以仓库规则为准):
 
@@ -129,31 +129,38 @@ description: 在 protodesigns 仓库下创建或修改可独立运行、带 dumm
 - **方向与核心约束按 `research_brief`;具体交互实现(组件结构、布局、状态细节、动效、文案、文件组织)由 developer 决策**,Main 不逐条规定。developer 认为某条约束与现状冲突时,选最小偏离并在返回中说明,由 Main 裁定;
 - 契约在 `contracts/main.tsp` 定义,`make contracts` 生成类型,**禁止手写类型**;
 - dummy 数据贴近真实业务,`delay()` 模拟 150–300ms;不引 MSW;
-- 异步视图四态齐备(有数据 / loading / empty / error),交互态齐备(hover / focus / active / disabled;移动端无 hover)。
+- 异步视图四态齐备(有数据 / loading / empty / error),交互态齐备(hover / focus / active / disabled;移动端无 hover);
+- **组件级**:新增或修改的组件按 [component-testing.md](../../rules/component-testing.md) 补 `tests/component/` 与 `*.stories.ts`;纯逻辑 / 事件归 Vitest,几何 / 像素仍归 calibrate。
 
 Main 对实现的验收只核对**核心约束与基线**,不拿自己的交互偏好覆盖 developer 的决策;除非违反约束,否则以 developer 的实现为准。
 
 ### 6. 快检与交付
 
-在原型子目录执行:
+实现 SubAgent 返回后,**页面级 / 结构性改动**派 `protodesign-checker` 做 fresh-eyes 快检;单点 tweak 由 Main 自己跑快检。
+
+**检查命令**(在原型子目录执行):
 
 ```bash
-make typecheck                 # 类型检查(契约生成是它的前置)
-make smoke                     # 通用兜底:tests/smoke,秒级
-make smoke SPECS="tests/calibrate/<相关>.spec.ts ..."   # 加上本次改动涉及的断言
+make quick-component             # Vitest 组件测试,秒级
+make quick-check AUTO=1          # L0 通用冒烟 + 按 impact map 选中的 tests/quick
+make quick-check GREP="@area:<area>" SPECS="tests/quick/<area>.spec.ts"
+make quick-check LAST_FAILED=1   # 只重跑上一轮失败项
 ```
 
-- **默认只跑通用冒烟。** 不指定 `SPECS` 时不会跑全部 calibrate。
-- 受影响 spec 的选择规则与失败处理见 [references/quick-check.md](references/quick-check.md)。
-- **报红必须修到绿。** 报绿后不要因为"想再确认"而跑 `make smoke-full` / `make calibrate` —— 那是 `/protodesign-verify` 的职责。
-- `make build` 只在需要验证打包时跑;日常用 `make typecheck` 即可。
+- **预算 90 秒**(`QUICK_TIMEOUT`)。超时即选测过宽,应缩小 `GREP` / `SPECS` 或只跑 L0,**不得后台轮询或原样重跑**。
+- 默认只跑 L0 + L1。**不要跑 `make smoke-full` / `make calibrate` / `make storybook-test`** —— 全量校准归 `/protodesign-verify`,完整评审归 `/protodesign-review`。
+- **报红必须修到绿。** 修完用 `LAST_FAILED=1` 只重跑失败项,不要整套重放。
+- `make build` 只在需要验证打包时跑。
+- 没被 `tests/quick` 覆盖的机械项,在交付摘要里登记“未覆盖”,不要拿全量去补。
+
+**checker 的职责边界**:只读 + 运行命令,不改代码、不写文件、不跑全量;返回 `pass` / `changes-requested` / `blocked` 与失败清单。失败时把失败标题与证据回给 developer,只修失败项;checker 不替 developer 改代码。
 
 快检绿了立刻交付,模板与话术见 [references/delivery.md](references/delivery.md)。交付必须写清:
 
 1. 运行命令与访问地址;
 2. 做了什么(一句话);
 3. **本轮交互方向与关键决策**:采用的方向、developer 在实现中的关键取舍(未触发调研则省略);
-4. **本轮跑了哪些检查、哪些没跑**。
+4. **本轮跑了哪些检查、哪些没跑**(含组件测试 / quick-check 的 area / 未覆盖项)。
 
 用户提意见 → 先判断是否改变了交互场景:改变了就回到第 3 步补调研,再回派实现 SubAgent;单点 tweak Main 自改 → 回到快检。
 
@@ -172,9 +179,11 @@ make smoke SPECS="tests/calibrate/<相关>.spec.ts ..."   # 加上本次改动�
 - [../rules/protodesign-baseline.md](../../rules/protodesign-baseline.md) —— 跨端共享基线
 - [../rules/baseline-web.md](../../rules/baseline-web.md) / [baseline-desktop.md](../../rules/baseline-desktop.md) / [baseline-mobile.md](../../rules/baseline-mobile.md) —— 端基线
 - [../rules/contracts.md](../../rules/contracts.md) —— 契约书写约定
+- [../rules/component-testing.md](../../rules/component-testing.md) —— 组件测试 / Storybook / 三层快检
 - [../rules/design-language.md](../../rules/design-language.md) —— 设计语言 Tungsten 青瓷
 - [../../agents/protodesign-researcher.md](../../agents/protodesign-researcher.md) —— 交互方向调研 SubAgent
 - [../../agents/protodesign-developer.md](../../agents/protodesign-developer.md) / [protodesign-developer-flutter.md](../../agents/protodesign-developer-flutter.md) —— 实现 SubAgent
+- [../../agents/protodesign-checker.md](../../agents/protodesign-checker.md) —— fresh-eyes 快检 SubAgent
 - [../../protos/example-web/](../../../protos/example-web/) / [example-app/](../../../protos/example-app/) —— 范例
-- [references/quick-check.md](references/quick-check.md) —— 快检选 spec 与失败处理
+- [references/quick-check.md](references/quick-check.md) —— 快检分层、选测、预算与失败处理
 - [references/delivery.md](references/delivery.md) —— 交付模板

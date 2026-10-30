@@ -11,6 +11,7 @@
 | [`baseline-desktop.md`](./baseline-desktop.md) | `targets` 含 `desktop` 时的窗口语义、壳能力与验收项 |
 | [`baseline-mobile.md`](./baseline-mobile.md) | `targets` 含 `mobile` 时的平台语义与验收项 |
 | [`contracts.md`](./contracts.md) | 契约书写约定与跨端一致性规则 |
+| [`component-testing.md`](./component-testing.md) | 组件测试 / Storybook / 三层快检的分工与命令 |
 | [`design-language.md`](./design-language.md) | **设计语言 Tungsten 青瓷**:token 取值、中文排版规则、组件配方与禁用值 |
 
 **按原型的 `meta.md` 声明选用端基线**:`targets` 含哪个端,就叠加哪份端基线;共享基线永远适用。
@@ -241,7 +242,7 @@ export function delay(ms: number = randomLatency()): Promise<void> {
 - [ ] **运行时无错误**:无未捕获异常、无 console error、关键请求无 4xx/5xx 失败。
 - [ ] **多宽度不破版**:375 / 768 / 1280 / 1600 无横向溢出(由断言判定,不靠目视)。
 
-> 这四项由仓库级通用冒烟规格 `tests/smoke/` 保证,任何原型(含新建的)都有。其余可机械化的项(对比度、触达尺寸、四态可达、交互行为)由各原型在 `tests/calibrate/` 自行断言,按本次改动用 `make smoke SPECS="..."` 执行 —— **写了就参与快检,没写就归 L3**。
+> 这四项由仓库级通用冒烟规格 `tests/smoke/` 保证,任何原型(含新建的)都有。其余可机械化的项(对比度、触达尺寸、四态可达、交互行为)由各原型在 `tests/quick/` 里按 area 断言,用 `make quick-check`(或 `GREP="@area:..."` / `SPECS=...` 收窄)执行 —— **写了就参与快检,没写就归 L3**。纯逻辑 / 状态 / 事件优先放 `tests/component/` 的 Vitest 组件测试。
 >
 > 全量单引擎归 `make smoke-full`,双引擎与像素基线归 `make calibrate`,两者都不进日常回路,由 `/protodesign-verify` 手动触发。
 

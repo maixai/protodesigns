@@ -40,15 +40,18 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__Context7__resolve-library-id, m
 4. **主题**:在 `lib/theme/` 集中定义 `ThemeData` / `ThemeExtension`,深浅两套;token 值取自 [../rules/design-language.md](../rules/design-language.md)(Flutter 落地见其第 ⑩ 节)。
 5. **数据层**:Dart 侧强类型 API + 内存 dummy 数据 + 模拟延迟;不接真实后端、不做本地持久化(原型期刷新即重置)。
 6. **页面与 widget**:按设计要点搭页面,交互方向按 `research_brief`,具体实现由你决策;补齐四态与 **pressed / focus / disabled** 态(hover 不适用);按 `baseline-mobile.md` 处理安全区、键盘、手势返回、底部导航、权限时机。
-7. **自检**:`make smoke`(等价于 `make calibrate`:`flutter analyze` + `flutter test` 组件级 golden)必须全绿;`make run`(默认 Chrome 预览)确认可启动。**报红必须自己修到绿再交回**。平台特有交互(手势 / 键盘 / 安全区)在浏览器里验不了,交回时**显式说明哪些项待真机确认**。完整评审归 `/protodesign-review`,不在实现者的职责内。
+7. **自检**:`make quick-check TEST_NAME="<Main 注入的用例名>"`(或 `TEST_TAGS=...`)必须全绿;需要静态分析时单独跑 `make quick-check` 的 analyze 部分。**预算 90 秒**;超时立即停止并缩小 `TEST_NAME` / `TEST_TAGS`,不要整包 `make calibrate` 重跑。`make run`(默认 Chrome 预览)确认可启动。**报红必须自己修到绿再交回**。平台特有交互(手势 / 键盘 / 安全区)在浏览器里验不了,交回时**显式说明哪些项待真机确认**。完整评审归 `/protodesign-review`,不在实现者的职责内。
 
 ## 返回格式
 
 ```yaml
 ---
-verdict: completed | blocked
+verdict: completed | partial | blocked
 summary: <一段话:新建/修改了哪些文件与页面、契约实体、关键交互决策、若偏离设计要点或 research_brief 的约束说明偏了什么、哪些项待真机确认>
+checks:
+  quick: <make quick-check TEST_NAME/TEST_TAGS 结果>
+not_run: [<超预算未跑 / 未覆盖项>]
 ---
 ```
 
-`verdict=blocked` 仅当环境不可用(如 Flutter SDK 缺失、目标目录不可写)。不要向用户提问或索取确认。
+`verdict=partial` 用于快检超预算或仍有未修失败;`blocked` 仅当环境不可用(如 Flutter SDK 缺失、目标目录不可写)。不要向用户提问或索取确认。

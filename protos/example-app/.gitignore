@@ -18,3 +18,6 @@ lib/contracts/generated/
 .idea
 .DS_Store
 *.iml
+
+# golden 失败现场(由 flutter test 生成,不入库)
+test/failures/

@@ -14,9 +14,9 @@ cd protos/<slug> && make run
 本轮交互方向与关键决策:<若本次触发 researcher 调研:采用的方向 + developer 在实现中的关键取舍;未触发则删除此行>
 
 本轮检查:
-- make typecheck:通过
-- make smoke:通过(tests/smoke)
-- make smoke SPECS="...":通过(<列出 spec>)
+- make quick-component:通过(或未配置组件测试)
+- make quick-check:通过(tests/smoke + tests/quick)
+- make quick-check SPECS="..." GREP="...":通过(<列出 spec / area>)
 - 未跑:全量校准、完整评审
 
 这版你先看。需要完整验收时:

@@ -30,3 +30,8 @@ playwright-report/
 *.njsproj
 *.sln
 *.sw?
+
+# Storybook / Vitest 产物
+storybook-static/
+coverage/
+.vitest/

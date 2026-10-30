@@ -38,6 +38,7 @@
 | web / desktop | TypeScript(strict) + Vite + Vue 3 + Naive UI,包管理 pnpm |
 | mobile | Flutter(Dart) |
 | 契约 | TypeSpec + json-schema emitter + json2ts(TS)/ quicktype(Dart) |
+| 测试 | Playwright(quick / calibrate)+ Vitest 组件测试 + Storybook 组件预览 |
 
 - dev server:默认监听 `0.0.0.0`(所有网卡),端口默认 `5173`,由 `Make.def` 的 `HOST` / `PORT` 覆盖。
 - **端口自适应**:`PORT` 只是起始端口,若被占用会自动往后找(与 vite 一致),启动输出会说明实际用的是哪个。注意占用方可能只绑了 `127.0.0.1`(如 SSH 端口转发)—— 此时通配绑定仍会成功,但对 `localhost` 的访问会被抢占,所以脚本会单独探测回环端口。
@@ -53,6 +54,7 @@
 | `baseline-desktop.md` | `targets` 含 `desktop` 时的窗口语义、壳能力与验收项 |
 | `baseline-mobile.md` | `targets` 含 `mobile` 时的平台语义与验收项 |
 | `contracts.md` | 契约书写约定与跨端一致性规则 |
+| `component-testing.md` | 组件测试 / Storybook / 三层快检的分工与命令 |
 | `design-language.md` | **设计语言 Tungsten 青瓷**:token 取值、中文排版规则、组件配方与禁用值 |
 
 实现与评审均以此为准,不依赖、不指向任何仓库外文件。
@@ -68,7 +70,8 @@
 
 ## 设计校准
 
-- **快速冒烟(L1)**:`make smoke` —— 秒级、零 LLM 判定,每次改动后必跑且不阻塞交付。默认只覆盖仓库级通用兜底(未捕获异常与 console error、失败请求、四宽度横向溢出);本原型在 `tests/calibrate/` 自写的断言按改动范围用 `SPECS="..."` 指定,**不全量执行**。
+- **日常快检(L0 + L1)**:`make quick-component`(Vitest 组件测试,秒级)+ `make quick-check`(通用冒烟 + `tests/quick`,预算 90 秒)。可用 `AUTO=1` 按 `tests/impact-map.json` 从 git diff 自动选 area,或用 `GREP="@area:..."` / `SPECS=...` 收窄。**每次改动后必跑且不阻塞交付。**
+- **组件工作台**:`make storybook` 预览组件状态;`make storybook-test` 跑 stories 的真浏览器用例。新增或修改组件时,按 `component-testing.md` 补 story 与组件测试。
 - **全量冒烟**:`make smoke-full` —— 全部 calibrate 断言,单引擎并跳过像素比对。
 - **回归比对**:web / desktop 原型用 **Playwright 双引擎(Chromium + WebKit)** 校准:逐宽度截图 + 断言不破版。两个引擎都要跑,因为桌面壳在 macOS / Linux 用 WebKit 系、在 Windows 用 Chromium 系。
 - 命令:`make smoke-full`(全量单引擎)/ `make calibrate`(双引擎)/ `make calibrate-update`(确认变化是预期的之后更新基线)—— 三者均通过 `/protodesign-verify` 手动触发,不进 `/protodesign` 的日常回路。

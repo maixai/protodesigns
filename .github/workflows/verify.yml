@@ -1,0 +1,49 @@
+name: Protodesign verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 每晚 02:00 UTC 跑全量校准;结果看 Actions 记录。
+    - cron: '0 2 * * *'
+
+jobs:
+  quick:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: make deps
+      - name: Install Chromium
+        run: pnpm dlx playwright@1.63.0 install --with-deps chromium
+      - name: Daily quick checks
+        run: make quick-all
+
+  full:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: make deps
+      - name: Install browsers
+        run: pnpm dlx playwright@1.63.0 install --with-deps chromium webkit
+      - name: Full calibration
+        run: make verify-all

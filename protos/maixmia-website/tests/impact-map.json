@@ -1,0 +1,62 @@
+{
+  "//": "改动路径 -> 日常快检 area。规则按前缀/通配匹配,命中多个 area 时合并运行。",
+  "rules": [
+    {
+      "area": "agent-settings",
+      "paths": [
+        "src/components/agent-editor-dialog.vue",
+        "src/components/agent-identity-security.vue",
+        "src/components/agent-plugins.vue",
+        "src/components/agent-context-switcher.vue",
+        "src/components/model-*.vue",
+        "src/components/subscription-*.vue",
+        "src/data/agent-status.ts",
+        "src/i18n/messages/*/identity-pairing.ts",
+        "src/i18n/messages/*/workspace.ts"
+      ]
+    },
+    {
+      "area": "identity",
+      "paths": [
+        "src/auth/**",
+        "src/mocks/identity.ts",
+        "src/mocks/pairing.ts",
+        "src/components/identity-*.vue",
+        "src/components/identity-*.css",
+        "src/components/agent-pairing-dialog.vue",
+        "src/components/mock-*.vue",
+        "src/components/pairing-flow.css",
+        "src/components/recovery-key-dialog.vue",
+        "src/components/add-passkey-dialog.vue"
+      ]
+    },
+    {
+      "area": "project-menu",
+      "paths": [
+        "src/components/project-menu.vue",
+        "src/components/project-picker-*.vue",
+        "src/mocks/workspace.ts",
+        "src/data/project-*.ts"
+      ]
+    },
+    {
+      "area": "workspace",
+      "paths": [
+        "src/pages/workspace-page.vue",
+        "src/components/workspace-*.vue",
+        "src/components/chat-*.vue",
+        "src/components/conversation-switcher.vue",
+        "src/components/file-*.vue",
+        "src/components/split-panes.vue",
+        "src/components/window-frame.vue",
+        "src/components/site-header.vue",
+        "src/data/windows.ts",
+        "src/data/chat-runtime.ts",
+        "src/router.ts",
+        "src/style.css",
+        "src/theme.ts",
+        "src/components/agent-context-switcher.vue"
+      ]
+    }
+  ]
+}

@@ -8,10 +8,11 @@ disable-model-invocation: true
 
 ## 定位
 
-`/protodesign` 的日常回路只跑"通用冒烟 + 受影响 spec"。本 skill 负责**全量、慢速、需要人工过目**的那一层:
+`/protodesign` 的日常回路只跑组件测试 + 通用冒烟 + 受影响 quick 断言。本 skill 负责**全量、慢速、需要人工过目**的那一层:
 
 - 全部 `tests/calibrate` 断言(单引擎);
 - 双引擎校准(Chromium + WebKit,含像素基线);
+- 若原型配置了 Storybook,跑 `make storybook-test`(组件级视觉用例);
 - 失败归因与回修派发;
 - 截图基线的更新(必须人工确认)。
 
@@ -82,7 +83,7 @@ agent 返回的是**证据 + 归类建议**,不是最终结论。Main 逐条核�
 
 - 页面级 / 结构性改动 → 派 `protodesign-developer` 或 `protodesign-developer-flutter`,注入失败清单与证据;
 - 单点 tweak → Main 直接改;
-- 修完先跑一次相关的 `make smoke SPECS="..."` 快速确认,再派一次**对应载体**的 verifier(scope 收窄到失败的那一层),不要每次全量重跑。
+- 修完先跑一次相关的 `make quick-check`(必要时加 `GREP` / `LAST_FAILED=1`)快速确认,再派一次**对应载体**的 verifier(scope 收窄到失败的那一层),不要每次全量重跑。
 
 ## 更新基线(`--update`)
 

@@ -59,7 +59,7 @@ disable-model-invocation: true
    - 单点 tweak → Main 直接改。
 3. 回修后跑快检:
    ```bash
-   make smoke SPECS="<相关 spec>"
+   make quick-check SPECS="<相关 spec>" GREP="<相关测试名或 area>"
    ```
 4. 重派同模式 reviewer。循环至:
    - `scoped`:0 Critical;

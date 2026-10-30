@@ -64,9 +64,10 @@ Flutter 的渲染一致性比 WebView 好得多,但仍有天然差异,校准时�
 
 | 层次 | 手段 | 命令 |
 | --- | --- | --- |
+| 日常迭代 | `flutter analyze` + 非 golden 用例(快检默认 `--exclude-tags golden`) | `make quick-check` |
 | 日常迭代 | `flutter run -d chrome`(浏览器里看布局与视觉,快) | `make run` |
-| 静态分析 | `flutter analyze` | `make calibrate` |
-| 组件视觉回归 | golden 测试(像素比对) | `make calibrate` |
+| 静态分析 | `flutter analyze` | `make quick-check` / `make calibrate` |
+| 组件视觉回归 | golden 测试(像素比对) | `make calibrate`(快检默认排除,`TEST_TAGS=golden` 时才跑) |
 | **平台特有交互验收** | **模拟器 / 真机**(手势、键盘、安全区、权限 —— 浏览器里假不出来) | 手工 |
 
 > 浏览器只能验"长什么样",验不了"手感对不对"。手势返回、软键盘、安全区、权限弹窗**必须上真机或模拟器**。

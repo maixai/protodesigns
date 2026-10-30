@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:component": "vitest run --project component",
+    "test:component:watch": "vitest --project component",
+    "test:storybook": "vitest run --project storybook",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -29,15 +34,25 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@storybook/addon-docs": "10.2.9",
+    "@storybook/addon-vitest": "10.2.9",
+    "@storybook/vue3-vite": "10.2.9",
     "@types/node": "^24.13.3",
     "@typespec/compiler": "^1.16.0",
     "@typespec/http": "^1.16.0",
     "@typespec/json-schema": "^1.16.0",
     "@typespec/openapi3": "^1.16.0",
     "@vitejs/plugin-vue": "^6.0.8",
+    "@vitest/browser": "4.0.7",
+    "@vitest/browser-playwright": "4.0.7",
+    "@vue/test-utils": "2.5.1",
+    "happy-dom": "21.0.4",
     "json-schema-to-typescript": "^16.0.0",
+    "playwright": "1.63.0",
+    "storybook": "10.2.9",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
+    "vitest": "4.0.7",
     "vue-tsc": "^3.3.11"
   }
 }

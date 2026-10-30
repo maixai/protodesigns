@@ -5,7 +5,7 @@ HOST ?= 0.0.0.0
 PORT ?= 5173
 PNPM ?= pnpm
 
-.PHONY: deps run build serve list help
+.PHONY: deps run build serve list help quick-all verify-all
 
 # 安装 preview 与全部原型的依赖(新克隆的仓库先跑一次)。
 # 各原型装什么由 Make.def / Make.def.flutter 定义,这里只负责遍历调用,不重复实现。
@@ -33,6 +33,35 @@ serve: build ## 先 build,再启动静态 serve
 # 打印 registry 摘要(各 proto 的 slug / name / owner / updated_at)
 list: ## 打印 registry 摘要(slug / name / owner / updated_at)
 	@node --input-type=module -e "import { readFile } from 'node:fs/promises'; try { const r = JSON.parse(await readFile('preview/src/generated/protos-registry.json', 'utf8')); console.log('total protos: ' + r.protos.length); for (const p of r.protos) console.log(p.slug + '\t' + p.name + '\t' + p.owner + '\t' + p.updated_at) } catch (err) { console.error('registry not found, run: make build'); process.exit(1) }"
+
+# 对所有原型跑日常快检(组件测试 + 页面快检)。
+quick-all: ## 对所有原型跑日常快检(组件 + 页面)
+	@port=5190; \
+	for d in protos/*/; do \
+	  [ -f "$$d/Makefile" ] || continue; \
+	  if grep -q 'Make.def.flutter' "$$d/Makefile" 2>/dev/null && ! command -v flutter >/dev/null 2>&1; then \
+	    echo "==> $$d (skip: flutter not found)"; \
+	    continue; \
+	  fi; \
+	  echo "==> $$d (PORT=$$port)"; \
+	  $(MAKE) -C "$$d" quick-all PORT=$$port || exit 1; \
+	  port=$$((port + 1)); \
+	done
+
+# 对所有原型跑全量校准;未安装 Flutter 时跳过 mobile 原型。
+verify-all: ## 对所有原型跑全量校准(无 Flutter SDK 时跳过 mobile)
+	@port=5290; \
+	for d in protos/*/; do \
+	  [ -f "$$d/Makefile" ] || continue; \
+	  if grep -q 'Make.def.flutter' "$$d/Makefile" 2>/dev/null && ! command -v flutter >/dev/null 2>&1; then \
+	    echo "==> $$d (skip: flutter not found)"; \
+	    continue; \
+	  fi; \
+	  echo "==> $$d (PORT=$$port)"; \
+	  $(MAKE) -C "$$d" storybook-test; \
+	  $(MAKE) -C "$$d" calibrate PORT=$$port || exit 1; \
+	  port=$$((port + 1)); \
+	done
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \

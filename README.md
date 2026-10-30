@@ -72,27 +72,51 @@ contracts/main.tsp ──┬─→ contracts/generated/openapi/openapi.yaml
 
 | 目标 | 层 | 覆盖 | 何时跑 |
 | --- | --- | --- | --- |
-| `make smoke` | **快速冒烟** | 仓库级通用兜底(`tests/smoke/`:未捕获异常与 console error、失败请求、375/768/1280/1600 横向溢出);加 `SPECS` 指定的本原型断言 | **每次改动后必跑**,不阻塞交付 |
+| `make quick-component` | **组件测试** | `tests/component/` 的 props / emits / 键盘 / 状态分支(Vitest + happy-dom) | **每次改动后必跑**,秒级 |
+| `make quick-check` | **日常快检** | L0 通用冒烟 + `tests/quick/` 的 area 断言 + 90 秒硬预算 | **每次改动后必跑**,≤ 90 秒 |
+| `make quick-check AUTO=1` | 自动选测 | 按 `tests/impact-map.json` 从 git diff 选 area | 日常首选 |
+| `make storybook` | 组件工作台 | stories 的组件预览(端口 6006) | 人工视觉评审 |
+| `make storybook-test` | 视觉用例 | stories 的真浏览器渲染 | 视觉基线/手动 |
+| `make smoke` | 通用冒烟 | 仓库级兜底(`tests/smoke/`) | 兼容旧命令 |
 | `make smoke-full` | 全量冒烟 | 全部 `tests/calibrate/` 断言(单引擎、不看像素) | 手动,或 `/protodesign-verify` |
 | `make calibrate` | 回归比对 | 双引擎(Chromium + WebKit)逐宽度截图 + 断言不破版 | 手动,或 `/protodesign-verify` |
 | `make calibrate-update` | 基线更新 | 重新生成截图基线(改动的图需过目) | 人工确认变化预期之后 |
 
 ```bash
-make smoke                                              # 通用兜底,秒级
-make smoke SPECS="tests/calibrate/account.spec.ts"      # 加上本次相关的断言
-make smoke-full                                         # 全量单引擎
-make calibrate                                           # 双引擎校准(慢,含像素比对)
+make quick-component                                    # 组件测试,秒级
+make quick-check AUTO=1                                 # 自动按 impact map 选 area
+make quick-check GREP="@area:agent-settings"            # 手动选 area
+make quick-check LAST_FAILED=1                          # 只重跑上一轮失败项
+make quick-all                                          # 组件 + 页面
+make smoke-full                                         # 全量单引擎(手动)
+make calibrate                                          # 双引擎校准(慢,含像素比对)
 ```
 
-**`make smoke` 默认只跑通用兜底**;本原型在 `tests/calibrate/` 里写的断言按改动范围用 `SPECS` 显式指定,不会自动全量执行。全量单引擎归 `make smoke-full`,双引擎与像素归 `make calibrate` —— 这两者都通过 `/protodesign-verify` 手动触发。
+**日常只跑 `make quick-component` + `make quick-check`**;`tests/quick/` 未覆盖的机械项在交付摘要里登记“未覆盖”,不要拿全量去补。全量单引擎归 `make smoke-full`,双引擎与像素归 `make calibrate` —— 这两者都通过 `/protodesign-verify` 手动触发。分层与 area 规则见 `.claude/rules/component-testing.md`。
 
-**改动原型后至少跑一次 `make smoke`**;`baseline-web.md` 的四宽度要求由它断言,不靠目视。
+### 组件工作流
+
+每个原型按同一套目录组织测试:
+
+```text
+tests/smoke/       L0 通用兜底(console error / 失败请求 / 四宽度溢出)
+tests/quick/       L1 日常功能快检,标题带 @area:<name>
+tests/calibrate/   L2 全量几何 / 像素 / 多宽度矩阵(手动)
+tests/component/   L1 组件测试(Vitest + Vue Test Utils)
+tests/impact-map.json   源文件路径 -> area,供 make quick-check AUTO=1
+src/**/*.stories.ts      Storybook 组件预览与视觉用例
+.storybook/              Storybook 配置
+```
+
+`protos/example-web/` 是模板,新建原型复制它即可带上整套组件工作流;`protos/maixmia-website/` 是首个完整接入的存量原型。
 
 ## 根级工作流(聚合预览)
 
 | 目标 | 含义 |
 | --- | --- |
 | `make deps` | 安装 preview 与全部原型的依赖(新克隆后先跑一次) |
+| `make quick-all` | 对所有原型跑日常快检(组件 + 页面) |
+| `make verify-all` | 对所有原型跑全量校准(无 Flutter SDK 时跳过 mobile) |
 | `make run` | 聚合 + 构建 + 静态服务(前台阻塞) |
 | `make build` | 仅聚合 + 统一构建 |
 | `make list` | 打印各原型的 slug / name / owner / updated_at |
@@ -162,7 +186,7 @@ protos/<slug>/
     └── contracts/generated/      # 生成的类型,不入库
 ```
 
-> mobile 原型没有 `tests/smoke/` 与 `tests/calibrate/`:它的确定性层是 `test/` 下的 golden 测试,由 `make smoke`(= `make calibrate`)跑 `flutter analyze` + `flutter test`。
+> mobile 原型没有 `tests/smoke/` 与 `tests/quick/`:它的确定性层是 `test/` 下的 golden 测试。日常用 `make quick-check TEST_NAME=...`(analyze + 指定用例),全量 `make smoke`(= `make calibrate`)跑 `flutter analyze` + `flutter test`。
 
 ## 更多约定
 

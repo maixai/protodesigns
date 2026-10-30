@@ -15,7 +15,6 @@ import RecoveryKeyDialog from './recovery-key-dialog.vue'
 
 type AccountTab = 'account' | 'security'
 type SecuritySubview = 'addPasskey' | 'recovery' | null
-type SecuritySection = 'passkeys' | 'identity'
 type VaultState =
   | { status: 'loading' }
   | { status: 'error' }
@@ -31,8 +30,6 @@ const body = ref<HTMLElement | null>(null)
 const state = ref<VaultState>({ status: 'loading' })
 const activeTab = ref<AccountTab>('account')
 const subview = ref<SecuritySubview>(null)
-const activeSecuritySection = ref<SecuritySection>('passkeys')
-const securitySections = ['passkeys', 'identity'] satisfies SecuritySection[]
 const avatarInput = ref<HTMLInputElement | null>(null)
 const avatarButton = ref<HTMLButtonElement | null>(null)
 const isAvatarReading = ref(false)
@@ -150,25 +147,6 @@ function onTabKeydown(event: KeyboardEvent): void {
   if (tab === undefined) return
   event.preventDefault()
   void activateTab(tab, true)
-}
-
-async function activateSecuritySection(section: SecuritySection, focus = false): Promise<void> {
-  if (subview.value !== null) return
-  activeSecuritySection.value = section
-  await nextTick()
-  if (body.value !== null) body.value.scrollTop = 0
-  if (focus) document.getElementById(`workspace-account-security-section-tab-${section}`)?.focus()
-}
-
-function onSecuritySectionKeydown(event: KeyboardEvent): void {
-  const current = securitySections.indexOf(activeSecuritySection.value)
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? securitySections.length - 1
-    : event.key === 'ArrowRight' ? (current + 1) % securitySections.length
-      : event.key === 'ArrowLeft' ? (current + securitySections.length - 1) % securitySections.length : -1
-  const section = securitySections[index]
-  if (section === undefined) return
-  event.preventDefault()
-  void activateSecuritySection(section, true)
 }
 
 function openAvatarPicker(): void {
@@ -349,7 +327,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="state.status === 'ready'" class="account-security__tabs" role="tablist" :aria-label="copy.accountTabsLabel" @keydown="onTabKeydown">
-      <button v-for="tab in tabs" :id="`workspace-account-tab-${tab}`" :key="tab" type="button" role="tab" :disabled="isEditingNickname || subview !== null" :aria-selected="activeTab === tab" :aria-controls="`workspace-account-panel-${tab}`" :tabindex="activeTab === tab ? 0 : -1" @click="activateTab(tab)">{{ tab === 'account' ? copy.accountTab : copy.identitySecurityTab }}</button>
+      <button v-for="tab in tabs" :id="`workspace-account-tab-${tab}`" :key="tab" type="button" role="tab" :disabled="isEditingNickname || subview !== null" :aria-selected="activeTab === tab" :aria-controls="`workspace-account-panel-${tab}`" :tabindex="activeTab === tab ? 0 : -1" @click="activateTab(tab)">{{ tab === 'account' ? copy.accountTab : copy.passkeysTab }}</button>
     </div>
 
     <div ref="body" class="account-security__body" :aria-busy="state.status === 'loading'">
@@ -391,23 +369,27 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="profileFeedback !== null" id="workspace-profile-feedback" class="account-security__avatar-feedback" :data-tone="profileFeedback.kind" :role="profileFeedback.kind === 'error' ? 'alert' : 'status'" data-avatar-feedback data-profile-feedback>{{ profileFeedback.message }}</p>
             <input ref="avatarInput" class="account-security__avatar-input" data-avatar-input type="file" :accept="ACCOUNT_AVATAR_ACCEPT" @change="onAvatarChange">
+            <section class="account-security__identity-group" aria-labelledby="workspace-account-identity-label">
+              <h3 id="workspace-account-identity-label" class="account-security__group-label">{{ copy.identityGroup }}</h3>
+              <dl class="account-security__facts" aria-labelledby="workspace-account-identity-label">
+                <div><dt>{{ copy.identityStatus }}</dt><dd>{{ copy.vaultStates[state.vault.state] }}</dd></div>
+                <div data-public-key>
+                  <dt>{{ copy.publicKey }}</dt>
+                  <dd class="account-security__public-key-line">
+                    <code class="account-security__fingerprint" data-public-fingerprint :title="state.vault.fingerprint">{{ state.vault.fingerprint }}</code>
+                    <span class="account-security__key-version" :title="`${copy.keyVersion} · v${state.vault.keyVersion}`">v{{ state.vault.keyVersion }}</span>
+                    <button type="button" class="account-security__icon-button account-security__copy-key" data-copy-public-key :aria-label="copy.copyPublicKey" :title="copy.copyPublicKey" @click="copyPublicKey"><DliIcon name="copy" size="sm" /></button>
+                  </dd>
+                </div>
+                <div><dt>{{ copy.lastUnlockedAt }}</dt><dd><time :datetime="state.vault.lastUnlockedAt || undefined">{{ formatDate(state.vault.lastUnlockedAt, true) }}</time></dd></div>
+              </dl>
+            </section>
           </section>
 
-          <section v-show="activeTab === 'security'" id="workspace-account-panel-security" class="account-security__page account-security__page--security" role="tabpanel" aria-labelledby="workspace-account-tab-security" tabindex="0">
-            <div class="account-security__subtabs model-subtabs">
-              <div class="account-security__subtabs-track model-subtabs__track" role="tablist" :aria-label="copy.securitySectionsLabel" @keydown.stop="onSecuritySectionKeydown">
-                <button
-                  v-for="section in securitySections" :id="`workspace-account-security-section-tab-${section}`" :key="section"
-                  type="button" role="tab" :disabled="subview !== null" :aria-selected="activeSecuritySection === section"
-                  :aria-controls="`workspace-account-security-section-panel-${section}`" :tabindex="activeSecuritySection === section ? 0 : -1"
-                  @click="activateSecuritySection(section)"
-                >{{ copy.securitySections[section] }}</button>
-              </div>
-            </div>
-            <section v-show="activeSecuritySection === 'passkeys'" id="workspace-account-security-section-panel-passkeys" class="account-security__section" role="tabpanel" aria-labelledby="workspace-account-security-section-tab-passkeys" tabindex="0">
-              <AddPasskeyDialog v-if="subview === 'addPasskey'" :open="true" :capability="state.capability" @close="closeAdd" @updated="updateVault" />
-              <RecoveryKeyDialog v-else-if="subview === 'recovery'" :open="true" :configured="state.vault.recoveryKeyConfigured" @close="closeRecovery" @updated="updateVault" />
-              <div v-show="subview === null" class="account-security__section">
+          <section v-show="activeTab === 'security'" id="workspace-account-panel-security" class="account-security__page" role="tabpanel" aria-labelledby="workspace-account-tab-security" tabindex="0">
+            <AddPasskeyDialog v-if="subview === 'addPasskey'" :open="true" :capability="state.capability" @close="closeAdd" @updated="updateVault" />
+            <RecoveryKeyDialog v-else-if="subview === 'recovery'" :open="true" :configured="state.vault.recoveryKeyConfigured" @close="closeRecovery" @updated="updateVault" />
+            <div v-show="subview === null" class="account-security__section">
               <header class="account-security__heading">
                 <h3 id="settings-passkeys-title">{{ copy.passkeysTitle }} <span class="account-security__count">{{ String(state.vault.passkeys.length).padStart(2, '0') }}</span></h3>
                 <button ref="addButton" type="button" class="account-security__button account-security__primary" data-add-passkey @click="openAdd"><DliIcon name="passkey" />{{ copy.addPasskey }}</button>
@@ -442,24 +424,7 @@ onBeforeUnmount(() => {
                 <p class="account-security__muted">{{ copy.recoveryHintOnce }}</p>
                 <button ref="recoveryButton" type="button" class="account-security__button" data-recovery-generate @click="openRecovery">{{ state.vault.recoveryKeyConfigured ? copy.regenerateRecoveryKey : copy.generateRecoveryKey }}</button>
               </section>
-              </div>
-            </section>
-
-            <section v-show="activeSecuritySection === 'identity'" id="workspace-account-security-section-panel-identity" class="account-security__identity-group" role="tabpanel" aria-labelledby="workspace-account-security-section-tab-identity" tabindex="0">
-              <h3 id="workspace-account-identity-label" class="account-security__group-label">{{ copy.identityGroup }}</h3>
-              <dl class="account-security__facts" aria-labelledby="workspace-account-identity-label">
-                <div><dt>{{ copy.identityStatus }}</dt><dd>{{ copy.vaultStates[state.vault.state] }}</dd></div>
-                <div data-public-key>
-                  <dt>{{ copy.publicKey }}</dt>
-                  <dd class="account-security__public-key-line">
-                    <code class="account-security__fingerprint" data-public-fingerprint :title="state.vault.fingerprint">{{ state.vault.fingerprint }}</code>
-                    <span class="account-security__key-version" :title="`${copy.keyVersion} · v${state.vault.keyVersion}`">v{{ state.vault.keyVersion }}</span>
-                    <button type="button" class="account-security__icon-button account-security__copy-key" data-copy-public-key :aria-label="copy.copyPublicKey" :title="copy.copyPublicKey" @click="copyPublicKey"><DliIcon name="copy" size="sm" /></button>
-                  </dd>
-                </div>
-                <div><dt>{{ copy.lastUnlockedAt }}</dt><dd><time :datetime="state.vault.lastUnlockedAt || undefined">{{ formatDate(state.vault.lastUnlockedAt, true) }}</time></dd></div>
-              </dl>
-            </section>
+            </div>
           </section>
       </template>
     </div>
@@ -541,12 +506,6 @@ h3 { font-size: var(--dl-font-size-lg); font-weight: 500; line-height: var(--dl-
 .account-security__page, .account-security__section { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 .account-security__page { gap: var(--dl-space-8); }
 .account-security__page--account { gap: var(--dl-space-6); }
-.account-security__page--security { gap: var(--dl-space-3); }
-.account-security__subtabs { position: sticky; inset-block-start: calc(-1 * var(--dl-space-1)); z-index: var(--dl-z-sticky); min-inline-size: 0; padding-block: var(--dl-space-1); background: var(--dl-bg-elevated); }
-.account-security__subtabs-track { display: flex; gap: var(--dl-space-1); min-inline-size: 0; max-inline-size: 100%; padding: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); overflow-x: auto; }
-.account-security__subtabs-track button { display: inline-flex; flex: 1 0 auto; align-items: center; justify-content: center; min-inline-size: 0; min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-1); border: 0; border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); white-space: nowrap; }
-.account-security__subtabs-track button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.account-security__subtabs-track button[aria-selected='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
 .account-security [role='tabpanel']:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); border-radius: var(--dl-radius-sm); }
 .account-security__identity-group { display: grid; gap: var(--dl-space-3); }
 .account-security__group-label { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); font-weight: 500; letter-spacing: var(--dl-tracking-label); }

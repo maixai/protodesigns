@@ -39,7 +39,7 @@ test('身份 gate:首次锁定、Esc 不关闭、模拟 Passkey 与主动锁定'
   await page.locator('.workspace-dock__settings-trigger').click()
   await page.getByRole('button', { name: '账户与安全', exact: true }).click()
   const dialog = page.locator('#workspace-account-security-dialog')
-  await dialog.getByRole('tab', { name: '身份安全', exact: true }).click()
+  await dialog.getByRole('tab', { name: '通行证', exact: true }).click()
   await expect(dialog.locator('[data-settings-passkeys] li')).toHaveCount(3)
   await expect(dialog.getByRole('button', { name: /管理身份|锁定/ })).toHaveCount(0)
   await expect(page.locator('#workspace-settings-drawer')).toHaveCount(0)

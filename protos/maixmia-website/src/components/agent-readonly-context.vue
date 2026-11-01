@@ -125,7 +125,7 @@ watch(() => [props.kind, props.agent.id], () => {
     <template v-else-if="kind === 'permissions' && permissions">
       <dl class="agent-context__facts">
         <div><dt>{{ t.workspace.permissions.defaultMode }}</dt><dd>{{ t.workspace.permissions.modes[permissions.defaultMode] }}</dd></div>
-        <div><dt>{{ t.workspace.projectSettings.agentContext.ruleCounts }}</dt><dd>deny {{ permissionCounts.deny }} · ask {{ permissionCounts.ask }} · allow {{ permissionCounts.allow }}</dd></div>
+        <div><dt>{{ t.workspace.projectSettings.agentContext.ruleCounts }}</dt><dd>{{ t.workspace.permissions.kinds.allow }} {{ permissionCounts.allow }} · {{ t.workspace.permissions.kinds.deny }} {{ permissionCounts.deny }} · {{ t.workspace.permissions.kinds.ask }} {{ permissionCounts.ask }}</dd></div>
       </dl>
     </template>
 
@@ -141,7 +141,7 @@ watch(() => [props.kind, props.agent.id], () => {
       <p v-if="kind === 'model'" class="agent-context__detail"><code>{{ agent.model.source.activeSourceId || t.workspace.projectSettings.sourceNone }}</code></p>
       <div v-else-if="kind === 'permissions' && permissions && status === 'ready'" class="agent-context__rules">
         <section v-for="ruleKind in RULE_ORDER" :key="ruleKind">
-          <h4>{{ t.workspace.permissions.kinds[ruleKind] }} <code>{{ ruleKind }}</code></h4>
+          <h4>{{ t.workspace.permissions.kinds[ruleKind] }}</h4>
           <ul><li v-for="rule in permissions.rules.filter((item) => item.kind === ruleKind)" :key="rule.id"><code>{{ rule.pattern }}</code></li></ul>
         </section>
       </div>

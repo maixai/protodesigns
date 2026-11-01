@@ -2,11 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgentReadonlyContext from '../../src/components/agent-readonly-context.vue'
 import * as api from '../../src/api/agent-mcp'
+import * as permissionApi from '../../src/api/agent-permissions'
 import { mockAgentSummaries } from '../../src/mocks/workspace'
 import { mockListAgentMcpServers, mockListProjectMcpServers } from '../../src/mocks/agent-mcp'
+import { mockGetAgentPermissions } from '../../src/mocks/agent-permissions'
 import { useI18n } from '../../src/i18n'
 
 vi.mock('../../src/api/agent-mcp', () => ({ listAgentMcpServers: vi.fn() }))
+vi.mock('../../src/api/agent-permissions', () => ({ getAgentPermissions: vi.fn() }))
 const agent = mockAgentSummaries()[0]
 if (agent === undefined) throw new Error('Missing Agent context fixture')
 
@@ -32,6 +35,33 @@ describe('agent readonly context', () => {
     expect(wrapper.find(`#${controlledId}`).exists()).toBe(true)
     expect(wrapper.findAll('.agent-context__server')).toHaveLength(4)
     expect(wrapper.text()).not.toContain('工具描述')
+    wrapper.unmount()
+  })
+
+  it('uses only localized Chinese group names in permission counts and expanded headings', async () => {
+    useI18n().setLocale('zh-CN')
+    vi.mocked(permissionApi.getAgentPermissions).mockImplementation(async (agentId) => ({ ok: true, value: mockGetAgentPermissions(agentId) }))
+    const wrapper = mount(AgentReadonlyContext, { props: { kind: 'permissions', agent } })
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('.agent-context__facts').text()).toContain('允许 3 · 拒绝 2 · 询问 2')
+    expect(wrapper.get('.agent-context__facts').text()).not.toContain('allow 3')
+    await wrapper.get('.agent-context__disclosure').trigger('click')
+    expect(wrapper.findAll('.agent-context__rules h4').map((heading) => heading.text())).toEqual(['拒绝', '询问', '允许'])
+    expect(wrapper.find('.agent-context__rules h4 code').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('uses only localized English group names in permission counts and expanded headings', async () => {
+    useI18n().setLocale('en')
+    vi.mocked(permissionApi.getAgentPermissions).mockImplementation(async (agentId) => ({ ok: true, value: mockGetAgentPermissions(agentId) }))
+    const wrapper = mount(AgentReadonlyContext, { props: { kind: 'permissions', agent } })
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('.agent-context__facts').text()).toContain('Allow 3 · Deny 2 · Ask 2')
+    await wrapper.get('.agent-context__disclosure').trigger('click')
+    expect(wrapper.findAll('.agent-context__rules h4').map((heading) => heading.text())).toEqual(['Deny', 'Ask', 'Allow'])
+    expect(wrapper.find('.agent-context__rules h4 code').exists()).toBe(false)
     wrapper.unmount()
   })
 

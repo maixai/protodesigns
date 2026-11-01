@@ -5,6 +5,10 @@
       "area": "agent-settings",
       "paths": [
         "src/components/agent-editor-dialog.vue",
+        "src/components/agent-permissions.vue",
+        "src/components/agent-permissions.stories.ts",
+        "src/api/agent-permissions.ts",
+        "src/mocks/agent-permissions.ts",
         "src/components/agent-avatar.ts",
         "src/components/account-avatar.ts",
         "src/mocks/workspace.ts",
@@ -37,12 +41,49 @@
       ]
     },
     {
+      "area": "project-settings",
+      "paths": [
+        "src/components/project-config-shell.vue",
+        "src/components/project-model-dialog.vue",
+        "src/components/project-permission-dialog.vue",
+        "src/components/project-mcp-dialog.vue",
+        "src/components/agent-readonly-context.vue",
+        "src/components/agent-permissions.vue",
+        "src/api/project-settings.ts",
+        "src/api/agent-permissions.ts",
+        "src/api/agent-mcp.ts",
+        "src/mocks/project-settings.ts",
+        "src/mocks/agent-permissions.ts",
+        "src/mocks/agent-mcp.ts",
+        "src/data/project-model-settings.ts",
+        "contracts/main.tsp",
+        "src/i18n/messages/*/workspace.ts"
+      ]
+    },
+    {
       "area": "project-menu",
       "paths": [
         "src/components/project-menu.vue",
         "src/components/project-picker-*.vue",
         "src/mocks/workspace.ts",
         "src/data/project-*.ts"
+      ]
+    },
+    {
+      "area": "agent-tools",
+      "paths": [
+        "src/components/agent-mcp.vue",
+        "src/components/agent-mcp.stories.ts",
+        "src/components/agent-permissions.vue",
+        "src/components/agent-permissions.stories.ts",
+        "src/components/sidebar-view-tabs.vue",
+        "src/api/agent-mcp.ts",
+        "src/api/agent-permissions.ts",
+        "src/mocks/agent-mcp.ts",
+        "src/mocks/agent-permissions.ts",
+        "src/pages/workspace-page.vue",
+        "contracts/main.tsp",
+        "src/i18n/messages/*/workspace.ts"
       ]
     },
     {

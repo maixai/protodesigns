@@ -1,0 +1,77 @@
+import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { collectRuntimeIssues, login, waitForWorkspace } from './helpers'
+import { unlockDemoIdentity } from '../calibrate/identity-helpers'
+
+test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
+async function expectNoTabOverflow(page: Page): Promise<void> {
+  const tabs = page.locator('.view-tabs')
+  await expect(tabs).toBeVisible()
+  expect(await tabs.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+}
+
+test('@area:agent-tools 三 tab、Agent-only MCP、作用域说明与即时操作', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const tabs = page.getByRole('tablist', { name: '侧栏视图' })
+  await expect(tabs.getByRole('tab')).toHaveCount(3)
+  await expect(tabs.locator('.view-tabs__label')).toHaveText(['项目', '插件', 'MCP'])
+  await expect(tabs.getByRole('tab', { name: /^MCP/ })).toContainText('4')
+  await tabs.getByRole('tab', { name: /^MCP/ }).click()
+  const panel = page.locator('.agent-mcp')
+  await expect(panel.locator('.mcp-row')).toHaveCount(4)
+  await expect(panel.locator('[data-group="project"]')).toHaveCount(0)
+  await expect(panel).toContainText('Agent 级 MCP，项目默认继承；项目可用同名服务器覆盖')
+  const tip = panel.locator('.mcp-project-tip')
+  await expect(tip).toHaveText('项目自有 MCP 在项目 ⋯ → MCP 中配置。')
+  await expect(tip.locator('button, a')).toHaveCount(0)
+  await panel.getByRole('button', { name: '认证「Sentry」', exact: true }).click()
+  await expect(panel.locator('[data-server-id="agent:planning:sentry"]')).toContainText('已连接')
+  await panel.getByRole('switch', { name: '停用「GitHub」', exact: true }).click()
+  await expect(panel.locator('[data-server-id="agent:planning:github"]')).toContainText('已停用')
+  await panel.getByRole('button', { name: '添加 MCP 服务器', exact: true }).first().click()
+  await panel.locator('#agent-mcp-planning-name').fill('linear')
+  await panel.locator('#agent-mcp-planning-endpoint').fill('npx -y @example/linear-mcp')
+  await panel.getByRole('button', { name: '添加服务器', exact: true }).click()
+  await expect(panel.locator('.mcp-row')).toHaveCount(5)
+  await expect(tabs.getByRole('tab', { name: /^MCP/ })).toContainText('5')
+  await expect(panel.getByRole('button', { name: '保存', exact: true })).toHaveCount(0)
+  await expect(panel).not.toContainText('项目设置')
+  await expect(panel).not.toContainText('.mcp.json')
+  expect(issues).toEqual([])
+})
+
+test('@area:agent-tools Agent MCP 加载失败可重试且不显示假计数', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await page.goto('/#/workspace?s=error')
+  await page.locator('.agent-context-switcher__trigger').click()
+  await page.locator('.agent-context-switcher__option[data-agent="research"]').click()
+  await page.locator('#sidebar-view-tab-mcp').click()
+  const panel = page.locator('.agent-mcp')
+  await expect(panel.getByRole('alert')).toContainText('MCP 数据加载失败')
+  await expect(page.getByRole('tab', { name: /^MCP/ })).not.toContainText('0')
+  await expect(panel.getByRole('button', { name: '重试', exact: true })).toBeVisible()
+})
+
+test.describe('English sidebar geometry', () => {
+  test.use({ locale: 'en-US' })
+  test('@area:agent-tools 英文三 tab 与 MCP 在 375 抽屉下无横向溢出', async ({ page }) => {
+    const issues = collectRuntimeIssues(page)
+    await page.setViewportSize({ width: 375, height: 900 })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await unlockDemoIdentity(page)
+    await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+    await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+    const tabs = page.getByRole('tablist', { name: 'Sidebar view' })
+    await expect(tabs.locator('.view-tabs__label')).toHaveText(['Projects', 'Plugins', 'MCP'])
+    await expectNoTabOverflow(page)
+    await page.locator('#sidebar-view-tab-mcp').click()
+    const mcpScroll = page.locator('#sidebar-view-panel-mcp .sidebar-pane__scroll')
+    expect(await mcpScroll.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+    expect(issues).toEqual([])
+  })
+})

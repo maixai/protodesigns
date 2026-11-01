@@ -250,7 +250,7 @@ for (const width of [375, 768, 1280, 1600]) {
     const dialog = page.getByRole('dialog', { name: 'Agent 设置', exact: true })
     const panel = dialog.getByTestId('agent-identity-security')
     const status = dialog.locator('#agent-identity-status')
-    await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveText(['基本', '模型'])
+    await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveText(['基本', '模型', '权限'])
     await expect(dialog.getByRole('tab', { name: '基本', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(panel.getByTestId('agent-identity-toggle')).toHaveAttribute('aria-expanded', 'true')
     await expect(status).toBeFocused()

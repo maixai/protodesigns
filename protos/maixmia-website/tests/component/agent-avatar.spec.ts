@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentEditorDialog from '../../src/components/agent-editor-dialog.vue'
 import AgentContextSwitcher from '../../src/components/agent-context-switcher.vue'
+import * as permissionApi from '../../src/api/agent-permissions'
 import { agentInitial } from '../../src/components/agent-avatar'
 import * as avatarReader from '../../src/components/account-avatar'
 import { mockAgentSummaries, mockCreateAgent, mockUpdateAgent, mockDeleteAgent } from '../../src/mocks/workspace'
@@ -9,6 +10,8 @@ import type { AgentConfig } from '../../src/contracts/generated/agent-config'
 import type { AgentSummary } from '../../src/contracts/generated/agent-summary'
 import { mockUnlockIdentity, mockLockIdentity } from '../../src/mocks/identity'
 import { mockCreatePairing, mockAgentPairingSecret, mockConnectPairingLink, mockRequestPairingApproval, mockAllowPairing, mockConfirmPairing } from '../../src/mocks/pairing'
+
+vi.mock('../../src/api/agent-permissions', () => ({ getAgentPermissions: vi.fn() }))
 
 const AVATAR_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const OTHER_AVATAR_URL = `${AVATAR_URL}#other`
@@ -38,6 +41,7 @@ async function selectImage(wrapper: Awaited<ReturnType<typeof editor>>): Promise
 }
 
 beforeEach(() => {
+  vi.mocked(permissionApi.getAgentPermissions).mockImplementation(async (agentId) => ({ ok: true, value: { agentId, defaultMode: 'default', rules: [] } }))
   vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(function (this: HTMLDialogElement) { this.open = true })
   vi.spyOn(HTMLDialogElement.prototype, 'close').mockImplementation(function (this: HTMLDialogElement) { this.open = false })
 })

@@ -7,41 +7,53 @@
 //
 // 触发钮平时不显示(见页面里 .project-row:hover / :focus-within 的规则),但仍在 DOM、
 // 可被 Tab 到达 —— 键盘操作者聚焦它时同样可见。
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../i18n'
 
-defineProps<{ projectName: string }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ projectName: string }>()
+const emit = defineEmits<{ close: []; configure: [kind: 'model' | 'permissions' | 'mcp'] }>()
 
 const { t } = useI18n()
 const isOpen = ref(false)
-// 浮层默认落在触发钮下方;若所在滚动容器(项目列表)下方空间不足(如列表最后一行),
-// 改为向上弹出,避免被容器的 overflow 裁掉。开合时实测一次,不做滚动跟随(菜单项只有一条)。
 const opensUpward = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
-// 浮层高度的估计值(一条菜单项的触达尺寸 + 内边距),只用于「下方是否放得下」的判断。
-const MENU_HEIGHT = 52
+const popoverRef = ref<HTMLElement | null>(null)
+const menuId = `project-menu-${Math.random().toString(36).slice(2)}`
 
-function measurePlacement(): void {
-  const trigger = triggerRef.value
-  const container = rootRef.value?.closest('.project-scroll')
-  if (trigger === null || !(container instanceof HTMLElement)) return
-  const triggerRect = trigger.getBoundingClientRect()
-  const containerRect = container.getBoundingClientRect()
-  opensUpward.value = containerRect.bottom - triggerRect.bottom < MENU_HEIGHT
+function menuItems(): HTMLButtonElement[] {
+  return Array.from(popoverRef.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
 }
 
-function toggle(event: MouseEvent): void {
-  if (isOpen.value) {
-    close(false)
-    return
-  }
-  measurePlacement()
+function focusItem(index: number): void {
+  const items = menuItems()
+  if (items.length === 0) return
+  const normalized = (index + items.length) % items.length
+  items[normalized]?.focus()
+}
+
+// 等浮层实际渲染后读取高度:四条菜单项 + 分隔线不再使用固定高度。
+// 只在下方不足且上方更宽裕时上翻,避免滚动容器顶部也没有空间时反而被裁。
+function measurePlacement(): void {
+  const trigger = triggerRef.value
+  const popover = popoverRef.value
+  const container = rootRef.value?.closest('.project-scroll')
+  if (trigger === null || popover === null || !(container instanceof HTMLElement)) return
+  const triggerRect = trigger.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const menuHeight = popover.getBoundingClientRect().height
+  const below = containerRect.bottom - triggerRect.bottom
+  const above = triggerRect.top - containerRect.top
+  opensUpward.value = below < menuHeight && above > below
+}
+
+async function open(focus: 'first' | 'last' | null): Promise<void> {
+  if (isOpen.value) return
   isOpen.value = true
-  // 指针打开时把焦点留在触发钮(Oprim 的 disclosure 语义):Esc 之后的归还目标始终明确。
-  if (event.detail === 0) return
-  triggerRef.value?.focus()
+  await nextTick()
+  measurePlacement()
+  if (focus === 'first') focusItem(0)
+  else if (focus === 'last') focusItem(-1)
 }
 
 function close(restoreFocus: boolean): void {
@@ -50,13 +62,41 @@ function close(restoreFocus: boolean): void {
   if (restoreFocus) triggerRef.value?.focus()
 }
 
+function toggle(): void {
+  if (isOpen.value) close(false)
+  else void open(null)
+}
+
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || !isOpen.value) return
+  if (!isOpen.value) {
+    if (event.target !== triggerRef.value) return
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      void open('first')
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      void open('last')
+    }
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    // 阻止冒泡:窄屏抽屉在 document 上也监听 Escape,一次按键只关最上层菜单。
+    event.stopPropagation()
+    close(true)
+    return
+  }
+  if (event.key === 'Tab') {
+    close(false)
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  // 阻止冒泡:窄屏抽屉在 document 上也监听 Escape(见 workspace-page 的 drawerKeyboard),
-  // 冒泡到那里会让一次 Escape 同时关掉菜单与抽屉,而期望是「先关最上层」。
-  event.stopPropagation()
-  close(true)
+  if (event.key === 'Home') { focusItem(0); return }
+  if (event.key === 'End') { focusItem(-1); return }
+  const current = menuItems().findIndex((item) => item === document.activeElement)
+  if (event.key === 'ArrowDown') focusItem(current < 0 ? 0 : current + 1)
+  else focusItem(current < 0 ? -1 : current - 1)
 }
 
 function onFocusOut(event: FocusEvent): void {
@@ -71,14 +111,19 @@ function onDocumentPointerDown(event: PointerEvent): void {
   close(false)
 }
 
+function chooseConfiguration(kind: 'model' | 'permissions' | 'mcp'): void {
+  // 先关菜单并把焦点还给 ⋯,再让父级开窗;窗体关闭后便能沿同一焦点链归还。
+  close(true)
+  emit('configure', kind)
+}
+
 onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   syncRowStacking(false)
 })
 
-// 项目行是 sticky + z-index,各自形成层叠上下文;菜单的 z-index 只在行内有效,
-// 越不过 DOM 更靠后的同级项目行。打开时给所在行抬一层,关闭即还原。
+// 项目行是 sticky + z-index,各自形成层叠上下文;打开时给所在行抬一层,关闭即还原。
 function syncRowStacking(open: boolean): void {
   const row = rootRef.value?.closest('.project-row')
   if (row instanceof HTMLElement) row.classList.toggle('project-row--menu-open', open)
@@ -90,14 +135,40 @@ watch(isOpen, syncRowStacking)
   <div ref="rootRef" class="project-menu" :class="{ 'is-open': isOpen }" @focusout="onFocusOut" @keydown="onKeydown">
     <button
       ref="triggerRef" type="button" class="project-menu__trigger"
-      :aria-label="`${t.workspace.projectActions}：${projectName}`"
-      :aria-expanded="isOpen" aria-haspopup="menu"
+      :aria-label="`${t.workspace.projectActions}：${props.projectName}`"
+      :aria-expanded="isOpen" aria-haspopup="menu" :aria-controls="isOpen ? menuId : undefined"
       @click="toggle"
     >
       <span aria-hidden="true">⋯</span>
     </button>
-    <div v-if="isOpen" class="project-menu__popover" :class="{ 'is-up': opensUpward }" role="menu">
-      <button type="button" class="project-menu__item" data-tone="danger" role="menuitem" @click="close(false); emit('close')">
+    <div v-if="isOpen" :id="menuId" ref="popoverRef" class="project-menu__popover" :class="{ 'is-up': opensUpward }" role="menu" :aria-label="`${t.workspace.projectActions}：${props.projectName}`">
+      <button
+        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
+        :aria-label="`${t.workspace.projectSettings.modelMenuLabel}：${props.projectName}`"
+        @click="chooseConfiguration('model')"
+      >
+        {{ t.workspace.projectSettings.modelMenuItem }}
+      </button>
+      <button
+        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
+        :aria-label="`${t.workspace.projectSettings.permissionMenuLabel}：${props.projectName}`"
+        @click="chooseConfiguration('permissions')"
+      >
+        {{ t.workspace.projectSettings.permissionMenuItem }}
+      </button>
+      <button
+        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
+        :aria-label="`${t.workspace.projectSettings.mcpMenuLabel}：${props.projectName}`"
+        @click="chooseConfiguration('mcp')"
+      >
+        {{ t.workspace.projectSettings.mcpMenuItem }}
+      </button>
+      <div class="project-menu__separator" role="separator" />
+      <button
+        type="button" class="project-menu__item" data-tone="danger" role="menuitem" tabindex="-1"
+        :aria-label="`${t.workspace.closeProject}：${props.projectName}`"
+        @click="close(false); emit('close')"
+      >
         {{ t.workspace.closeProject }}
       </button>
     </div>
@@ -153,7 +224,6 @@ watch(isOpen, syncRowStacking)
   border-radius: var(--dl-radius-md);
 }
 
-/* 下方空间不足时向上弹出(见脚本里的 measurePlacement)。 */
 .project-menu__popover.is-up {
   inset-block-start: auto;
   inset-block-end: calc(100% + var(--dl-space-1));
@@ -174,11 +244,7 @@ watch(isOpen, syncRowStacking)
 
 .project-menu__item[data-tone='danger'] { color: var(--dl-error); }
 
-.project-menu__item:hover {
-  background: var(--dl-bg-hover);
-}
-
-.project-menu__item:focus-visible {
-  box-shadow: var(--dl-focus-ring);
-}
+.project-menu__item:hover { background: var(--dl-bg-hover); }
+.project-menu__item:focus-visible { box-shadow: var(--dl-focus-ring); }
+.project-menu__separator { margin-block: var(--dl-space-1); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 </style>

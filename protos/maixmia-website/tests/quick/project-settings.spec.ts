@@ -1,0 +1,238 @@
+import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { collectRuntimeIssues, login, waitForWorkspace } from './helpers'
+import { unlockDemoIdentity } from '../calibrate/identity-helpers'
+
+// 三个项目领域各有独立窗体;旧合并设置不再存在。
+test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
+async function openConfig(page: Page, kind: 'model' | 'permissions' | 'mcp', projectIndex = 0) {
+  const trigger = page.locator('.project-item').nth(projectIndex).locator('.project-menu__trigger')
+  await trigger.click()
+  const name = kind === 'model' ? '模型设置' : kind === 'permissions' ? '权限设置' : 'MCP 设置'
+  await page.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.project-config__load-state')).toHaveCount(0)
+  return { trigger, dialog }
+}
+
+test('@area:project-settings 项目模型独立窗体在 follow/custom 都显示 Agent 只读事实并保存草稿', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { trigger, dialog } = await openConfig(page, 'model')
+  await expect(dialog).toContainText('项目模型 · weekly-report')
+  await expect(dialog.getByRole('tablist')).toHaveCount(1)
+  const context = dialog.locator('.agent-context[data-kind="model"]')
+  await expect(context).toContainText('Agent 级 · 只读 · 规划助手')
+  await expect(context).toContainText('Claude Sonnet 5.5')
+  await expect(context.locator('input, select')).toHaveCount(0)
+  await expect(context.getByRole('button')).toHaveCount(1)
+  await dialog.getByRole('radio', { name: '跟随 Agent', exact: true }).click()
+  await expect(context).toBeVisible()
+  await dialog.getByRole('radio', { name: '自定义', exact: true }).click()
+  await expect(context).toBeVisible()
+  await dialog.locator('[data-section="model"]').click()
+  await dialog.locator('select[id$="-effort"]').selectOption('max')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(trigger).toBeFocused()
+  const reopened = await openConfig(page, 'model')
+  await reopened.dialog.locator('[data-section="model"]').click()
+  await expect(reopened.dialog.locator('select[id$="-effort"]')).toHaveValue('max')
+  await reopened.dialog.locator('select[id$="-effort"]').selectOption('low')
+  await page.keyboard.press('Escape')
+  const discarded = await openConfig(page, 'model')
+  await discarded.dialog.locator('[data-section="model"]').click()
+  await expect(discarded.dialog.locator('select[id$="-effort"]')).toHaveValue('max')
+  await expect(discarded.dialog.locator('textarea')).toHaveCount(0)
+  await expect(discarded.dialog).not.toContainText('.mcp.json')
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 项目权限独立窗体支持继承/覆盖与跨 scope 追加，保存前不落库', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  let dialog = (await openConfig(page, 'permissions')).dialog
+  await expect(dialog).toContainText('项目权限 · weekly-report')
+  await expect(dialog.getByRole('tablist')).toHaveCount(0)
+  const context = dialog.locator('.agent-context[data-kind="permissions"]')
+  await expect(context).toContainText('deny 2 · ask 2 · allow 3')
+  await expect(context).toContainText('自动')
+  await context.getByRole('button').click()
+  await expect(context).toContainText('Read(./.env)')
+  const editor = dialog.locator('.permission-editor[data-scope="project"]')
+  const projectMode = editor.locator('[data-mode-trigger]')
+  await expect(projectMode).toHaveAccessibleName('模式 仅按规则')
+  await expect(projectMode).toHaveText('仅按规则')
+  await projectMode.click()
+  const inheritOption = editor.getByRole('listbox', { name: '模式', exact: true }).locator('[data-mode="inherit"]')
+  await expect(inheritOption).toContainText('使用 Agent 的默认权限模式，不在项目级覆盖。')
+  await inheritOption.click()
+  await expect(projectMode).toHaveText('继承 Agent')
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'dirty')
+  const ask = editor.locator('.permissions-rules[data-kind="ask"]')
+  await ask.getByRole('button', { name: '为「weekly-report」添加询问规则', exact: true }).click()
+  await editor.getByLabel('「weekly-report」的询问规则 specifier', { exact: true }).fill('WebFetch(domain:*)')
+  await ask.getByRole('button', { name: '添加', exact: true }).click()
+  await expect(ask).toContainText('WebFetch(domain:*)')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  dialog = (await openConfig(page, 'permissions')).dialog
+  await expect(dialog.locator('.permission-editor [data-mode-trigger]')).toHaveText('仅按规则')
+  await expect(dialog.locator('.permission-editor')).not.toContainText('WebFetch(domain:*)')
+  await dialog.locator('.permission-editor [data-mode-trigger]').click()
+  await dialog.locator('.permission-editor [data-mode="default"]').click()
+  await expect(dialog.locator('.permission-editor [data-mode-trigger]')).toHaveText('每次询问')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
+  await expect(dialog.locator('textarea')).toHaveCount(0)
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 项目 MCP 配置草稿与即时连接分离，同名遮蔽按定义而非启停', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openConfig(page, 'mcp')
+  await expect(dialog).toContainText('项目 MCP · weekly-report')
+  const context = dialog.locator('.agent-context[data-kind="mcp"]')
+  await expect(context).toContainText('Agent 服务器数')
+  await expect(context).toContainText('被项目同名定义遮蔽')
+  await expect(context.locator('.agent-context__facts')).toContainText('2')
+  await expect(dialog).toContainText('停用项目服务器也仍然遮蔽 Agent 同名服务器')
+  const github = dialog.locator('[data-server-id="project:~/work/weekly-report:github"]')
+  const connect = github.locator('.project-mcp__connection button')
+  await expect(connect).toBeEnabled()
+  await github.locator('input').nth(1).fill('GitHub Project')
+  await expect(connect).toBeDisabled()
+  await expect(github).toContainText('先保存配置')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  expect(issues).toEqual([])
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
+  await expect(connect).toBeEnabled()
+  await connect.click()
+  await expect(github).toContainText('已连接')
+  await expect(dialog).toContainText('连接操作 · 立即生效')
+  await expect(dialog).toContainText('保存后，Agent 的同名服务器将重新生效')
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 项目 MCP 启停保存后仍恢复需认证事实，不伪造已连接', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openConfig(page, 'mcp')
+  const github = dialog.locator('[data-server-id="project:~/work/weekly-report:github"]')
+  const enabled = github.locator('.project-mcp__enabled input')
+  await expect(github).toContainText('需认证')
+  await enabled.uncheck()
+  await expect(github).toContainText('需认证')
+  await expect(github).toContainText('待保存')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
+  await expect(github).toContainText('已停用')
+  await expect(github).not.toContainText('已连接')
+  await enabled.check()
+  await expect(github).toContainText('已停用')
+  await expect(github).toContainText('待保存')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
+  await expect(github).toContainText('需认证')
+  await expect(github).not.toContainText('已连接')
+  await expect(github.locator('.project-mcp__connection button')).toBeEnabled()
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 三个窗体在 375 与 1280 下均无横向溢出', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  for (const kind of ['model', 'permissions', 'mcp'] as const) {
+    const { dialog } = await openConfig(page, kind)
+    for (const width of [375, 1280]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (kind === 'permissions' && width === 375) {
+        await dialog.locator('[data-mode-trigger]').click()
+        const menu = dialog.getByRole('listbox', { name: '模式', exact: true })
+        await expect(menu.locator('[data-mode="dontAsk"]')).toContainText('询问规则按拒绝处理')
+        const geometry = await menu.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth
+        })
+        expect(geometry).toBe(true)
+        await page.keyboard.press('Escape')
+        await expect(dialog.locator('[data-mode-trigger]')).toBeFocused()
+      }
+    }
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  }
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 短视口下键盘移动焦点会把选项滚入菜单可视区', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openConfig(page, 'permissions')
+  await page.setViewportSize({ width: 375, height: 400 })
+  const trigger = dialog.locator('[data-mode-trigger]')
+  await trigger.focus()
+  await page.keyboard.press('ArrowDown')
+  const menu = dialog.getByRole('listbox', { name: '模式', exact: true })
+  await expect(menu).toBeVisible()
+  await page.keyboard.press('End')
+  await expect(menu.locator('[data-mode="bypassPermissions"]')).toBeFocused()
+  const geometry = await menu.evaluate((element) => {
+    const option = element.querySelector<HTMLElement>('[data-mode="bypassPermissions"]')
+    if (option === null) return null
+    const bounds = element.getBoundingClientRect()
+    const optionBounds = option.getBoundingClientRect()
+    return {
+      scrollTop: element.scrollTop,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      optionTop: optionBounds.top,
+      optionBottom: optionBounds.bottom,
+    }
+  })
+  expect(geometry).not.toBeNull()
+  if (geometry !== null) {
+    expect(geometry.scrollTop).toBeGreaterThan(0)
+    expect(geometry.optionTop).toBeGreaterThanOrEqual(geometry.top - 1)
+    expect(geometry.optionBottom).toBeLessThanOrEqual(geometry.bottom + 1)
+  }
+  expect(issues).toEqual([])
+})
+
+test.describe('English project configuration', () => {
+  test.use({ locale: 'en-US' })
+  test('@area:project-settings English project MCP stays within 375 and 1280 widths', async ({ page }) => {
+    const issues = collectRuntimeIssues(page)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await unlockDemoIdentity(page)
+    await expect(page.getByRole('log')).toHaveAttribute('data-state', 'ready')
+    await page.locator('.project-item').first().locator('.project-menu__trigger').click()
+    await page.getByRole('menuitem', { name: 'MCP settings：weekly-report', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toContainText('Project MCP · weekly-report')
+    await expect(dialog.locator('.agent-context')).toContainText('Agent level · read-only')
+    for (const width of [375, 1280]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    }
+    expect(issues).toEqual([])
+  })
+})

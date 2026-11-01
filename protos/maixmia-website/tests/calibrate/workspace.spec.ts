@@ -1602,11 +1602,11 @@ test('侧栏切换 Agent:项目列表随之更换', async ({ page }) => {
   await login(page)
   await waitForStable(page)
   const projects = page.locator('.workspace-projects')
-  // 侧栏顶部是项目 / 插件两个平级视图 tab;默认项目列表中每个 Agent 有两个项目。
+  // 侧栏顶部是项目 / 插件 / MCP 三个平级视图 tab;默认项目列表中每个 Agent 有两个项目。
   await expect(page.getByRole('button', { name: '关闭侧栏' })).toHaveCount(0)
   await expect(projects.getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
   // 只数顶层平级视图;项目内部始终只有文件树,没有内容 tab。
-  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(3)
   await expect(projects.locator('.project-item').getByRole('tab')).toHaveCount(0)
   await expect(projects.locator('.project-item')).toHaveCount(2)
   await selectAgent(page, AGENT_NAMES['zh-CN'].research)
@@ -1788,7 +1788,8 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
   const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
-  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(2)
+  const permissionsTab = dialog.getByRole('tab', { name: '权限', exact: true })
+  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(3)
   // 默认落在「模型 → 模型来源」;先验证基本页,再回到模型页。
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await basicTab.click()
@@ -1800,14 +1801,18 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await expect(modelTab).toBeFocused()
   await page.keyboard.press('ArrowRight')
+  await expect(permissionsTab).toBeFocused()
+  await expect(permissionsTab).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ArrowRight')
   await expect(basicTab).toBeFocused()
   await expect(basicTab).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('ArrowLeft')
-  await expect(modelTab).toBeFocused()
+  await expect(permissionsTab).toBeFocused()
   await page.keyboard.press('Home')
   await expect(basicTab).toBeFocused()
   await page.keyboard.press('End')
-  await expect(modelTab).toBeFocused()
+  await expect(permissionsTab).toBeFocused()
+  await modelTab.click()
   // 模型页内再分四区;默认落在第一个分区「模型来源」,再切到默认模型分区。
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
   const sourceTab = sectionTabs.getByRole('tab', { name: /^模型来源/ })
@@ -4415,9 +4420,9 @@ test('候选目录文件数与已打开项目的条目数对齐', async ({ page 
   await expect(dialog.locator('.picker__item', { hasText: 'weekly-report' }).locator('.picker__meta')).toContainText('23 个文件')
 })
 
-// 侧栏视图 tab:项目与 Agent 插件平级,共用 28px 文字带 + 1px 青瓷下划线。
+// 侧栏视图 tab:项目、Agent 插件与 MCP 平级,共用 28px 文字带 + 1px 青瓷下划线。
 for (const width of [375, 1280]) {
-  test(`侧栏视图 tab:28px 文字带 + 1px 下划线(项目与插件) @${width}`, async ({ page }) => {
+  test(`侧栏视图 tab:28px 文字带 + 1px 下划线(三个平级视图) @${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
@@ -4425,7 +4430,7 @@ for (const width of [375, 1280]) {
     const tabs = page.getByRole('tablist', { name: '侧栏视图' })
     await expect(tabs).toBeVisible()
     const projects = tabs.getByRole('tab', { name: /^项目/ })
-    await expect(tabs.getByRole('tab')).toHaveCount(2)
+    await expect(tabs.getByRole('tab')).toHaveCount(3)
     await expect(projects).toHaveAttribute('aria-selected', 'true')
     await expect(tabs.getByRole('tab', { name: /^插件/ })).toHaveCount(1)
     const box = await projects.boundingBox()

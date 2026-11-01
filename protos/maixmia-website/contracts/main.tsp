@@ -500,6 +500,103 @@ model AgentModelConfig {
   maxThinkingTokens: int32;
 }
 
+// ---- 项目设置:按目录 path 共享的 Agent 覆盖层 ----
+//
+// 项目不是一次打开生成的行 id,而是 Agent Host 上的目录。同一目录被不同 Agent 打开时,
+// 共享这一份设置。模型配置以 followAgent 整块切换:true = 使用 Agent 当前整套配置,
+// 其余字段作为最近一次自定义值保留但不生效;false = 使用项目整套显式配置。
+// 旧数据没有 followAgent:有任何其他模型字段即为自定义,空对象即为跟随;不得清空旧值来切换模式。
+// Mia 在启动会话前把 Agent 默认与项目覆盖解析成最终 SDK options。
+// 官方完整优先级为 managed > 程序化选项 > local > project > user;原型只呈现 Agent / project 两层。
+// 项目模型来源只保存 Agent 已配置来源的 id 引用。Mia 在启动会话前按当前 Agent 解析来源、模型与
+// 凭据并生成最终 SDK options;不写入项目 .claude/settings.json。自定义模式的来源缺失 / 不可用 /
+// 与 Agent 档位或子 Agent 引用不兼容时是显式配置错误,启动期不得静默换源或改写已存模型。
+model ProjectModelOverrides {
+  followAgent?: boolean;            // true = 整块跟随 Agent 并保留下列自定义值;缺省按上述旧数据规则解释
+  sourceId?: string;                // Agent 来源引用:subscription:<id> | gateway:<id>;不保存来源配置快照
+  modelId?: string;                 // settings.json model
+  effortLevel?: string;             // effortLevel;空串 = 显式使用模型默认
+  fallbackModelIds?: string[];      // fallbackModel;空数组 = 显式关闭项目回退链
+  autoCompactWindowTokens?: int32;  // 0 = 显式跟随模型窗口
+  alwaysThinkingEnabled?: boolean;  // 项目级持续扩展思考开关
+}
+
+@summary("ProjectModelSettings")
+@jsonSchema
+model ProjectModelSettings {
+  path: string;                       // 设置主键:项目目录的展示短路径
+  `model`: ProjectModelOverrides;     // 仅项目模型覆盖;权限与 MCP 各有独立事实源
+}
+
+// ---- 继承 Agent 的 MCP 与权限,以及各打开项目的独立补充 ----
+// 两类一级作用域:agent 对所有项目生效;project 只作用于对应目录。
+// 项目可添加自有 MCP 服务器与权限规则,同名服务器与相同规则在不同 scope 中独立存在。
+enum McpServerScopeId { agent, project }
+enum McpTransportId { stdio, http, sse }
+// 状态闭集:connected / needsAuth / failed / disabled。pending 不进入 UI,连接中由操作的忙碌态表达。
+enum McpServerStatusId { connected, needsAuth, failed, disabled }
+model McpTool { name: string; description: string; }
+
+@summary("McpServer")
+@jsonSchema
+model McpServer {
+  id: string;                 // agent:<agentId>:<name> | project:<path>:<name>
+  name: string;               // mcpServers 键;工具名 mcp__<name>__<tool>
+  displayName: string;
+  description: string;
+  scope: McpServerScopeId;
+  ownerId: string;            // agentId 或项目 path
+  transport: McpTransportId;
+  endpoint: string;           // stdio: 完整命令行;http/sse: URL
+  enabled: boolean;
+  status: McpServerStatusId;
+  errorMessage: string;       // status=failed 时的完整错误;其余为空串
+  tools: McpTool[];
+}
+
+@summary("McpServerInput")
+@jsonSchema
+model McpServerInput {
+  name: string;
+  displayName: string;
+  transport: McpTransportId;
+  endpoint: string;
+}
+
+@summary("McpProjectGroup")
+@jsonSchema
+model McpProjectGroup {
+  path: string;               // 项目目录的展示短路径
+  servers: McpServer[];       // 仅项目自有服务器,不重复继承 Agent 的条目
+}
+
+enum PermissionRuleKindId { allow, ask, deny }
+enum PermissionScopeId { agent, project }
+enum PermissionModeId { `default`, dontAsk, auto, bypassPermissions }
+model PermissionRule {
+  id: string;
+  kind: PermissionRuleKindId;
+  pattern: string;            // 等宽 specifier,如 Bash(pnpm test:*) / mcp__github__*
+  scope: PermissionScopeId;
+  ownerId: string;            // agentId 或项目 path
+}
+
+@summary("AgentPermissions")
+@jsonSchema
+model AgentPermissions {
+  agentId: AgentId;
+  defaultMode: PermissionModeId;
+  rules: PermissionRule[];    // Agent 级 allow/ask/deny
+}
+
+@summary("ProjectPermissionGroup")
+@jsonSchema
+model ProjectPermissionGroup {
+  path: string;
+  modeOverride: PermissionModeId | null;  // null = 跟随 Agent
+  rules: PermissionRule[];                // 项目自有 allow/ask/deny,只追加不替换继承规则
+}
+
 // ---- 用户身份密钥与 Agent 的一次性配对 ----
 enum AgentTrustStateId { trusted, keyChanged, revoked }
 model AgentIdentity {

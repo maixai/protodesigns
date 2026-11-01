@@ -5,7 +5,7 @@
 // 还会把「标签」这件事抬高到与内容争夺注意力的位置。GitHub 的 UnderlineNav、Linear 与
 // Notion 的侧栏分区都用这一档:文字本身承担导航,下划线只做一个安静的当前项标记。
 //
-// 语义用 tablist / tab:它切换的是同一块侧栏里的两个面板,不是一组筛选值。
+// 语义用 tablist / tab:它切换的是同一块侧栏里的三个视图,不是一组筛选值。
 import { computed } from 'vue'
 
 export interface SidebarViewOption {
@@ -76,11 +76,12 @@ function onKeydown(event: KeyboardEvent): void {
 
 <style scoped>
 /* 行高 28:比正文行还矮一档 —— 它是一条「读数 + 切换」的细带,不是一块控件。
-   两个 tab 各自是一枚足够宽的目标,中心距远大于 24,WCAG 2.5.8 的间距判据天然成立。 */
-.view-tabs { display: flex; align-items: stretch; gap: var(--dl-space-4); flex: none; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+   三个 tab 各自是一枚足够宽的目标,中心距远大于 24,WCAG 2.5.8 的间距判据天然成立。 */
+.view-tabs { display: flex; align-items: stretch; gap: var(--dl-space-3); flex: none; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
 .view-tabs__tab { position: relative; display: inline-flex; align-items: center; gap: var(--dl-space-1); min-block-size: calc(var(--dl-space-6) + var(--dl-space-1)); padding: 0; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); letter-spacing: var(--dl-tracking-label); white-space: nowrap; border-radius: var(--dl-radius-sm); transition: color var(--dl-duration-fast) var(--dl-ease-standard); }
 /* 计数用等宽数字:数值变化时 tab 宽度不跳动,也把「技术读数」这一层气质带进来。 */
 .view-tabs__count { min-inline-size: 1ch; color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; }
+.view-tabs__count[data-empty='true'] { display: none; }
 .view-tabs__tab[aria-selected='true'] .view-tabs__count { min-inline-size: 1ch; color: var(--dl-text-secondary); }
 /* 当前项:文字提级 + 500 字重 + 一条青瓷细线(三个通道,不只靠颜色)。
    下划线只动 transform(动效白名单),从中间展开。 */

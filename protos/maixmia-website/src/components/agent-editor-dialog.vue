@@ -7,6 +7,9 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
+import type { AgentPermissions } from '../contracts/generated/agent-permissions'
+import { getAgentPermissions } from '../api/agent-permissions'
+import AgentPermissionsEditor from './agent-permissions.vue'
 import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
@@ -32,11 +35,12 @@ const props = defineProps<{
   canDelete: boolean
   busy: boolean
   error: string
+  errorTab?: 'model' | 'permissions' | undefined
   // 编辑保存成功的信号:父组件每次保存成功递增,对话框据此重置基线并提示。
   savedToken: number
 }>()
 const emit = defineEmits<{
-  submit: [config: AgentConfig]
+  submit: [config: AgentConfig, permissions: AgentPermissions | null]
   delete: []
   identityUpdated: [agent: AgentSummary]
   rePair: []
@@ -118,7 +122,7 @@ async function removeAvatar(): Promise<void> {
   avatarButtonRef.value?.focus()
 }
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
-const activeTab = ref<'basic' | 'model'>('basic')
+const activeTab = ref<'basic' | 'model' | 'permissions'>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
 const activeModelSection = ref<ModelSection>('defaults')
 const bodyRef = ref<HTMLElement | null>(null)
@@ -137,11 +141,41 @@ watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
 }, { flush: 'post' })
 const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
+const permissionsTabRef = ref<HTMLButtonElement | null>(null)
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 const subjectId = `${dialogId}-subject`
 const saveStateId = `${dialogId}-save-state`
+
+// 权限是独立实体,但在编辑 Agent 时与身份、模型共用底部一次提交。
+const permissionDraft = ref<AgentPermissions>({ agentId: '', defaultMode: 'auto', rules: [] })
+const permissionBaseline = ref('')
+const permissionStatus = ref<'loading' | 'ready' | 'error'>('loading')
+const permissionLoadError = ref('')
+let permissionLoadVersion = 0
+const isPermissionDirty = computed(() => props.agent !== undefined && JSON.stringify(permissionDraft.value) !== permissionBaseline.value)
+const permissionsReady = computed(() => props.agent === undefined || permissionStatus.value === 'ready')
+async function loadPermissions(): Promise<void> {
+  const agent = props.agent
+  if (agent === undefined) { permissionStatus.value = 'ready'; return }
+  const version = ++permissionLoadVersion
+  permissionStatus.value = 'loading'
+  permissionLoadError.value = ''
+  const result = await getAgentPermissions(agent.id)
+  if (version !== permissionLoadVersion || !props.open || props.agent?.id !== agent.id) return
+  if (!result.ok) {
+    permissionStatus.value = 'error'
+    permissionLoadError.value = result.error.message
+    return
+  }
+  permissionDraft.value = structuredClone(result.value)
+  permissionBaseline.value = JSON.stringify(result.value)
+  permissionStatus.value = 'ready'
+}
+function clonePermissions(): AgentPermissions {
+  return { ...permissionDraft.value, rules: permissionDraft.value.rules.map((rule) => ({ ...rule })) }
+}
 
 const connectionStatus = computed(() => props.agent === undefined ? null : agentDisplayStatus(props.agent, t.value.workspace, locale.value))
 const {
@@ -186,13 +220,15 @@ const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
-const isDirty = computed(() => (isAvatarDirty.value || gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
+const isDirty = computed(() => (isAvatarDirty.value || isPermissionDirty.value || gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
 const isValid = computed(() => name.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
 type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'attention' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
   if (props.busy) return 'saving'
   if (props.error !== '') return 'error'
   if (!isDirty.value && savedAt.value !== '') return 'saved'
+  // 权限尚未加载时禁止提交,避免把失败误当成空规则覆盖。
+  if (!permissionsReady.value) return 'blocked'
   // 来源不可用时保存被拦下,页脚必须直接说明原因,不能只说「有未保存的更改」。
   if (!sourceReady.value) return 'blocked'
   // 有模型不在当前来源时,页脚给出一句轻量原因;具体位置由 tab 上的警示图标指出。
@@ -205,7 +241,7 @@ const saveStateLabel = computed(() => {
   if (saveStateKind.value === 'saving') return copy.saving
   if (saveStateKind.value === 'error') return copy.saveStateFailed
   if (saveStateKind.value === 'saved') return copy.savedInline
-  if (saveStateKind.value === 'blocked') return activeSource.value === undefined ? copy.saveStateNoSource : copy.saveStateBlocked
+  if (saveStateKind.value === 'blocked') return !permissionsReady.value ? copy.permissionsNotLoaded : activeSource.value === undefined ? copy.saveStateNoSource : copy.saveStateBlocked
   if (saveStateKind.value === 'attention') return copy.saveStateNeedsModels
   if (saveStateKind.value === 'incomplete') return copy.saveStateIncomplete
   if (saveStateKind.value === 'dirty') return copy.saveStateDirty
@@ -502,7 +538,7 @@ function sourceRowReady(row: SourceRow): boolean {
 }
 const sourceReady = computed(() => activeSource.value !== undefined && sourceRowReady(activeSource.value))
 // 保存还要求来源可用:没有可用来源时不允许把模型配置写回。
-const canSubmit = computed(() => isValid.value && !props.busy && !isAvatarReading.value && isDirty.value && sourceReady.value && authorizationFlow.value === null)
+const canSubmit = computed(() => isValid.value && permissionsReady.value && !props.busy && !isAvatarReading.value && isDirty.value && sourceReady.value && authorizationFlow.value === null)
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
@@ -1271,15 +1307,15 @@ function removeFallback(index: number): void {
   modelConfig.value = { ...modelConfig.value, fallbackModelIds: modelConfig.value.fallbackModelIds.filter((_, itemIndex) => itemIndex !== index) }
 }
 
-async function activateTab(tab: 'basic' | 'model', focus = false): Promise<void> {
+async function activateTab(tab: 'basic' | 'model' | 'permissions', focus = false): Promise<void> {
   activeTab.value = tab
   await nextTick()
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
-  if (focus) (tab === 'basic' ? basicTabRef.value : modelTabRef.value)?.focus()
+  if (focus) (tab === 'basic' ? basicTabRef.value : tab === 'model' ? modelTabRef.value : permissionsTabRef.value)?.focus()
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
-  const tabs = ['basic', 'model'] satisfies (typeof activeTab.value)[]
+  const tabs: readonly ('basic' | 'model' | 'permissions')[] = props.agent === undefined ? ['basic', 'model'] : ['basic', 'model', 'permissions']
   const current = tabs.indexOf(activeTab.value)
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
     : event.key === 'ArrowRight' ? (current + 1) % tabs.length
@@ -1366,6 +1402,9 @@ function reset(): void {
   savedAt.value = ''
   savedAnnouncement.value = ''
   seenSavedToken.value = props.savedToken
+  permissionDraft.value = { agentId: props.agent?.id ?? '', defaultMode: 'auto', rules: [] }
+  permissionBaseline.value = ''
+  void loadPermissions()
 }
 
 function finish(action: 'submit' | 'cancel' | 'delete'): void {
@@ -1382,7 +1421,7 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
     }
     if (hasUnavailableSourceModels.value) return
     if (!canSubmit.value) return
-    emit('submit', { name: name.value.trim(), note: note.value.trim(), avatarUrl: avatarUrl.value, model: cloneModelConfig(modelConfig.value) })
+    emit('submit', { name: name.value.trim(), note: note.value.trim(), avatarUrl: avatarUrl.value, model: cloneModelConfig(modelConfig.value) }, props.agent === undefined ? null : clonePermissions())
     return
   }
   if (action === 'delete') {
@@ -1421,9 +1460,18 @@ watch(() => props.savedToken, (token) => {
   avatarFeedback.value = 'idle'
   baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
   baselineSourceId.value = modelConfig.value.source.activeSourceId
+  permissionBaseline.value = JSON.stringify(permissionDraft.value)
   savedAt.value = formatSavedAt()
   savedAnnouncement.value = t.value.workspace.agentAdmin.savedInline
   saveScanKey.value += 1
+})
+// 部分保存失败时留在对话框,定位到对应领域;草稿不由父级回写。
+watch(() => props.error, (message) => {
+  if (message === '' || props.errorTab === undefined) return
+  void activateTab(props.errorTab).then(() => {
+    if (props.errorTab === 'permissions') permissionsTabRef.value?.focus()
+    else modelTabRef.value?.focus()
+  })
 })
 // 下一次编辑立即让成功提示让位给「有未保存的更改」,不用计时器。
 watch(isDirty, (dirty) => {
@@ -1437,6 +1485,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
   const dialog = dialogRef.value
   if (dialog === null) return
   if (!isOpen) {
+    permissionLoadVersion += 1
     discardAvatarDraft()
     dismissConnectionTooltip()
     abortAuthorization(false)
@@ -1457,6 +1506,7 @@ watch(() => props.open, async (isOpen): Promise<void> => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  permissionLoadVersion += 1
   avatarReadVersion.value += 1
   abortAuthorization(false)
   clearSourceCheck()
@@ -1500,6 +1550,11 @@ onBeforeUnmount(() => {
           :aria-selected="activeTab === 'model'" :aria-controls="`${dialogId}-panel-model`"
           :tabindex="activeTab === 'model' ? 0 : -1" @click="activateTab('model')"
         >{{ t.workspace.agentAdmin.tabModel }}</button>
+        <button
+          v-if="agent" :id="`${dialogId}-tab-permissions`" ref="permissionsTabRef" type="button" role="tab"
+          :aria-selected="activeTab === 'permissions'" :aria-controls="`${dialogId}-panel-permissions`"
+          :tabindex="activeTab === 'permissions' ? 0 : -1" @click="activateTab('permissions')"
+        >{{ t.workspace.agentAdmin.tabPermissions }}</button>
       </div>
       <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
       <button
@@ -2096,6 +2151,22 @@ onBeforeUnmount(() => {
           </section>
         </div>
       </div>
+
+      <div
+        v-if="agent" v-show="activeTab === 'permissions'" :id="`${dialogId}-panel-permissions`"
+        class="agent-editor__panel agent-editor__panel--permissions" role="tabpanel"
+        :aria-labelledby="`${dialogId}-tab-permissions`" tabindex="0"
+      >
+        <div v-if="permissionStatus === 'loading'" class="agent-editor__permission-state" role="status">{{ t.workspace.permissions.loadingAgent }}</div>
+        <div v-else-if="permissionStatus === 'error'" class="agent-editor__permission-state" role="alert">
+          <p>{{ permissionLoadError }}</p>
+          <button type="button" class="dl-btn dl-btn--ghost" @click="loadPermissions">{{ t.workspace.permissions.retry }}</button>
+        </div>
+        <AgentPermissionsEditor
+          v-else :id-prefix="`${dialogId}-permissions`" scope="agent" :owner-id="agent.id"
+          v-model:default-mode="permissionDraft.defaultMode" v-model:rules="permissionDraft.rules" :disabled="busy"
+        />
+      </div>
     </div>
 
     <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
@@ -2469,6 +2540,7 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .danger-confirm:hover:not(:disabled) { outline: var(--dl-border-width) solid var(--dl-error); outline-offset: var(--dl-space-1); }
 .danger-confirm:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
 
+.agent-editor__permission-state { display: grid; justify-items: start; gap: var(--dl-space-3); padding: var(--dl-space-4); color: var(--dl-text-secondary); }
 .agent-editor__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); }
 .agent-editor__actions .dl-btn { min-block-size: var(--dl-target-size); }
 /* 状态行是「当前保存状态」的常驻指示,不进 Tab 顺序,也不抢焦点。 */

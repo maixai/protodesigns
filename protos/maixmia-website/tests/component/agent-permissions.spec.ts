@@ -1,0 +1,149 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
+import AgentPermissionsEditor from '../../src/components/agent-permissions.vue'
+import type { AgentPermissions, PermissionRule, PermissionRuleKindId } from '../../src/contracts/generated/agent-permissions'
+import type { ProjectPermissionGroup } from '../../src/contracts/generated/project-permission-group'
+import { useI18n } from '../../src/i18n'
+import { mockAddAgentPermissionRule, mockGetAgentPermissions, mockRemoveAgentPermissionRule } from '../../src/mocks/agent-permissions'
+
+function rule(id: string, kind: PermissionRuleKindId, pattern: string, scope: 'agent' | 'project' = 'agent', ownerId = 'planning'): PermissionRule {
+  return { id, kind, pattern, scope, ownerId }
+}
+const agent: AgentPermissions = { agentId: 'planning', defaultMode: 'auto', rules: [rule('deny', 'deny', 'Read(./.env)'), rule('ask', 'ask', 'Bash(git push:*)'), rule('allow', 'allow', 'Read(./**)')] }
+const project: ProjectPermissionGroup = { path: '~/work/weekly-report', modeOverride: 'dontAsk', rules: [rule('project-ask', 'ask', 'Read(./.env)', 'project', '~/work/weekly-report')] }
+
+describe('agent-permissions controlled editor', () => {
+  afterEach(() => { document.body.innerHTML = '' })
+
+  it('renders rich listbox options with automatic first and emits every mode without API semantics', async () => {
+    useI18n().setLocale('zh-CN')
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'agent', ownerId: agent.agentId, defaultMode: agent.defaultMode, rules: agent.rules, idPrefix: 'agent-permissions' } })
+    expect(wrapper.get('.permissions-mode label').text()).toBe('默认权限模式')
+    const trigger = wrapper.get<HTMLButtonElement>('[data-mode-trigger]')
+    expect(trigger.text()).toBe('自动 · 默认')
+    expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('.permissions-mode-hint').exists()).toBe(false)
+    expect(wrapper.get('.permissions-mode').text()).not.toContain('常规操作直接执行')
+    await trigger.trigger('click')
+    const options = wrapper.findAll('[role="option"]')
+    expect(options.map((item) => item.attributes('data-mode'))).toEqual(['auto', 'default', 'dontAsk', 'bypassPermissions'])
+    expect(options.map((item) => item.get('.permissions-option-name').text())).toEqual(['自动 · 默认', '每次询问', '仅按规则', '全部允许 · 高风险'])
+    expect(options.map((item) => item.get('.permissions-option-hint').text())).toEqual([
+      '常规操作直接执行，不可逆或越界操作会被拦截；询问规则仍会询问。',
+      '不确定的操作先询问；批准只对本次调用生效。',
+      '只执行允许规则命中或无需授权的操作，其余直接拒绝；Agent 不能向你提问，询问规则按拒绝处理。',
+      '除少数不可豁免的高风险动作外，不再确认。',
+    ])
+    expect(wrapper.get('[data-mode="auto"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-mode="auto"]').find('.dl-icon').exists()).toBe(true)
+    for (const mode of ['default', 'dontAsk', 'bypassPermissions', 'auto']) {
+      await wrapper.get(`[data-mode="${mode}"]`).trigger('click')
+      expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+      expect(trigger.text()).toBe('自动 · 默认')
+      await trigger.trigger('click')
+    }
+    expect(wrapper.emitted('update:defaultMode')?.map((event) => event[0])).toEqual(['default', 'dontAsk', 'bypassPermissions', 'auto'])
+    expect(wrapper.findAll('.permissions-rules').map((item) => item.attributes('data-kind'))).toEqual(['deny', 'ask', 'allow'])
+    const allow = wrapper.get('.permissions-rules[data-kind="allow"]')
+    await allow.get('[data-add-kind="allow"]').trigger('click')
+    await wrapper.get('#agent-permissions-allow-rule').setValue('Bash(pnpm lint:*)')
+    await allow.get('form').trigger('submit.prevent')
+    const rules = wrapper.emitted('update:rules')?.at(-1)?.[0]
+    expect(rules?.some((item) => item.pattern === 'Bash(pnpm lint:*)')).toBe(true)
+    expect(wrapper.text()).not.toContain('立即生效')
+    wrapper.unmount()
+  })
+
+  it('puts Agent inheritance with its own hint first in project scope and emits null', async () => {
+    useI18n().setLocale('zh-CN')
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'project', ownerId: project.path, ownerName: 'weekly-report', defaultMode: project.modeOverride, rules: project.rules, idPrefix: 'project-permissions' } })
+    const trigger = wrapper.get('[data-mode-trigger]')
+    expect(trigger.text()).toBe('仅按规则')
+    await trigger.trigger('click')
+    expect(wrapper.findAll('[role="option"]').map((item) => item.attributes('data-mode'))).toEqual(['inherit', 'auto', 'default', 'dontAsk', 'bypassPermissions'])
+    const inherit = wrapper.get('[data-mode="inherit"]')
+    expect(inherit.get('.permissions-option-name').text()).toBe('继承 Agent')
+    expect(inherit.get('.permissions-option-hint').text()).toBe('使用 Agent 的默认权限模式，不在项目级覆盖。')
+    expect(wrapper.get('[data-mode="dontAsk"]').attributes('aria-selected')).toBe('true')
+    await inherit.trigger('click')
+    expect(wrapper.emitted('update:defaultMode')?.at(-1)).toEqual([null])
+    wrapper.unmount()
+  })
+
+  it('disables every mode and rule action without opening or emitting a draft change', async () => {
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'agent', ownerId: agent.agentId, defaultMode: agent.defaultMode, rules: agent.rules, disabled: true, idPrefix: 'disabled-permissions' } })
+    const trigger = wrapper.get<HTMLButtonElement>('[data-mode-trigger]')
+    expect(trigger.element.disabled).toBe(true)
+    await trigger.trigger('click')
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(wrapper.emitted('update:defaultMode')).toBeUndefined()
+    expect(wrapper.findAll<HTMLButtonElement>('[data-add-kind]').every((button) => button.element.disabled)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('associates the visible label and supports arrows, Enter, Space and Escape with focus restoration', async () => {
+    useI18n().setLocale('zh-CN')
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'agent', ownerId: agent.agentId, defaultMode: agent.defaultMode, rules: agent.rules, idPrefix: 'keyboard-permissions' }, attachTo: document.body })
+    const trigger = wrapper.get<HTMLButtonElement>('[data-mode-trigger]')
+    expect(wrapper.get('.permissions-mode label').attributes('for')).toBe('keyboard-permissions-mode')
+    expect(trigger.attributes('id')).toBe('keyboard-permissions-mode')
+    expect(trigger.attributes('aria-labelledby')).toBe('keyboard-permissions-mode-label keyboard-permissions-mode-value')
+    expect(wrapper.get('#keyboard-permissions-mode-value').text()).toBe('自动 · 默认')
+    trigger.element.focus()
+    expect(document.activeElement).toBe(trigger.element)
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    expect(trigger.attributes('aria-expanded')).toBe('true')
+    const automatic = wrapper.get<HTMLButtonElement>('[data-mode="auto"]')
+    expect(document.activeElement).toBe(automatic.element)
+    await automatic.trigger('keydown', { key: 'ArrowDown' })
+    const ask = wrapper.get<HTMLButtonElement>('[data-mode="default"]')
+    expect(document.activeElement).toBe(ask.element)
+    await ask.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:defaultMode')?.at(-1)).toEqual(['default'])
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger.element)
+    await trigger.trigger('click')
+    await wrapper.get('[data-mode="auto"]').trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('update:defaultMode')?.at(-1)).toEqual(['auto'])
+    expect(document.activeElement).toBe(trigger.element)
+    await trigger.trigger('click')
+    await wrapper.get('[data-mode="auto"]').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(wrapper.emitted('update:defaultMode')).toHaveLength(2)
+    expect(document.activeElement).toBe(trigger.element)
+    wrapper.unmount()
+  })
+
+  it('rejects duplicates only in the current project and permits cross-scope specifiers', async () => {
+    useI18n().setLocale('zh-CN')
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'project', ownerId: project.path, ownerName: 'weekly-report', defaultMode: project.modeOverride, rules: project.rules, idPrefix: 'project-permissions' }, attachTo: document.body })
+    const ask = wrapper.get('.permissions-rules[data-kind="ask"]')
+    await ask.get('[data-add-kind="ask"]').trigger('click')
+    await wrapper.get('#project-permissions-ask-rule').setValue('Read(./.env)')
+    await ask.get('button[type="submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('这个作用域已有该规则')
+    expect(wrapper.emitted('update:rules')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('emits rule removal and moves focus to the next rule or add button', async () => {
+    const wrapper = mount(AgentPermissionsEditor, { props: { scope: 'agent', ownerId: agent.agentId, defaultMode: agent.defaultMode, rules: agent.rules, idPrefix: 'agent-permissions' }, attachTo: document.body })
+    await wrapper.get('[aria-label="删除拒绝规则「Read(./.env)」"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('update:rules')?.at(-1)?.[0].map((item) => item.id)).toEqual(['ask', 'allow'])
+    wrapper.unmount()
+  })
+
+  it('keeps generated rule ids unique after deleting a middle rule and adding another', () => {
+    const agentId = 'rule-id-collision-test'
+    mockAddAgentPermissionRule(agentId, 'allow', 'Read(./one)')
+    const second = mockAddAgentPermissionRule(agentId, 'deny', 'Read(./two)')
+    mockAddAgentPermissionRule(agentId, 'ask', 'Read(./three)')
+    const middleId = second.rules[1]?.id
+    if (middleId === undefined) throw new Error('Missing middle rule')
+    mockRemoveAgentPermissionRule(agentId, middleId)
+    const result = mockAddAgentPermissionRule(agentId, 'allow', 'Read(./four)')
+    expect(new Set(result.rules.map((item) => item.id)).size).toBe(3)
+    expect(mockGetAgentPermissions(agentId).rules.map((item) => item.pattern)).toEqual(['Read(./one)', 'Read(./three)', 'Read(./four)'])
+  })
+})

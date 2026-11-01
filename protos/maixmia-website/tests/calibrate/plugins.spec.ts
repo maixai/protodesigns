@@ -70,10 +70,10 @@ async function removeMarket(panel: Locator, name: string): Promise<void> {
   await expect(market).toHaveCount(0)
 }
 
-test('侧栏项目与插件平级:默认项目、后台计数、切换保留文件树与插件详情', async ({ page }, testInfo) => {
+test('侧栏项目、插件与 MCP 平级:默认项目、后台计数、切换保留文件树与插件详情', async ({ page }, testInfo) => {
   await login(page)
   const tabs = page.getByRole('tablist', { name: '侧栏视图' })
-  await expect(tabs.getByRole('tab')).toHaveCount(2)
+  await expect(tabs.getByRole('tab')).toHaveCount(3)
   await expect(tabs.getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.project-tree').first()).toBeVisible()
   await expect(page.locator('.project-content-tabs')).toHaveCount(0)
@@ -364,20 +364,20 @@ test('加载失败重试及切换 Agent:骨架可见、计数留空、重试恢�
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
 })
 
-test('项目树文件-only、项目菜单仅关闭、Agent 设置基本 / 模型两页', async ({ page }) => {
+test('项目树文件-only、项目菜单 4 项、Agent 设置基本 / 模型 / 权限三页', async ({ page }) => {
   await login(page)
   const project = page.locator('.project-item').first()
   await expect(project.getByRole('tab')).toHaveCount(0)
   await project.locator('.project-menu__trigger').click()
-  await expect(project.getByRole('menuitem')).toHaveText(['关闭项目'])
+  await expect(project.getByRole('menuitem')).toHaveText(['模型', '权限', 'MCP', '关闭项目'])
   await page.keyboard.press('Escape')
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
-  // 主 tab 为基本 / 模型两页;子 tab 不计入。
+  // 主 tab 为基本 / 模型 / 权限三页;子 tab 不计入。
   const mainTabs = dialog.locator('.agent-editor__tabs').getByRole('tab')
-  await expect(mainTabs).toHaveCount(2)
-  await expect(mainTabs).toHaveText(['基本', '模型'])
+  await expect(mainTabs).toHaveCount(3)
+  await expect(mainTabs).toHaveText(['基本', '模型', '权限'])
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()

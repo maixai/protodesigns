@@ -5,6 +5,8 @@ import { NSkeleton } from 'naive-ui'
 import type { AgentId, ChatSession, SessionStatus } from '../contracts/generated/chat-session'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
+import type { AgentPermissions } from '../contracts/generated/agent-permissions'
+import { saveAgentPermissions } from '../api/agent-permissions'
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
@@ -40,6 +42,7 @@ import AgentPairingDialog from '../components/agent-pairing-dialog.vue'
 import IdentityVaultDialog from '../components/identity-vault-dialog.vue'
 import { readIdentityVaultState } from '../mocks/identity'
 import AgentPlugins from '../components/agent-plugins.vue'
+import AgentMcp from '../components/agent-mcp.vue'
 import type { SidebarViewOption } from '../components/sidebar-view-tabs.vue'
 import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
@@ -51,6 +54,9 @@ import FilePanel from '../components/file-panel.vue'
 import FilePickerPopover from '../components/file-picker-popover.vue'
 import ProjectMenu from '../components/project-menu.vue'
 import ProjectPickerDialog from '../components/project-picker-dialog.vue'
+import ProjectModelDialog from '../components/project-model-dialog.vue'
+import ProjectPermissionDialog from '../components/project-permission-dialog.vue'
+import ProjectMcpDialog from '../components/project-mcp-dialog.vue'
 import ProjectPickerPopover from '../components/project-picker-popover.vue'
 import SplitPanes from '../components/split-panes.vue'
 import TranscriptView from '../components/transcript-view.vue'
@@ -112,9 +118,10 @@ let searchVersion = 0
 // 平权之后**没有「当前项目」**:多个项目可以同时展开,tab 区与悬浮层也混装不同项目的窗口。
 const projects = ref<Project[]>([])
 const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
-// 侧栏顶层视图:项目文件与当前 Agent 的插件平级。
+// 侧栏顶层视图:项目文件与当前 Agent 的插件、MCP 平级;权限归入 Agent 设置。
 const sidebarView = ref('projects')
 const agentPluginCount = ref<number | undefined>(undefined)
+const agentMcpCount = ref<number | undefined>(undefined)
 const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
   id: 'projects',
   label: t.value.workspace.sidebarViews.projects,
@@ -122,6 +129,8 @@ const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
   count: projectsStatus.value === 'ready' ? projects.value.length : undefined,
 }, {
   id: 'plugins', label: t.value.workspace.plugins.pluginsTitle, count: agentPluginCount.value,
+}, {
+  id: 'mcp', label: t.value.workspace.sidebarViews.mcp, count: agentMcpCount.value,
 }])
 // Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
@@ -132,6 +141,7 @@ const pairingSessionId = ref('')
 const pairingLinkSecret = ref('')
 const agentEditorBusy = ref(false)
 const agentEditorError = ref('')
+const agentEditorErrorTab = ref<'model' | 'permissions' | undefined>(undefined)
 // 编辑保存成功后递增:对话框据此重置脏状态基线并显示「已保存」。新建成功后仍关闭。
 const agentEditorSavedToken = ref(0)
 // 展开集是**真正的集合**:点一行只 toggle 它自己,不动别人(不再是「单值覆盖」)。
@@ -143,6 +153,12 @@ const projectSkills = ref<Record<string, Skill[]>>({})
 const skillStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const skillVersions = new Map<string, number>()
 const isPickerOpen = ref(false)
+// 三个项目配置领域各自独立成窗;同一时刻只打开一个。
+const projectConfigTarget = ref<{ project: Project; kind: 'model' | 'permissions' | 'mcp' } | null>(null)
+function openProjectConfig(projectPath: string, kind: 'model' | 'permissions' | 'mcp'): void {
+  const project = projects.value.find((item) => item.path === projectPath)
+  if (project !== undefined) projectConfigTarget.value = { project, kind }
+}
 // 项目选择浮层的**请求**:null = 没开。两种用途共用一个浮层 —— 新建对话时选归属、
 // 空对话时改归属(浮层本身只管「选一个项目」,标题与选中后的动作由这里给)。
 type ProjectPickerRequest =
@@ -1629,6 +1645,7 @@ function retryAgents(): void {
 function openAgentSettings(): void {
   agentEditorFocusIdentity.value = false
   agentEditorError.value = ''
+  agentEditorErrorTab.value = undefined
   isAgentEditorOpen.value = true
 }
 function clearPairingHash(): void {
@@ -1704,16 +1721,32 @@ async function onAgentPaired(summary: AgentSummary, details: boolean): Promise<v
     isAgentEditorOpen.value = true
   }
 }
-async function onSubmitAgent(config: AgentConfig): Promise<void> {
+async function onSubmitAgent(config: AgentConfig, permissions: AgentPermissions | null): Promise<void> {
   if (agentEditorBusy.value) return
   agentEditorBusy.value = true
   agentEditorError.value = ''
+  agentEditorErrorTab.value = undefined
   const result = await updateAgent(selectedAgent.value, config)
-  agentEditorBusy.value = false
   if (!isAlive.value) return
-  if (!result.ok) { agentEditorError.value = result.error.message; return }
+  if (!result.ok) {
+    agentEditorBusy.value = false
+    agentEditorError.value = result.error.message
+    agentEditorErrorTab.value = 'model'
+    return
+  }
   const summary = result.value
   agents.value = agents.value.map((agent) => (agent.id === summary.id ? summary : agent))
+  if (permissions !== null) {
+    const permissionResult = await saveAgentPermissions(summary.id, permissions)
+    if (!isAlive.value) return
+    if (!permissionResult.ok) {
+      agentEditorBusy.value = false
+      agentEditorError.value = t.value.workspace.agentAdmin.permissionsSavePartial.replace('{error}', permissionResult.error.message)
+      agentEditorErrorTab.value = 'permissions'
+      return
+    }
+  }
+  agentEditorBusy.value = false
   // 保存是 Apply 语义:不关闭对话框,让用户继续配置其它项;由对话框内联状态提示结果。
   agentEditorSavedToken.value += 1
   // 模型可能改了:刷新可见会话的遥测,让状态条里的模型名与设置一致。
@@ -2565,7 +2598,7 @@ onBeforeUnmount(() => {
                     <span class="project-row__slot" aria-hidden="true" />
                     <svg class="tree-caret project-row__caret" :class="{ 'is-open': expandedProjects.has(project.id) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
-                  <ProjectMenu :project-name="project.name" @close="onCloseProject(project)" />
+                  <ProjectMenu :project-name="project.name" @configure="openProjectConfig(project.path, $event)" @close="onCloseProject(project)" />
                 </div>
                 <div v-show="expandedProjects.has(project.id)" :id="`project-tree-${project.id}`" class="project-tree">
                   <span class="project-ridge" aria-hidden="true" />
@@ -2626,6 +2659,18 @@ onBeforeUnmount(() => {
                 v-if="selectedAgent !== ''" :key="selectedAgent"
                 :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
                 @count="agentPluginCount = $event" @announce="announcePlacement"
+              />
+            </div>
+          </div>
+          <div
+            v-show="sidebarView === 'mcp'" id="sidebar-view-panel-mcp"
+            role="tabpanel" aria-labelledby="sidebar-view-tab-mcp" class="sidebar-view-panel"
+          >
+            <div class="sidebar-pane__scroll">
+              <AgentMcp
+                v-if="selectedAgent !== ''" :key="selectedAgent"
+                :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
+                @count="agentMcpCount = $event" @announce="announcePlacement"
               />
             </div>
           </div>
@@ -2914,10 +2959,25 @@ onBeforeUnmount(() => {
     <IdentityVaultDialog @revealing="isIdentityCovered = false" @unlocked="onIdentityUnlocked" @locked="onIdentityLocked" @reset="loadAgents" @announce="announcePlacement" />
     <AgentPairingDialog :open="isPairingOpen" :session-id="pairingSessionId" :link-secret="pairingLinkSecret" :re-pair="isAgentEditorOpen" @manual="resetPairingInvite" @cancel="closePairing" @added="onAgentPaired" @link="onPairingLink" />
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
+    <ProjectModelDialog
+      v-if="projectConfigTarget?.kind === 'model' && currentAgent !== undefined"
+      :key="`model-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
+      @close="projectConfigTarget = null"
+    />
+    <ProjectPermissionDialog
+      v-if="projectConfigTarget?.kind === 'permissions' && currentAgent !== undefined"
+      :key="`permissions-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
+      @close="projectConfigTarget = null"
+    />
+    <ProjectMcpDialog
+      v-if="projectConfigTarget?.kind === 'mcp' && currentAgent !== undefined"
+      :key="`mcp-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
+      @close="projectConfigTarget = null" @announce="announcePlacement"
+    />
     <AgentEditorDialog
       :open="isAgentEditorOpen" :focus-identity="agentEditorFocusIdentity"
       :agent="currentAgent"
-      :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :saved-token="agentEditorSavedToken"
+      :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :error-tab="agentEditorErrorTab" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
       @identity-updated="onAgentIdentityUpdated" @re-pair="openAgentRePair"
     />
@@ -3014,8 +3074,8 @@ onBeforeUnmount(() => {
 /* 侧栏头部:Agent 选择器占满,窄屏抽屉里右侧并排一枚关闭钮。 */
 .sidebar-head { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
 .sidebar-close { flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); padding: 0; font-size: var(--dl-font-size-lg); }
-/* 侧栏视图面板:项目 / 插件共用一块可伸缩的区域。 */
-.plugins-pane__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
+/* 侧栏视图面板:项目 / 插件 / MCP 共用一块可伸缩的区域。 */
+.plugins-pane__scroll, .sidebar-pane__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
 .sidebar-view-panel { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
 /* Agent 列表加载中 / 失败时占据身份区的位置。 */
 .sidebar-agent-state { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }

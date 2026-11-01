@@ -284,12 +284,32 @@ function validateRule(value: string, excludedRuleId?: string): string {
   if (props.rules.some((rule) => rule.id !== excludedRuleId && rule.pattern === pattern)) return copy.duplicateRule
   return ''
 }
+// 把元素带回最近的纵向滚动容器;全局 scroll-behavior: smooth 会让 scrollIntoView 异步,这里直接改 scrollTop。
+const SCROLL_EDGE_PADDING = 8
+function revealInScrollParent(element: HTMLElement): void {
+  let parent = element.parentElement
+  while (parent !== null) {
+    const overflowY = getComputedStyle(parent).overflowY
+    if ((overflowY === 'auto' || overflowY === 'scroll') && parent.scrollHeight > parent.clientHeight) {
+      const elementRect = element.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      if (elementRect.bottom > parentRect.bottom) parent.scrollTop += elementRect.bottom - parentRect.bottom + SCROLL_EDGE_PADDING
+      else if (elementRect.top < parentRect.top) parent.scrollTop -= parentRect.top - elementRect.top + SCROLL_EDGE_PADDING
+      return
+    }
+    parent = parent.parentElement
+  }
+}
 async function openAdd(kind: PermissionRuleKindId): Promise<void> {
   if (props.disabled === true) return
   endTransientState()
   expandedAddKind.value = kind
   await nextTick()
-  document.getElementById(`${props.idPrefix}-${kind}-rule`)?.focus({ preventScroll: true })
+  const input = document.getElementById(`${props.idPrefix}-${kind}-rule`)
+  if (input === null) return
+  input.focus({ preventScroll: true })
+  // 列表较长时表单在列表末尾,必须把获得焦点的输入框带回滚动视口内。
+  revealInScrollParent(input)
 }
 function updateAddDraft(kind: PermissionRuleKindId, value: string): void {
   drafts.value = { ...drafts.value, [kind]: value }

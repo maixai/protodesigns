@@ -285,6 +285,41 @@ test('@area:agent-settings 权限只做 Agent 草稿，取消丢弃并由底部�
   expect(issues).toEqual([])
 })
 
+test('@area:agent-settings 短视口下从 Header 添加规则时输入框滚入可视区', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const dialog = await openAgentSettings(page)
+  await dialog.getByRole('tab', { name: '权限', exact: true }).click()
+  await page.setViewportSize({ width: 375, height: 400 })
+  const editor = dialog.locator('.permission-editor')
+  const allow = editor.locator('.permissions-rules[data-kind="allow"]')
+  await allow.getByRole('button', { name: '添加允许规则', exact: true }).click()
+  const input = editor.getByLabel('允许规则 specifier', { exact: true })
+  await expect(input).toBeFocused()
+  const geometry = await input.evaluate((element) => {
+    const body = element.closest('.agent-editor__body')
+    if (!(body instanceof HTMLElement)) return null
+    const inputRect = element.getBoundingClientRect()
+    const bodyRect = body.getBoundingClientRect()
+    return {
+      inputTop: inputRect.top,
+      inputBottom: inputRect.bottom,
+      bodyTop: bodyRect.top,
+      bodyBottom: bodyRect.bottom,
+      scrollTop: body.scrollTop,
+    }
+  })
+  expect(geometry).not.toBeNull()
+  if (geometry !== null) {
+    expect(geometry.scrollTop, JSON.stringify(geometry)).toBeGreaterThan(0)
+    expect(geometry.inputTop).toBeGreaterThanOrEqual(geometry.bodyTop - 1)
+    expect(geometry.inputBottom).toBeLessThanOrEqual(geometry.bodyBottom + 1)
+  }
+  expect(issues).toEqual([])
+})
+
 test('@area:agent-settings 侧栏 Agent 状态与设置头部一致', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await login(page)

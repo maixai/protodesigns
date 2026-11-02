@@ -137,6 +137,9 @@
   --workspace-settings-dialog-width: 720px;
   --workspace-settings-dialog-max-height: 720px;
   --workspace-settings-dialog-padding: var(--dl-space-6);
+  /* 统一项目设置窗体:左栏 Tab + 正文并排,需要比共享设置窗体更宽;
+     只新增本窗体自己的宽度 token,不改上面的共享值。 */
+  --workspace-project-settings-dialog-width: 960px;
 }
 
 @media (max-width: 560px) {

@@ -4676,7 +4676,7 @@ test('项目 ⋯ → 关闭项目:只移除该项目;键盘可用、Esc 归还�
   await expect(items).toHaveCount(2)
   const trigger = items.first().locator('.project-menu__trigger')
   await trigger.click()
-  await expect(page.locator('.project-menu__item')).toHaveText(['关闭项目'])
+  await expect(page.locator('.project-menu__item')).toHaveText(['设置', '关闭项目'])
   // Esc 关闭菜单并把焦点归还触发钮;项目列表不受影响。
   await page.keyboard.press('Escape')
   await expect(page.locator('.project-menu__item')).toHaveCount(0)

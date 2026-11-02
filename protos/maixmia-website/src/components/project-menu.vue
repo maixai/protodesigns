@@ -2,6 +2,9 @@
 // 项目行的「⋯」操作菜单:原生按钮的手写 disclosure,不用 NDropdown —— 本仓实测 NDropdown
 // 的菜单项无 tabindex、键盘完全不可用(与 agent-selector 同因)。
 //
+// 菜单只有两个一级项:「设置」与分隔线之后的「关闭项目」。设置不再是可展开入口 ——
+// 点击或 Enter 直接交给父级打开唯一的项目设置窗体,模型 / 权限 / MCP 在窗体内用 Tab 切换。
+//
 // 每个项目行各挂一个实例,开合状态留在组件内部:点其它行的 ⋯ 时,本实例会因「点击落在自己
 // 之外」而自行关闭,故同一时刻实际只有一个菜单打开,无需把状态提到页面。
 //
@@ -11,7 +14,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from '../i18n'
 
 const props = defineProps<{ projectName: string }>()
-const emit = defineEmits<{ close: []; configure: [kind: 'model' | 'permissions' | 'mcp'] }>()
+const emit = defineEmits<{ close: []; configure: [] }>()
 
 const { t } = useI18n()
 const isOpen = ref(false)
@@ -22,17 +25,17 @@ const popoverRef = ref<HTMLElement | null>(null)
 const menuId = `project-menu-${Math.random().toString(36).slice(2)}`
 
 function menuItems(): HTMLButtonElement[] {
-  return Array.from(popoverRef.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+  return Array.from(popoverRef.value?.querySelectorAll<HTMLButtonElement>('.project-menu__item[role="menuitem"]') ?? [])
 }
 
-function focusItem(index: number): void {
-  const items = menuItems()
+// 在菜单内循环聚焦;index 已由调用方换算成「当前项 ± 1」,越界时回绕。
+function focusAt(items: HTMLButtonElement[], index: number): void {
   if (items.length === 0) return
   const normalized = (index + items.length) % items.length
   items[normalized]?.focus()
 }
 
-// 等浮层实际渲染后读取高度:四条菜单项 + 分隔线不再使用固定高度。
+// 等浮层实际渲染后读取高度:菜单项与分隔线不再使用固定高度。
 // 只在下方不足且上方更宽裕时上翻,避免滚动容器顶部也没有空间时反而被裁。
 function measurePlacement(): void {
   const trigger = triggerRef.value
@@ -52,8 +55,8 @@ async function open(focus: 'first' | 'last' | null): Promise<void> {
   isOpen.value = true
   await nextTick()
   measurePlacement()
-  if (focus === 'first') focusItem(0)
-  else if (focus === 'last') focusItem(-1)
+  if (focus === 'first') focusAt(menuItems(), 0)
+  else if (focus === 'last') focusAt(menuItems(), -1)
 }
 
 function close(restoreFocus: boolean): void {
@@ -81,22 +84,23 @@ function onKeydown(event: KeyboardEvent): void {
   }
   if (event.key === 'Escape') {
     event.preventDefault()
-    // 阻止冒泡:窄屏抽屉在 document 上也监听 Escape,一次按键只关最上层菜单。
+    // 阻止冒泡:窄屏抽屉在 document 上也监听 Escape,一次按键只关最上层的一层。
     event.stopPropagation()
     close(true)
     return
   }
   if (event.key === 'Tab') {
+    // Tab / Shift+Tab 关闭整个菜单,不困住焦点。
     close(false)
     return
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  if (event.key === 'Home') { focusItem(0); return }
-  if (event.key === 'End') { focusItem(-1); return }
-  const current = menuItems().findIndex((item) => item === document.activeElement)
-  if (event.key === 'ArrowDown') focusItem(current < 0 ? 0 : current + 1)
-  else focusItem(current < 0 ? -1 : current - 1)
+  const items = menuItems()
+  if (event.key === 'Home') { focusAt(items, 0); return }
+  if (event.key === 'End') { focusAt(items, -1); return }
+  const current = items.findIndex((item) => item === document.activeElement)
+  focusAt(items, event.key === 'ArrowDown' ? (current < 0 ? 0 : current + 1) : (current < 0 ? -1 : current - 1))
 }
 
 function onFocusOut(event: FocusEvent): void {
@@ -111,10 +115,15 @@ function onDocumentPointerDown(event: PointerEvent): void {
   close(false)
 }
 
-function chooseConfiguration(kind: 'model' | 'permissions' | 'mcp'): void {
-  // 先关菜单并把焦点还给 ⋯,再让父级开窗;窗体关闭后便能沿同一焦点链归还。
+// 先关菜单并把焦点还给 ⋯,再让父级开窗;窗体关闭后便能沿同一焦点链归还。
+function chooseSettings(): void {
   close(true)
-  emit('configure', kind)
+  emit('configure')
+}
+
+function chooseClose(): void {
+  close(false)
+  emit('close')
 }
 
 onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
@@ -143,31 +152,18 @@ watch(isOpen, syncRowStacking)
     </button>
     <div v-if="isOpen" :id="menuId" ref="popoverRef" class="project-menu__popover" :class="{ 'is-up': opensUpward }" role="menu" :aria-label="`${t.workspace.projectActions}：${props.projectName}`">
       <button
-        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
-        :aria-label="`${t.workspace.projectSettings.modelMenuLabel}：${props.projectName}`"
-        @click="chooseConfiguration('model')"
+        type="button" class="project-menu__item"
+        role="menuitem" tabindex="-1"
+        :aria-label="`${t.workspace.projectSettings.settingsMenuLabel}：${props.projectName}`"
+        @click="chooseSettings"
       >
-        {{ t.workspace.projectSettings.modelMenuItem }}
-      </button>
-      <button
-        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
-        :aria-label="`${t.workspace.projectSettings.permissionMenuLabel}：${props.projectName}`"
-        @click="chooseConfiguration('permissions')"
-      >
-        {{ t.workspace.projectSettings.permissionMenuItem }}
-      </button>
-      <button
-        type="button" class="project-menu__item" role="menuitem" tabindex="-1"
-        :aria-label="`${t.workspace.projectSettings.mcpMenuLabel}：${props.projectName}`"
-        @click="chooseConfiguration('mcp')"
-      >
-        {{ t.workspace.projectSettings.mcpMenuItem }}
+        {{ t.workspace.projectSettings.settingsMenuItem }}
       </button>
       <div class="project-menu__separator" role="separator" />
       <button
         type="button" class="project-menu__item" data-tone="danger" role="menuitem" tabindex="-1"
         :aria-label="`${t.workspace.closeProject}：${props.projectName}`"
-        @click="close(false); emit('close')"
+        @click="chooseClose"
       >
         {{ t.workspace.closeProject }}
       </button>

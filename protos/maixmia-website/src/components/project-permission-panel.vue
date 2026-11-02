@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// 项目权限草稿:模式可覆盖,规则只追加;底部保存前不写入项目仓库。
-import { computed, nextTick, ref, watch } from 'vue'
+// 项目权限草稿:模式可覆盖,规则只追加;保存由统一设置窗体的底部动作区触发。
+// 面板挂载即加载(与另外两个域并行预取),切换 Tab 不卸载、不重置草稿。
+import { computed, onMounted, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
 import type { ProjectPermissionGroup } from '../contracts/generated/project-permission-group'
@@ -8,12 +9,11 @@ import { listProjectPermissionGroup, saveProjectPermissionGroup } from '../api/a
 import { useI18n } from '../i18n'
 import AgentPermissionsEditor from './agent-permissions.vue'
 import AgentReadonlyContext from './agent-readonly-context.vue'
-import ProjectConfigShell from './project-config-shell.vue'
+import type { ProjectPanelState } from './project-settings-state'
 
-const props = defineProps<{ open: boolean; project: Project; agent: AgentSummary }>()
-const emit = defineEmits<{ close: []; saved: [group: ProjectPermissionGroup] }>()
+const props = defineProps<{ project: Project; agent: AgentSummary }>()
+const emit = defineEmits<{ saved: [group: ProjectPermissionGroup]; state: [state: ProjectPanelState] }>()
 const { t } = useI18n()
-const rootRef = ref<HTMLElement | null>(null)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const draft = ref<ProjectPermissionGroup>({ path: props.project.path, modeOverride: null, rules: [] })
 const baselineSerialized = ref('')
@@ -30,60 +30,66 @@ const saveStateLabel = computed(() => {
   if (saveState.value === 'saved') return copy.saved
   return saveState.value === 'dirty' ? copy.saveDirty : copy.saveClean
 })
+const panelState = computed<ProjectPanelState>(() => ({
+  status: status.value,
+  dirty: isDirty.value,
+  saving: isSaving.value,
+  saveState: saveState.value,
+  saveStateLabel: saveStateLabel.value,
+  canSave: isDirty.value && status.value === 'ready' && !isSaving.value,
+}))
+watch(panelState, (state) => emit('state', state), { immediate: true })
 async function load(): Promise<void> {
   const version = ++loadVersion
   status.value = 'loading'
   saveFeedback.value = 'idle'
   saveError.value = ''
   const result = await listProjectPermissionGroup(props.project.path)
-  if (version !== loadVersion || !props.open) return
+  if (version !== loadVersion) return
   if (!result.ok) { status.value = 'error'; return }
   draft.value = structuredClone(result.value)
   baselineSerialized.value = JSON.stringify(result.value)
   status.value = 'ready'
 }
-async function save(): Promise<void> {
-  if (!isDirty.value || isSaving.value) return
+// 保存成功返回 true;失败返回 false,由窗体把焦点送到底部保存状态。
+async function save(): Promise<boolean> {
+  if (!isDirty.value || isSaving.value) return false
   isSaving.value = true
   saveError.value = ''
   saveFeedback.value = 'idle'
   const payload: ProjectPermissionGroup = { ...draft.value, rules: draft.value.rules.map((rule) => ({ ...rule })) }
   const result = await saveProjectPermissionGroup(props.project.path, payload)
-  if (!props.open) return
   isSaving.value = false
   if (!result.ok) {
     saveError.value = result.error.message
     saveFeedback.value = 'error'
-    await nextTick()
-    rootRef.value?.querySelector<HTMLElement>('.permissions-error, .project-config__save-state')?.focus()
-    return
+    return false
   }
   draft.value = structuredClone(result.value)
   baselineSerialized.value = JSON.stringify(result.value)
   saveFeedback.value = 'saved'
   emit('saved', result.value)
+  return true
 }
-watch(() => props.open, (isOpen) => { if (isOpen) void load(); else loadVersion += 1 }, { immediate: true })
 watch(isDirty, (dirty) => { if (dirty) saveFeedback.value = 'idle' })
+onMounted(() => { void load() })
+defineExpose({ save })
 </script>
 
 <template>
-  <ProjectConfigShell :open="open" :project="project" :title="t.workspace.projectSettings.permissionTitle" :scope-hint="t.workspace.projectSettings.permissionScopeHint" :busy="isSaving" @close="emit('close')">
-    <div ref="rootRef" class="project-permission">
-      <AgentReadonlyContext kind="permissions" :agent="agent" />
-      <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
-      <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
-      <template v-else>
-        <AgentPermissionsEditor :id-prefix="`project-permissions-${project.id}`" scope="project" :owner-id="project.path" :owner-name="project.name" v-model:default-mode="draft.modeOverride" v-model:rules="draft.rules" :disabled="isSaving" />
-      </template>
-    </div>
-    <template #footer="{ close }">
-      <p class="project-config__save-state" :data-state="saveState" tabindex="-1">{{ saveStateLabel }}</p>
-      <div class="project-config__buttons"><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="close">{{ t.workspace.projectSettings.cancel }}</button><button type="button" class="dl-btn dl-btn--primary" :disabled="!isDirty || status !== 'ready' || isSaving" @click="save">{{ isSaving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button></div>
+  <div class="project-permission">
+    <p class="project-config__scope">{{ t.workspace.projectSettings.permissionScopeHint }}</p>
+    <AgentReadonlyContext kind="permissions" :agent="agent" />
+    <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
+    <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
+    <template v-else>
+      <AgentPermissionsEditor :id-prefix="`project-permissions-${project.id}`" scope="project" :owner-id="project.path" :owner-name="project.name" v-model:default-mode="draft.modeOverride" v-model:rules="draft.rules" :disabled="isSaving" />
     </template>
-  </ProjectConfigShell>
+  </div>
 </template>
 
 <style scoped>
-.project-permission { display: grid; gap: var(--dl-space-4); min-width: 0; }
+/* 面板内的断点按内容区实际宽度判定,不复用视口断点:嵌在带左栏的窗体里时
+   视口宽度不等于面板宽度。 */
+.project-permission { display: grid; gap: var(--dl-space-4); min-width: 0; container-type: inline-size; }
 </style>

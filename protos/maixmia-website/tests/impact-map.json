@@ -43,10 +43,9 @@
     {
       "area": "project-settings",
       "paths": [
-        "src/components/project-config-shell.vue",
-        "src/components/project-model-dialog.vue",
-        "src/components/project-permission-dialog.vue",
-        "src/components/project-mcp-dialog.vue",
+        "src/components/project-settings-*.vue",
+        "src/components/project-settings-state.ts",
+        "src/components/project-*-panel.vue",
         "src/components/agent-readonly-context.vue",
         "src/components/agent-permissions.vue",
         "src/api/project-settings.ts",

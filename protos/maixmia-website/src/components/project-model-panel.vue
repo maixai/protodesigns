@@ -1,6 +1,8 @@
 <script setup lang="ts">
-// 项目模型窗体只保存模型覆盖;Agent 当前配置在 follow 与 custom 下都显示为只读上下文。
-import { computed, nextTick, ref, watch } from 'vue'
+// 项目模型面板:只保存模型覆盖;Agent 当前配置在 follow 与 custom 下都显示为只读上下文。
+// 面板挂载即加载(与另外两个域并行预取),切换 Tab 不卸载、不重置草稿;
+// 保存由统一设置窗体的底部动作区触发。
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ModelGateway, ModelSubscription } from '../contracts/generated/agent-model-config'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
@@ -13,13 +15,13 @@ import { useI18n } from '../i18n'
 import AgentReadonlyContext from './agent-readonly-context.vue'
 import DliIcon from './dl-icon.vue'
 import ModelSourceContext from './model-source-context.vue'
-import ProjectConfigShell from './project-config-shell.vue'
+import type { ProjectPanelState } from './project-settings-state'
 import SegmentedControl from './segmented-control.vue'
 import type { SegmentedOption } from './segmented-control.vue'
 import SelectField from './select-field.vue'
 
-const props = defineProps<{ open: boolean; project: Project; agent: AgentSummary }>()
-const emit = defineEmits<{ close: []; saved: [settings: ProjectModelSettings] }>()
+const props = defineProps<{ project: Project; agent: AgentSummary }>()
+const emit = defineEmits<{ saved: [settings: ProjectModelSettings]; state: [state: ProjectPanelState] }>()
 const { t } = useI18n()
 type ModelMode = 'follow' | 'custom'
 type ModelSection = 'source' | 'model' | 'advanced'
@@ -30,7 +32,6 @@ type SourceRow =
 
 const COMPACT_WINDOW_OPTIONS = [0, 100_000, 200_000, 400_000, 500_000, 1_000_000] as const
 const MODEL_SECTION_ORDER: readonly ModelSection[] = ['source', 'model', 'advanced']
-const rootRef = ref<HTMLElement | null>(null)
 const modelSubtabsRef = ref<HTMLElement | null>(null)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const isSaving = ref(false)
@@ -163,6 +164,14 @@ const saveStateLabel = computed(() => {
   if (saveState.value === 'invalid') return firstValidationMessage.value
   return saveState.value === 'dirty' ? copy.saveDirty : copy.saveClean
 })
+const panelState = computed<ProjectPanelState>(() => ({
+  status: status.value,
+  dirty: isDirty.value,
+  saving: isSaving.value,
+  saveState: saveState.value,
+  saveStateLabel: saveStateLabel.value,
+  canSave: isDirty.value && isValid.value && !isBusy.value,
+}))
 const sourceModelIds = computed(() => modelValidation.value.source.modelIds)
 const defaultModelOptions = computed(() => modelId.value !== '' && !sourceModelIds.value.includes(modelId.value) ? [modelId.value, ...sourceModelIds.value] : sourceModelIds.value)
 const isEffortUnsupported = computed(() => !projectModelSupportsEffort(modelValidation.value.modelId))
@@ -198,13 +207,13 @@ async function load(): Promise<void> {
   saveFeedback.value = 'idle'
   saveErrorMessage.value = ''
   const result = await getProjectModelSettings(props.project.path)
-  if (version !== loadVersion || !props.open) return
+  if (version !== loadVersion) return
   if (!result.ok) { status.value = 'error'; return }
   applySettings(result.value)
   status.value = 'ready'
   baselineSerialized.value = JSON.stringify(payload.value)
 }
-watch(() => props.open, (isOpen) => { if (isOpen) void load(); else loadVersion += 1 }, { immediate: true })
+watch(panelState, (state) => emit('state', state), { immediate: true })
 watch(() => JSON.stringify(payload.value), () => { if (isDirty.value && saveFeedback.value !== 'idle') saveFeedback.value = 'idle' })
 function activateModelSection(section: ModelSection, moveFocus: boolean): void {
   activeModelSection.value = section
@@ -242,85 +251,82 @@ function moveFallback(index: number, delta: number): void {
   fallbackModelIds.value[target] = current
 }
 function removeFallback(index: number): void { fallbackModelIds.value.splice(index, 1) }
-async function save(): Promise<void> {
-  if (!isDirty.value || !isValid.value || isSaving.value) return
+// 保存成功返回 true;失败返回 false,由窗体把焦点送到底部保存状态。
+async function save(): Promise<boolean> {
+  if (!isDirty.value || !isValid.value || isSaving.value) return false
   isSaving.value = true
   saveFeedback.value = 'idle'
   saveErrorMessage.value = ''
   const result = await saveProjectModelSettings(props.project.path, payload.value, props.agent.model)
-  if (!props.open) return
   isSaving.value = false
   if (!result.ok) {
     saveErrorMessage.value = result.error.message
     saveFeedback.value = 'error'
-    await nextTick()
-    rootRef.value?.querySelector<HTMLElement>('.project-config__save-state')?.focus()
-    return
+    return false
   }
   applySettings(result.value)
   baselineSerialized.value = JSON.stringify(payload.value)
   saveFeedback.value = 'saved'
   emit('saved', result.value)
+  return true
 }
+onMounted(() => { void load() })
+defineExpose({ save })
 </script>
 
 <template>
-  <ProjectConfigShell :open="open" :project="project" :title="t.workspace.projectSettings.modelTitle" :scope-hint="t.workspace.projectSettings.modelScopeHint" :busy="isSaving" @close="emit('close')">
-    <div ref="rootRef" class="project-model">
-      <AgentReadonlyContext kind="model" :agent="agent" />
-      <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
-      <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
-      <template v-else>
-        <section class="project-model__mode" :aria-labelledby="`${dialogId}-mode-title`">
-          <div class="project-model__mode-copy"><h3 :id="`${dialogId}-mode-title`">{{ t.workspace.projectSettings.modelMode }}</h3><p :id="modelSectionHintId" class="project-model__hint">{{ modelMode === 'follow' ? t.workspace.projectSettings.followModeHint : t.workspace.projectSettings.customModeHint }}</p></div>
-          <SegmentedControl :model-value="modelMode" :options="modelModeOptions" :label="t.workspace.projectSettings.modelMode" @update:model-value="onModelModeChange" />
-        </section>
-        <template v-if="modelMode === 'custom'">
-          <div ref="modelSubtabsRef" class="project-model__subtabs">
-            <div class="project-model__subtabs-track" role="tablist" :aria-label="t.workspace.projectSettings.modelSectionsLabel" @keydown="onModelSectionKeydown">
-              <button v-for="section in modelSections" :id="`${dialogId}-model-tab-${section.id}`" :key="section.id" type="button" role="tab" :data-section="section.id" :aria-selected="activeModelSection === section.id" :aria-controls="`${dialogId}-model-panel-${section.id}`" :tabindex="activeModelSection === section.id ? 0 : -1" @click="activateModelSection(section.id, false)">{{ section.label }}</button>
-            </div>
+  <div class="project-model">
+    <p class="project-config__scope">{{ t.workspace.projectSettings.modelScopeHint }}</p>
+    <AgentReadonlyContext kind="model" :agent="agent" />
+    <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
+    <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
+    <template v-else>
+      <section class="project-model__mode" :aria-labelledby="`${dialogId}-mode-title`">
+        <div class="project-model__mode-copy"><h3 :id="`${dialogId}-mode-title`">{{ t.workspace.projectSettings.modelMode }}</h3><p :id="modelSectionHintId" class="project-model__hint">{{ modelMode === 'follow' ? t.workspace.projectSettings.followModeHint : t.workspace.projectSettings.customModeHint }}</p></div>
+        <SegmentedControl :model-value="modelMode" :options="modelModeOptions" :label="t.workspace.projectSettings.modelMode" @update:model-value="onModelModeChange" />
+      </section>
+      <template v-if="modelMode === 'custom'">
+        <div ref="modelSubtabsRef" class="project-model__subtabs">
+          <div class="project-model__subtabs-track" role="tablist" :aria-label="t.workspace.projectSettings.modelSectionsLabel" @keydown="onModelSectionKeydown">
+            <button v-for="section in modelSections" :id="`${dialogId}-model-tab-${section.id}`" :key="section.id" type="button" role="tab" :data-section="section.id" :aria-selected="activeModelSection === section.id" :aria-controls="`${dialogId}-model-panel-${section.id}`" :tabindex="activeModelSection === section.id ? 0 : -1" @click="activateModelSection(section.id, false)">{{ section.label }}</button>
           </div>
-          <div v-show="activeModelSection === 'source'" :id="`${dialogId}-model-panel-source`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`">
-            <p class="project-model__hint">{{ t.workspace.projectSettings.sourceHint }}</p>
-            <div class="project-model__source-list" role="radiogroup" :aria-label="t.workspace.projectSettings.source" :aria-describedby="sourceErrorMessage ? sourceErrorId : undefined">
-              <label v-if="hasMissingSelectedSource" class="project-model__source-option" data-disabled="true"><input v-model="selectedSourceId" type="radio" name="project-model-source" :value="selectedSourceId" disabled :aria-describedby="sourceErrorId"><span class="project-model__source-copy"><span class="project-model__source-head"><span class="project-model__source-name"><code>{{ selectedSourceId }}</code></span><span class="project-model__source-secondary">{{ t.workspace.projectSettings.sourceMissingShort }}</span></span></span></label>
-              <label v-for="(row, index) in sourceRows" :key="row.id" class="project-model__source-option" :data-disabled="row.resolution.issue !== null ? 'true' : undefined">
-                <input v-model="selectedSourceId" type="radio" name="project-model-source" :value="row.id" :disabled="isBusy || row.resolution.issue !== null" :aria-describedby="row.resolution.issue === null ? undefined : sourceRowReasonId(index)">
-                <span class="project-model__source-copy"><span class="project-model__source-head"><span class="project-model__source-name">{{ sourceName(row) }}</span><span class="project-model__source-secondary"><span>{{ sourceMeta(row) }}</span><span class="project-model__source-status" :data-tone="row.resolution.issue === null ? 'neutral' : 'error'">{{ sourceStatus(row) }}</span><span v-if="sourceUsage(row) !== ''" :data-tone="sourceUsageTone(row)">{{ sourceUsage(row) }}</span></span></span><span v-if="row.resolution.issue !== null" :id="sourceRowReasonId(index)" class="project-model__source-reason">{{ sourceIssueMessage(row.resolution) }}</span></span>
-              </label>
-            </div>
-            <p v-if="sourceErrorMessage" :id="sourceErrorId" class="project-config__error" role="alert">{{ sourceErrorMessage }}</p>
+        </div>
+        <div v-show="activeModelSection === 'source'" :id="`${dialogId}-model-panel-source`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`">
+          <p class="project-model__hint">{{ t.workspace.projectSettings.sourceHint }}</p>
+          <div class="project-model__source-list" role="radiogroup" :aria-label="t.workspace.projectSettings.source" :aria-describedby="sourceErrorMessage ? sourceErrorId : undefined">
+            <label v-if="hasMissingSelectedSource" class="project-model__source-option" data-disabled="true"><input v-model="selectedSourceId" type="radio" name="project-model-source" :value="selectedSourceId" disabled :aria-describedby="sourceErrorId"><span class="project-model__source-copy"><span class="project-model__source-head"><span class="project-model__source-name"><code>{{ selectedSourceId }}</code></span><span class="project-model__source-secondary">{{ t.workspace.projectSettings.sourceMissingShort }}</span></span></span></label>
+            <label v-for="(row, index) in sourceRows" :key="row.id" class="project-model__source-option" :data-disabled="row.resolution.issue !== null ? 'true' : undefined">
+              <input v-model="selectedSourceId" type="radio" name="project-model-source" :value="row.id" :disabled="isBusy || row.resolution.issue !== null" :aria-describedby="row.resolution.issue === null ? undefined : sourceRowReasonId(index)">
+              <span class="project-model__source-copy"><span class="project-model__source-head"><span class="project-model__source-name">{{ sourceName(row) }}</span><span class="project-model__source-secondary"><span>{{ sourceMeta(row) }}</span><span class="project-model__source-status" :data-tone="row.resolution.issue === null ? 'neutral' : 'error'">{{ sourceStatus(row) }}</span><span v-if="sourceUsage(row) !== ''" :data-tone="sourceUsageTone(row)">{{ sourceUsage(row) }}</span></span></span><span v-if="row.resolution.issue !== null" :id="sourceRowReasonId(index)" class="project-model__source-reason">{{ sourceIssueMessage(row.resolution) }}</span></span>
+            </label>
           </div>
-          <div v-show="activeModelSection === 'model'" :id="`${dialogId}-model-panel-model`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-model`">
-            <ModelSourceContext :name="selectedSourceName" account="" :usage="selectedSourceUsage" :is-draft-changed="false" :disabled="isBusy" @change="activateModelSection('source', true)" />
-            <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.modelGroup }}</h3></div><div class="project-model__block-body">
-              <div class="project-model__row"><label :for="`${dialogId}-model`">{{ t.workspace.projectSettings.modelDefault }}</label><SelectField><select :id="`${dialogId}-model`" v-model="modelId" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="modelErrorMessage ? 'true' : undefined" :aria-describedby="modelErrorMessage ? modelErrorId : undefined"><option v-for="option in defaultModelOptions" :key="option" :value="option">{{ sourceModelIds.includes(option) ? displayModelName(option) : unavailableModelLabel(option) }} · {{ option }}</option></select></SelectField><p v-if="modelErrorMessage" :id="modelErrorId" class="project-config__error project-model__row-message" role="alert">{{ modelErrorMessage }}</p></div>
-              <div class="project-model__row"><div><label :for="`${dialogId}-effort`">{{ t.workspace.projectSettings.effort }}</label><p v-if="isEffortUnsupported" :id="effortHintId" class="project-model__hint">{{ t.workspace.projectSettings.effortUnsupportedHint }}</p></div><SelectField><select :id="`${dialogId}-effort`" v-model="effortLevel" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="effortErrorMessage ? 'true' : undefined" :aria-describedby="effortErrorMessage ? effortErrorId : isEffortUnsupported ? effortHintId : undefined"><option value="">{{ t.workspace.projectSettings.effortModelDefaultValue }}</option><option v-for="level in EFFORT_LEVELS" :key="level" :value="level" :disabled="isEffortUnsupported">{{ level }}</option></select></SelectField><p v-if="effortErrorMessage" :id="effortErrorId" class="project-config__error project-model__row-message" role="alert">{{ effortErrorMessage }}</p></div>
-            </div></section>
-          </div>
-          <div v-show="activeModelSection === 'advanced'" :id="`${dialogId}-model-panel-advanced`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-advanced`">
-            <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.fallback }}</h3><p class="project-model__hint">{{ t.workspace.projectSettings.fallbackHint }}</p></div><div class="project-model__block-content">
-              <ol v-if="fallbackModelIds.length > 0" class="project-model__fallback-list"><li v-for="(id, index) in fallbackModelIds" :key="`${index}-${id}`" class="project-model__fallback-row"><span>{{ index + 1 }}</span><SelectField><select :value="id" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-label="t.workspace.projectSettings.fallbackSelect.replace('{index}', String(index + 1))" @change="updateFallback(index, $event)"><option v-for="option in fallbackOptionsFor(index)" :key="option" :value="option" :disabled="option === modelValidation.modelId && option !== id">{{ sourceModelIds.includes(option) ? displayModelName(option) : unavailableModelLabel(option) }} · {{ option }}</option></select></SelectField><div class="project-model__row-actions"><button type="button" :disabled="isBusy || index === 0" :aria-label="t.workspace.projectSettings.fallbackMoveUp.replace('{index}', String(index + 1))" @click="moveFallback(index, -1)"><DliIcon name="chevronRight" size="sm" class="project-model__up" /></button><button type="button" :disabled="isBusy || index === fallbackModelIds.length - 1" :aria-label="t.workspace.projectSettings.fallbackMoveDown.replace('{index}', String(index + 1))" @click="moveFallback(index, 1)"><DliIcon name="chevronRight" size="sm" class="project-model__down" /></button><button type="button" :disabled="isBusy" :aria-label="t.workspace.projectSettings.fallbackRemove.replace('{index}', String(index + 1))" @click="removeFallback(index)"><span aria-hidden="true">✕</span></button></div></li></ol>
-              <p v-else>{{ t.workspace.projectSettings.fallbackEmpty }}</p><div class="project-model__fallback-actions"><button type="button" class="project-model__add" :disabled="isBusy || fallbackModelIds.length >= 3 || modelValidation.source.issue !== null" @click="addFallback">＋ {{ t.workspace.projectSettings.fallbackAdd }}</button><span>{{ fallbackModelIds.length }}/3</span></div><p v-if="fallbackErrorMessage" :id="fallbackErrorId" class="project-config__error" role="alert">{{ fallbackErrorMessage }}</p>
-            </div></section>
-            <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.contextAndThinking }}</h3></div><div class="project-model__block-body">
-              <div class="project-model__row"><label :for="`${dialogId}-compact`">{{ t.workspace.projectSettings.autoCompact }}</label><SelectField><select :id="`${dialogId}-compact`" v-model="compactWindow" class="field__input field__select" :disabled="isBusy"><option v-for="value in COMPACT_WINDOW_OPTIONS" :key="value" :value="value">{{ compactLabel(value) }}</option></select></SelectField></div>
-              <div class="project-model__row"><label :for="`${dialogId}-thinking`">{{ t.workspace.projectSettings.alwaysThinking }}</label><SelectField><select :id="`${dialogId}-thinking`" v-model="alwaysThinkingEnabled" class="field__input field__select" :disabled="isBusy"><option :value="true">{{ t.workspace.projectSettings.enabled }}</option><option :value="false">{{ t.workspace.projectSettings.disabled }}</option></select></SelectField></div>
-            </div></section>
-          </div>
-        </template>
+          <p v-if="sourceErrorMessage" :id="sourceErrorId" class="project-config__error" role="alert">{{ sourceErrorMessage }}</p>
+        </div>
+        <div v-show="activeModelSection === 'model'" :id="`${dialogId}-model-panel-model`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-model`">
+          <ModelSourceContext :name="selectedSourceName" account="" :usage="selectedSourceUsage" :is-draft-changed="false" :disabled="isBusy" @change="activateModelSection('source', true)" />
+          <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.modelGroup }}</h3></div><div class="project-model__block-body">
+            <div class="project-model__row"><label :for="`${dialogId}-model`">{{ t.workspace.projectSettings.modelDefault }}</label><SelectField><select :id="`${dialogId}-model`" v-model="modelId" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="modelErrorMessage ? 'true' : undefined" :aria-describedby="modelErrorMessage ? modelErrorId : undefined"><option v-for="option in defaultModelOptions" :key="option" :value="option">{{ sourceModelIds.includes(option) ? displayModelName(option) : unavailableModelLabel(option) }} · {{ option }}</option></select></SelectField><p v-if="modelErrorMessage" :id="modelErrorId" class="project-config__error project-model__row-message" role="alert">{{ modelErrorMessage }}</p></div>
+            <div class="project-model__row"><div><label :for="`${dialogId}-effort`">{{ t.workspace.projectSettings.effort }}</label><p v-if="isEffortUnsupported" :id="effortHintId" class="project-model__hint">{{ t.workspace.projectSettings.effortUnsupportedHint }}</p></div><SelectField><select :id="`${dialogId}-effort`" v-model="effortLevel" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="effortErrorMessage ? 'true' : undefined" :aria-describedby="effortErrorMessage ? effortErrorId : isEffortUnsupported ? effortHintId : undefined"><option value="">{{ t.workspace.projectSettings.effortModelDefaultValue }}</option><option v-for="level in EFFORT_LEVELS" :key="level" :value="level" :disabled="isEffortUnsupported">{{ level }}</option></select></SelectField><p v-if="effortErrorMessage" :id="effortErrorId" class="project-config__error project-model__row-message" role="alert">{{ effortErrorMessage }}</p></div>
+          </div></section>
+        </div>
+        <div v-show="activeModelSection === 'advanced'" :id="`${dialogId}-model-panel-advanced`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-advanced`">
+          <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.fallback }}</h3><p class="project-model__hint">{{ t.workspace.projectSettings.fallbackHint }}</p></div><div class="project-model__block-content">
+            <ol v-if="fallbackModelIds.length > 0" class="project-model__fallback-list"><li v-for="(id, index) in fallbackModelIds" :key="`${index}-${id}`" class="project-model__fallback-row"><span>{{ index + 1 }}</span><SelectField><select :value="id" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-label="t.workspace.projectSettings.fallbackSelect.replace('{index}', String(index + 1))" @change="updateFallback(index, $event)"><option v-for="option in fallbackOptionsFor(index)" :key="option" :value="option" :disabled="option === modelValidation.modelId && option !== id">{{ sourceModelIds.includes(option) ? displayModelName(option) : unavailableModelLabel(option) }} · {{ option }}</option></select></SelectField><div class="project-model__row-actions"><button type="button" :disabled="isBusy || index === 0" :aria-label="t.workspace.projectSettings.fallbackMoveUp.replace('{index}', String(index + 1))" @click="moveFallback(index, -1)"><DliIcon name="chevronRight" size="sm" class="project-model__up" /></button><button type="button" :disabled="isBusy || index === fallbackModelIds.length - 1" :aria-label="t.workspace.projectSettings.fallbackMoveDown.replace('{index}', String(index + 1))" @click="moveFallback(index, 1)"><DliIcon name="chevronRight" size="sm" class="project-model__down" /></button><button type="button" :disabled="isBusy" :aria-label="t.workspace.projectSettings.fallbackRemove.replace('{index}', String(index + 1))" @click="removeFallback(index)"><span aria-hidden="true">✕</span></button></div></li></ol>
+            <p v-else>{{ t.workspace.projectSettings.fallbackEmpty }}</p><div class="project-model__fallback-actions"><button type="button" class="project-model__add" :disabled="isBusy || fallbackModelIds.length >= 3 || modelValidation.source.issue !== null" @click="addFallback">＋ {{ t.workspace.projectSettings.fallbackAdd }}</button><span>{{ fallbackModelIds.length }}/3</span></div><p v-if="fallbackErrorMessage" :id="fallbackErrorId" class="project-config__error" role="alert">{{ fallbackErrorMessage }}</p>
+          </div></section>
+          <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.contextAndThinking }}</h3></div><div class="project-model__block-body">
+            <div class="project-model__row"><label :for="`${dialogId}-compact`">{{ t.workspace.projectSettings.autoCompact }}</label><SelectField><select :id="`${dialogId}-compact`" v-model="compactWindow" class="field__input field__select" :disabled="isBusy"><option v-for="value in COMPACT_WINDOW_OPTIONS" :key="value" :value="value">{{ compactLabel(value) }}</option></select></SelectField></div>
+            <div class="project-model__row"><label :for="`${dialogId}-thinking`">{{ t.workspace.projectSettings.alwaysThinking }}</label><SelectField><select :id="`${dialogId}-thinking`" v-model="alwaysThinkingEnabled" class="field__input field__select" :disabled="isBusy"><option :value="true">{{ t.workspace.projectSettings.enabled }}</option><option :value="false">{{ t.workspace.projectSettings.disabled }}</option></select></SelectField></div>
+          </div></section>
+        </div>
       </template>
-    </div>
-    <template #footer="{ close }">
-      <p class="project-config__save-state" :data-state="saveState" tabindex="-1">{{ saveStateLabel }}</p>
-      <div class="project-config__buttons"><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="close">{{ t.workspace.projectSettings.cancel }}</button><button type="button" class="dl-btn dl-btn--primary" :disabled="!isDirty || !isValid || isBusy" @click="save">{{ isSaving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button></div>
     </template>
-  </ProjectConfigShell>
+  </div>
 </template>
 
 <style scoped>
-.project-model { display: grid; gap: var(--dl-space-4); min-width: 0; }
+/* 面板内的断点按内容区实际宽度判定,不复用视口断点:嵌在带左栏的窗体里时两者不等。 */
+.project-model { display: grid; gap: var(--dl-space-4); min-width: 0; container-type: inline-size; }
 .project-model__hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .project-model__mode { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--dl-space-3); padding-block-end: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-subtle); }
 .project-model__mode-copy { display: grid; flex: 1 1 calc(var(--dl-space-12) * 5); gap: var(--dl-space-1); min-width: 0; }
@@ -363,7 +369,7 @@ async function save(): Promise<void> {
 .project-model__fallback-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); }
 .project-model__add { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); }
 .project-model__add:disabled, .project-model__row-actions button:disabled { color: var(--dl-text-disabled); cursor: not-allowed; }
-@media (max-width: 767px) {
+@container (max-width: 520px) {
   .project-model__source-head { flex-direction: column; gap: var(--dl-space-1); }
   .project-model__source-secondary { justify-content: flex-start; }
   .project-model__row { grid-template-columns: minmax(0, 1fr); }
@@ -371,5 +377,5 @@ async function save(): Promise<void> {
   .project-model__fallback-row { grid-template-columns: var(--dl-icon-md) minmax(0, 1fr); }
   .project-model__row-actions { grid-column: 2; }
 }
-@media (max-width: 560px) { .project-model__subtabs-track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 360px) { .project-model__subtabs-track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 </style>

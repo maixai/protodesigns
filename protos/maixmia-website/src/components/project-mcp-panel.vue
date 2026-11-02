@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// 项目 MCP:服务器配置进入草稿并由底部保存;认证/重连是独立的即时连接生命周期操作。
-import { computed, nextTick, ref, watch } from 'vue'
+// 项目 MCP:服务器配置进入草稿并由统一窗体的底部保存触发;认证/重连是独立的即时连接生命周期操作。
+// 面板挂载即加载(与另外两个域并行预取),切换 Tab 不卸载、不重置草稿。
+import { computed, onMounted, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
 import type { McpServer, McpTransportId } from '../contracts/generated/mcp-server'
@@ -9,12 +10,11 @@ import {
 } from '../api/agent-mcp'
 import { useI18n } from '../i18n'
 import AgentReadonlyContext from './agent-readonly-context.vue'
-import ProjectConfigShell from './project-config-shell.vue'
+import type { ProjectPanelState } from './project-settings-state'
 
-const props = defineProps<{ open: boolean; project: Project; agent: AgentSummary }>()
-const emit = defineEmits<{ close: []; saved: [servers: McpServer[]]; announce: [message: string] }>()
+const props = defineProps<{ project: Project; agent: AgentSummary }>()
+const emit = defineEmits<{ saved: [servers: McpServer[]]; announce: [message: string]; state: [state: ProjectPanelState] }>()
 const { t } = useI18n()
-const rootRef = ref<HTMLElement | null>(null)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const draftServers = ref<McpServer[]>([])
 const savedServers = ref<McpServer[]>([])
@@ -42,6 +42,15 @@ const saveStateLabel = computed(() => {
   if (saveState.value === 'saved') return copy.saved
   return saveState.value === 'dirty' ? copy.saveDirty : copy.saveClean
 })
+const panelState = computed<ProjectPanelState>(() => ({
+  status: status.value,
+  dirty: isDirty.value,
+  saving: isSaving.value,
+  saveState: saveState.value,
+  saveStateLabel: saveStateLabel.value,
+  canSave: isDirty.value && status.value === 'ready' && !isSaving.value,
+}))
+watch(panelState, (state) => emit('state', state), { immediate: true })
 function cloneServers(servers: readonly McpServer[]): McpServer[] { return servers.map((server) => ({ ...server, tools: server.tools.map((tool) => ({ ...tool })) })) }
 function statusLabel(server: McpServer): string { return t.value.workspace.mcp.status[server.status] }
 function hasEnablementDraft(server: McpServer): boolean {
@@ -117,33 +126,32 @@ async function load(): Promise<void> {
   saveError.value = ''
   actionError.value = ''
   const result = await listProjectMcpServers(props.project.path)
-  if (version !== loadVersion || !props.open) return
+  if (version !== loadVersion) return
   if (!result.ok) { status.value = 'error'; return }
   draftServers.value = cloneServers(result.value.servers)
   savedServers.value = cloneServers(result.value.servers)
   status.value = 'ready'
 }
-async function save(): Promise<void> {
-  if (!isDirty.value || isSaving.value) return
+// 保存成功返回 true;失败返回 false,由窗体把焦点送到底部保存状态。
+async function save(): Promise<boolean> {
+  if (!isDirty.value || isSaving.value) return false
   const invalid = validateDraft()
-  if (invalid !== '') { saveError.value = invalid; saveFeedback.value = 'error'; return }
+  if (invalid !== '') { saveError.value = invalid; saveFeedback.value = 'error'; return false }
   isSaving.value = true
   saveError.value = ''
   saveFeedback.value = 'idle'
   const result = await saveProjectMcpGroup(props.project.path, cloneServers(draftServers.value))
-  if (!props.open) return
   isSaving.value = false
   if (!result.ok) {
     saveError.value = result.error.message
     saveFeedback.value = 'error'
-    await nextTick()
-    rootRef.value?.querySelector<HTMLElement>('.project-config__save-state')?.focus()
-    return
+    return false
   }
   draftServers.value = cloneServers(result.value.servers)
   savedServers.value = cloneServers(result.value.servers)
   saveFeedback.value = 'saved'
   emit('saved', result.value.servers)
+  return true
 }
 async function connect(server: McpServer): Promise<void> {
   if (!canConnect(server)) return
@@ -153,7 +161,6 @@ async function connect(server: McpServer): Promise<void> {
   const request = isAuth ? authenticateProjectMcpServer : reconnectProjectMcpServer
   const result = await request(props.project.path, server.id)
   connectingId.value = ''
-  if (!props.open) return
   if (!result.ok) { actionError.value = result.error.message; return }
   savedServers.value = cloneServers(result.value.servers)
   const connected = result.value.servers.find((item) => item.id === server.id)
@@ -165,62 +172,59 @@ async function connect(server: McpServer): Promise<void> {
   const copy = t.value.workspace.mcp
   emit('announce', (isAuth ? copy.projectAuthenticatedAnnounce : copy.projectReconnectedAnnounce).replace('{name}', server.displayName).replace('{project}', props.project.name))
 }
-watch(() => props.open, (isOpen) => { if (isOpen) void load(); else loadVersion += 1 }, { immediate: true })
 watch(isDirty, (dirty) => { if (dirty) saveFeedback.value = 'idle' })
+onMounted(() => { void load() })
+defineExpose({ save })
 </script>
 
 <template>
-  <ProjectConfigShell :open="open" :project="project" :title="t.workspace.projectSettings.mcpDialogTitle" :scope-hint="t.workspace.projectSettings.mcpScopeHint" :busy="isSaving" @close="emit('close')">
-    <div ref="rootRef" class="project-mcp">
-      <AgentReadonlyContext kind="mcp" :agent="agent" :project-servers="savedServers" />
-      <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
-      <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
-      <template v-else>
-        <section class="project-mcp__configuration">
-          <div class="project-mcp__section-head"><div><h3>{{ t.workspace.projectSettings.mcpProjectServers }}</h3><p>{{ t.workspace.mcp.sameNamePrecedence }}</p></div><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="openAdd">＋ {{ t.workspace.mcp.add }}</button></div>
-          <p class="project-mcp__fallback">{{ t.workspace.mcp.sameNameFallbackHint }}</p>
-          <p v-if="draftServers.length === 0" class="project-mcp__empty">{{ t.workspace.mcp.emptyProject }}</p>
-          <ul v-else class="project-mcp__list">
-            <li v-for="server in draftServers" :key="server.id" class="project-mcp__server" :data-server-id="server.id">
-              <div class="project-mcp__server-head"><strong>{{ server.displayName }}</strong><span>{{ statusLabel(server) }}</span><span v-if="hasEnablementDraft(server)" class="project-mcp__pending">{{ t.workspace.mcp.pendingSave }}</span><span v-if="server.status === 'connected'">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span></div>
-              <div class="project-mcp__fields">
-                <label>{{ t.workspace.mcp.name }}<input class="field__input" :value="server.name" :disabled="isSaving" @input="updateText(server, 'name', $event)"></label>
-                <label>{{ t.workspace.mcp.displayName }}<input class="field__input" :value="server.displayName" :disabled="isSaving" @input="updateText(server, 'displayName', $event)"></label>
-                <label>{{ t.workspace.mcp.transportLabel }}<select class="field__input field__select" :value="server.transport" :disabled="isSaving" @change="updateTransport(server, $event)"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select></label>
-                <label class="project-mcp__endpoint">{{ t.workspace.mcp.endpointLabel }}<input class="field__input" :value="server.endpoint" :disabled="isSaving" @input="updateText(server, 'endpoint', $event)"></label>
-              </div>
-              <div class="project-mcp__row-actions">
-                <label class="project-mcp__enabled"><input type="checkbox" :checked="server.enabled" :disabled="isSaving" @change="updateEnabled(server, $event)">{{ t.workspace.projectSettings.mcpEnabled }}</label>
-                <button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" :aria-label="t.workspace.mcp.projectRemoveLabel.replace('{name}', server.displayName).replace('{project}', project.name)" @click="removeServer(server)">{{ t.workspace.mcp.remove }}</button>
-              </div>
-              <div v-if="server.status === 'needsAuth' || server.status === 'failed'" class="project-mcp__connection">
-                <button type="button" class="dl-btn dl-btn--ghost" :disabled="!canConnect(server)" :aria-label="(server.status === 'needsAuth' ? t.workspace.mcp.projectAuthenticateLabel : t.workspace.mcp.projectReconnectLabel).replace('{name}', server.displayName).replace('{project}', project.name)" @click="connect(server)">{{ connectingId === server.id ? t.workspace.mcp.connecting : server.status === 'needsAuth' ? t.workspace.mcp.authenticate : t.workspace.mcp.reconnect }}</button>
-                <span v-if="!isSavedUnchanged(server)">{{ t.workspace.mcp.saveBeforeConnect }}</span>
-              </div>
-            </li>
-          </ul>
-          <form v-if="isAddOpen" class="project-mcp__add" @submit.prevent="addServer">
-            <label>{{ t.workspace.mcp.name }}<input v-model="addName" class="field__input" :placeholder="t.workspace.mcp.namePlaceholder"></label>
-            <label>{{ t.workspace.mcp.displayName }}<input v-model="addDisplayName" class="field__input" :placeholder="t.workspace.mcp.displayNamePlaceholder"></label>
-            <label>{{ t.workspace.mcp.transportLabel }}<select v-model="addTransport" class="field__input field__select"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select></label>
-            <label>{{ t.workspace.mcp.endpointLabel }}<input v-model="addEndpoint" class="field__input" :placeholder="t.workspace.mcp.endpointPlaceholder"></label>
-            <p v-if="addError" class="project-config__error" role="alert">{{ addError }}</p>
-            <div class="project-mcp__add-actions"><button type="submit" class="dl-btn dl-btn--primary">{{ t.workspace.mcp.submitAdd }}</button><button type="button" class="dl-btn dl-btn--ghost" @click="isAddOpen = false">{{ t.workspace.mcp.cancel }}</button></div>
-          </form>
-        </section>
-        <p class="project-mcp__immediate">{{ t.workspace.mcp.connectionImmediate }}</p>
-        <p v-if="actionError" class="project-config__error" role="alert">{{ actionError }}</p>
-      </template>
-    </div>
-    <template #footer="{ close }">
-      <p class="project-config__save-state" :data-state="saveState" tabindex="-1">{{ saveStateLabel }}</p>
-      <div class="project-config__buttons"><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="close">{{ t.workspace.projectSettings.cancel }}</button><button type="button" class="dl-btn dl-btn--primary" :disabled="!isDirty || status !== 'ready' || isSaving" @click="save">{{ isSaving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button></div>
+  <div class="project-mcp">
+    <p class="project-config__scope">{{ t.workspace.projectSettings.mcpScopeHint }}</p>
+    <AgentReadonlyContext kind="mcp" :agent="agent" :project-servers="savedServers" />
+    <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
+    <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
+    <template v-else>
+      <section class="project-mcp__configuration">
+        <div class="project-mcp__section-head"><div><h3>{{ t.workspace.projectSettings.mcpProjectServers }}</h3><p>{{ t.workspace.mcp.sameNamePrecedence }}</p></div><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="openAdd">＋ {{ t.workspace.mcp.add }}</button></div>
+        <p class="project-mcp__fallback">{{ t.workspace.mcp.sameNameFallbackHint }}</p>
+        <p v-if="draftServers.length === 0" class="project-mcp__empty">{{ t.workspace.mcp.emptyProject }}</p>
+        <ul v-else class="project-mcp__list">
+          <li v-for="server in draftServers" :key="server.id" class="project-mcp__server" :data-server-id="server.id">
+            <div class="project-mcp__server-head"><strong>{{ server.displayName }}</strong><span>{{ statusLabel(server) }}</span><span v-if="hasEnablementDraft(server)" class="project-mcp__pending">{{ t.workspace.mcp.pendingSave }}</span><span v-if="server.status === 'connected'">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span></div>
+            <div class="project-mcp__fields">
+              <label>{{ t.workspace.mcp.name }}<input class="field__input" :value="server.name" :disabled="isSaving" @input="updateText(server, 'name', $event)"></label>
+              <label>{{ t.workspace.mcp.displayName }}<input class="field__input" :value="server.displayName" :disabled="isSaving" @input="updateText(server, 'displayName', $event)"></label>
+              <label>{{ t.workspace.mcp.transportLabel }}<select class="field__input field__select" :value="server.transport" :disabled="isSaving" @change="updateTransport(server, $event)"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select></label>
+              <label class="project-mcp__endpoint">{{ t.workspace.mcp.endpointLabel }}<input class="field__input" :value="server.endpoint" :disabled="isSaving" @input="updateText(server, 'endpoint', $event)"></label>
+            </div>
+            <div class="project-mcp__row-actions">
+              <label class="project-mcp__enabled"><input type="checkbox" :checked="server.enabled" :disabled="isSaving" @change="updateEnabled(server, $event)">{{ t.workspace.projectSettings.mcpEnabled }}</label>
+              <button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" :aria-label="t.workspace.mcp.projectRemoveLabel.replace('{name}', server.displayName).replace('{project}', project.name)" @click="removeServer(server)">{{ t.workspace.mcp.remove }}</button>
+            </div>
+            <div v-if="server.status === 'needsAuth' || server.status === 'failed'" class="project-mcp__connection">
+              <button type="button" class="dl-btn dl-btn--ghost" :disabled="!canConnect(server)" :aria-label="(server.status === 'needsAuth' ? t.workspace.mcp.projectAuthenticateLabel : t.workspace.mcp.projectReconnectLabel).replace('{name}', server.displayName).replace('{project}', project.name)" @click="connect(server)">{{ connectingId === server.id ? t.workspace.mcp.connecting : server.status === 'needsAuth' ? t.workspace.mcp.authenticate : t.workspace.mcp.reconnect }}</button>
+              <span v-if="!isSavedUnchanged(server)">{{ t.workspace.mcp.saveBeforeConnect }}</span>
+            </div>
+          </li>
+        </ul>
+        <form v-if="isAddOpen" class="project-mcp__add" @submit.prevent="addServer">
+          <label>{{ t.workspace.mcp.name }}<input v-model="addName" class="field__input" :placeholder="t.workspace.mcp.namePlaceholder"></label>
+          <label>{{ t.workspace.mcp.displayName }}<input v-model="addDisplayName" class="field__input" :placeholder="t.workspace.mcp.displayNamePlaceholder"></label>
+          <label>{{ t.workspace.mcp.transportLabel }}<select v-model="addTransport" class="field__input field__select"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select></label>
+          <label>{{ t.workspace.mcp.endpointLabel }}<input v-model="addEndpoint" class="field__input" :placeholder="t.workspace.mcp.endpointPlaceholder"></label>
+          <p v-if="addError" class="project-config__error" role="alert">{{ addError }}</p>
+          <div class="project-mcp__add-actions"><button type="submit" class="dl-btn dl-btn--primary">{{ t.workspace.mcp.submitAdd }}</button><button type="button" class="dl-btn dl-btn--ghost" @click="isAddOpen = false">{{ t.workspace.mcp.cancel }}</button></div>
+        </form>
+      </section>
+      <p class="project-mcp__immediate">{{ t.workspace.mcp.connectionImmediate }}</p>
+      <p v-if="actionError" class="project-config__error" role="alert">{{ actionError }}</p>
     </template>
-  </ProjectConfigShell>
+  </div>
 </template>
 
 <style scoped>
-.project-mcp { display: grid; gap: var(--dl-space-4); min-width: 0; }
+/* 面板内的断点按内容区实际宽度判定,不复用视口断点(嵌在带左栏的窗体里时两者不等)。 */
+.project-mcp { display: grid; gap: var(--dl-space-4); min-width: 0; container-type: inline-size; }
 .project-mcp__configuration { display: grid; gap: var(--dl-space-3); min-width: 0; }
 .project-mcp__section-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--dl-space-3); }
 .project-mcp__section-head h3 { font-size: var(--dl-font-size-sm); font-weight: 500; }
@@ -243,5 +247,8 @@ watch(isDirty, (dirty) => { if (dirty) saveFeedback.value = 'idle' })
 .project-mcp__add { padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-lg); }
 .project-mcp__add-actions, .project-mcp__add > p { grid-column: 1 / -1; }
 .project-mcp__immediate { padding: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); }
-@media (max-width: 560px) { .project-mcp__fields, .project-mcp__add { grid-template-columns: minmax(0, 1fr); } .project-mcp__endpoint, .project-mcp__add-actions, .project-mcp__add > p { grid-column: 1; } }
+@container (max-width: 480px) {
+  .project-mcp__fields, .project-mcp__add { grid-template-columns: minmax(0, 1fr); }
+  .project-mcp__endpoint, .project-mcp__add-actions, .project-mcp__add > p { grid-column: 1; }
+}
 </style>

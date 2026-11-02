@@ -364,12 +364,12 @@ test('加载失败重试及切换 Agent:骨架可见、计数留空、重试恢�
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
 })
 
-test('项目树文件-only、项目菜单 4 项、Agent 设置基本 / 模型 / 权限三页', async ({ page }) => {
+test('项目树文件-only、项目菜单 2 项、Agent 设置基本 / 模型 / 权限三页', async ({ page }) => {
   await login(page)
   const project = page.locator('.project-item').first()
   await expect(project.getByRole('tab')).toHaveCount(0)
   await project.locator('.project-menu__trigger').click()
-  await expect(project.getByRole('menuitem')).toHaveText(['模型', '权限', 'MCP', '关闭项目'])
+  await expect(project.getByRole('menuitem')).toHaveText(['设置', '关闭项目'])
   await page.keyboard.press('Escape')
   await page.locator('.agent-context-switcher__trigger').click()
   await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()

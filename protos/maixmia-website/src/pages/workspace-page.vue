@@ -54,9 +54,7 @@ import FilePanel from '../components/file-panel.vue'
 import FilePickerPopover from '../components/file-picker-popover.vue'
 import ProjectMenu from '../components/project-menu.vue'
 import ProjectPickerDialog from '../components/project-picker-dialog.vue'
-import ProjectModelDialog from '../components/project-model-dialog.vue'
-import ProjectPermissionDialog from '../components/project-permission-dialog.vue'
-import ProjectMcpDialog from '../components/project-mcp-dialog.vue'
+import ProjectSettingsDialog from '../components/project-settings-dialog.vue'
 import ProjectPickerPopover from '../components/project-picker-popover.vue'
 import SplitPanes from '../components/split-panes.vue'
 import TranscriptView from '../components/transcript-view.vue'
@@ -159,11 +157,11 @@ const projectSkills = ref<Record<string, Skill[]>>({})
 const skillStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const skillVersions = new Map<string, number>()
 const isPickerOpen = ref(false)
-// 三个项目配置领域各自独立成窗;同一时刻只打开一个。
-const projectConfigTarget = ref<{ project: Project; kind: 'model' | 'permissions' | 'mcp' } | null>(null)
-function openProjectConfig(projectPath: string, kind: 'model' | 'permissions' | 'mcp'): void {
+// 项目设置是**一个**窗体:模型 / 权限 / MCP 在窗体内用 Tab 切换。
+const projectSettingsTarget = ref<Project | null>(null)
+function openProjectSettings(projectPath: string): void {
   const project = projects.value.find((item) => item.path === projectPath)
-  if (project !== undefined) projectConfigTarget.value = { project, kind }
+  if (project !== undefined) projectSettingsTarget.value = project
 }
 // 项目选择浮层的**请求**:null = 没开。两种用途共用一个浮层 —— 新建对话时选归属、
 // 空对话时改归属(浮层本身只管「选一个项目」,标题与选中后的动作由这里给)。
@@ -2605,7 +2603,7 @@ onBeforeUnmount(() => {
                     <span class="project-row__slot" aria-hidden="true" />
                     <svg class="tree-caret project-row__caret" :class="{ 'is-open': expandedProjects.has(project.id) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
-                  <ProjectMenu :project-name="project.name" @configure="openProjectConfig(project.path, $event)" @close="onCloseProject(project)" />
+                  <ProjectMenu :project-name="project.name" @configure="openProjectSettings(project.path)" @close="onCloseProject(project)" />
                 </div>
                 <div v-show="expandedProjects.has(project.id)" :id="`project-tree-${project.id}`" class="project-tree">
                   <span class="project-ridge" aria-hidden="true" />
@@ -2970,20 +2968,10 @@ onBeforeUnmount(() => {
     <IdentityVaultDialog @revealing="isIdentityCovered = false" @unlocked="onIdentityUnlocked" @locked="onIdentityLocked" @reset="loadAgents" @announce="announcePlacement" />
     <AgentPairingDialog :open="isPairingOpen" :session-id="pairingSessionId" :link-secret="pairingLinkSecret" :re-pair="isAgentEditorOpen" @manual="resetPairingInvite" @cancel="closePairing" @added="onAgentPaired" @link="onPairingLink" />
     <ProjectPickerDialog :open="isPickerOpen" :agent-id="selectedAgent" :open-paths="openProjectPaths" @confirm="confirmOpenProject" @cancel="isPickerOpen = false" />
-    <ProjectModelDialog
-      v-if="projectConfigTarget?.kind === 'model' && currentAgent !== undefined"
-      :key="`model-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
-      @close="projectConfigTarget = null"
-    />
-    <ProjectPermissionDialog
-      v-if="projectConfigTarget?.kind === 'permissions' && currentAgent !== undefined"
-      :key="`permissions-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
-      @close="projectConfigTarget = null"
-    />
-    <ProjectMcpDialog
-      v-if="projectConfigTarget?.kind === 'mcp' && currentAgent !== undefined"
-      :key="`mcp-${projectConfigTarget.project.path}`" :open="true" :project="projectConfigTarget.project" :agent="currentAgent"
-      @close="projectConfigTarget = null" @announce="announcePlacement"
+    <ProjectSettingsDialog
+      v-if="projectSettingsTarget !== null && currentAgent !== undefined"
+      :key="projectSettingsTarget.path" :open="true" :project="projectSettingsTarget" :agent="currentAgent"
+      @close="projectSettingsTarget = null" @announce="announcePlacement"
     />
     <AgentEditorDialog
       :open="isAgentEditorOpen" :focus-identity="agentEditorFocusIdentity"
@@ -3117,7 +3105,10 @@ onBeforeUnmount(() => {
 .tree-caret { width: var(--dl-icon-sm); height: var(--dl-icon-sm); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .tree-caret path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .tree-caret.is-open { transform: rotate(90deg); }
-.project-row .project-menu { position: absolute; inset-block-start: 50%; inset-inline-end: calc(var(--dl-space-2) + var(--dl-icon-sm) + var(--dl-space-1)); transform: translateY(-50%); z-index: var(--dl-z-overlay); }
+/* ⋯ 触发钮:行内绝对定位,用「撑满行高 + flex 居中」而不是 transform 居中。
+   transform 会成为后代的包含块,把项目菜单里 position: fixed 的子菜单重新锁进滚动容器
+   并被裁切;这里刻意不用 transform(见 project-menu.vue 的定位说明)。 */
+.project-row .project-menu { position: absolute; inset-block: 0; inset-inline-end: calc(var(--dl-space-2) + var(--dl-icon-sm) + var(--dl-space-1)); display: flex; align-items: center; z-index: var(--dl-z-overlay); }
 .project-row:hover .project-menu, .project-row:focus-within .project-menu { opacity: 1; }
 .project-tree { position: relative; display: flex; flex-direction: column; padding-block: var(--dl-space-1); }
 .project-ridge { position: absolute; inset-block: 0; inset-inline-start: var(--workspace-tree-step); width: var(--dl-border-width); background: var(--workspace-tree-guide); pointer-events: none; }

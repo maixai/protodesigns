@@ -733,15 +733,30 @@ export const workspace = {
   // dropped when directory rows moved to a whole-row button with aria-expanded.)
   projectActions: 'Project actions',
   projectSettings: {
-    modelMenuItem: 'Model',
-    permissionMenuItem: 'Permissions',
-    mcpMenuItem: 'MCP',
-    modelMenuLabel: 'Model settings',
-    permissionMenuLabel: 'Permission settings',
-    mcpMenuLabel: 'MCP settings',
-    modelTitle: 'Project model',
-    permissionTitle: 'Project permissions',
-    mcpDialogTitle: 'Project MCP',
+    // "Settings" is the ⋯ menu entry; the accessible name adds the project qualifier so it is
+    // not confused with the global settings.
+    settingsMenuItem: 'Settings',
+    settingsMenuLabel: 'Project settings',
+    // Unified settings dialog: the header title is fixed; only the Tabs express which domain is active.
+    settingsDialogTitle: 'Project settings',
+    settingsTabsLabel: 'Project settings sections',
+    tabModel: 'Model',
+    tabPermissions: 'Permissions',
+    tabMcp: 'MCP',
+    // Tab status suffixes and badges: both the accessible name and the visible text carry the
+    // state, so it is never expressed by color alone.
+    tabDirty: '{name} · Unsaved changes',
+    tabSaveError: '{name} · Save failed',
+    tabSaving: '{name} · Saving',
+    tabDirtyBadge: 'Unsaved',
+    tabSaveErrorBadge: 'Save failed',
+    tabSavingBadge: 'Saving',
+    discardTitle: 'Unsaved changes',
+    discardBody: 'These configurations are not saved yet: {domains}. Closing will discard these changes.',
+    discardConfirm: 'Discard changes and close',
+    discardCancel: 'Keep editing',
+    listSeparator: ', ',
+    close: 'Close',
     modelScopeHint: 'Configure only this directory’s model overrides. The Agent’s current configuration is read-only above.',
     permissionScopeHint: 'Append permission rules and override the default mode for this directory only. Changes remain drafts until saved.',
     mcpScopeHint: 'Configure only MCP servers owned by this directory. Agent servers are read-only above.',

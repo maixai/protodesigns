@@ -16,5 +16,6 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Agent级服务器: Story = {}
+export const 已安装与异常恢复: Story = {}
+export const 插件停用与更新不影响状态: Story = { args: { agentId: 'research', agentName: '研究助手' } }
 export const Agent空态: Story = { args: { agentId: 'empty-agent', agentName: '空白 Agent' } }

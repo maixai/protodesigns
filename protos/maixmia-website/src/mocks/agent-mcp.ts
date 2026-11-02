@@ -8,11 +8,19 @@ interface StoredServer {
   baseStatus: McpServerStatusId
 }
 
-function tools(entries: readonly (readonly [string, string])[]): McpTool[] {
-  return entries.map(([name, description]) => ({ name, description }))
+function normalizeSdkSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
-const githubTools = tools([
+function tools(serverName: string, entries: readonly (readonly [string, string])[]): McpTool[] {
+  return entries.map(([name, description]) => ({
+    name,
+    description,
+    qualifiedName: `mcp__${normalizeSdkSegment(serverName)}__${normalizeSdkSegment(name)}`,
+  }))
+}
+
+const githubTools = tools('github', [
   ['list_issues', 'List issues in a GitHub repository.'],
   ['get_issue', 'Read an issue and its comments.'],
   ['create_issue', 'Create a new issue.'],
@@ -26,7 +34,7 @@ const githubTools = tools([
   ['search_code', 'Search code across GitHub repositories.'],
   ['list_commits', 'List commits on a branch.'],
 ])
-const filesystemTools = tools([
+const filesystemTools = tools('filesystem', [
   ['read_text_file', 'Read a UTF-8 text file.'],
   ['read_multiple_files', 'Read several files in one operation.'],
   ['write_file', 'Create or overwrite a file.'],
@@ -36,29 +44,29 @@ const filesystemTools = tools([
   ['directory_tree', 'Return a recursive directory tree.'],
   ['search_files', 'Find files by name or glob pattern.'],
 ])
-const sentryTools = tools([
+const sentryTools = tools('sentry', [
   ['list_issues', 'List unresolved Sentry issues for a project.'],
   ['get_issue', 'Read an issue with its latest event.'],
   ['get_event', 'Inspect a Sentry event and stack trace.'],
   ['list_releases', 'List releases and adoption details.'],
 ])
-const postgresTools = tools([
+const postgresTools = tools('postgres', [
   ['query', 'Run a read-only SQL query.'],
   ['list_tables', 'List tables in the connected database.'],
   ['describe_table', 'Inspect columns and indexes for a table.'],
 ])
-const notionTools = tools([
+const notionTools = tools('notion', [
   ['search', 'Search pages and databases in Notion.'],
   ['fetch_page', 'Read a page and its block content.'],
   ['create_page', 'Create a page in a parent page or database.'],
   ['update_page', 'Update page properties and content.'],
   ['query_database', 'Query a Notion database with filters.'],
 ])
-const braveTools = tools([
+const braveTools = tools('brave-search', [
   ['brave_web_search', 'Search the web with Brave Search.'],
   ['brave_local_search', 'Search local businesses and places.'],
 ])
-const playwrightTools = tools([
+const playwrightTools = tools('playwright', [
   ['browser_navigate', 'Navigate a browser page to a URL.'],
   ['browser_snapshot', 'Capture the current accessibility tree.'],
   ['browser_click', 'Click an element on the current page.'],
@@ -89,7 +97,7 @@ const catalog: Record<string, McpServer> = {
     description: 'Inspect schemas and run read-only queries against a database.',
     scope: 'agent', ownerId: '', transport: 'stdio', endpoint: 'npx -y @modelcontextprotocol/server-postgres postgresql://localhost:5432/weekly',
     enabled: true, status: 'failed',
-    errorMessage: 'Connection to 127.0.0.1:5432 failed: ECONNREFUSED. Start PostgreSQL or update the connection string, then reconnect.',
+    errorMessage: 'Connection refused. Start PostgreSQL, then reconnect.',
     tools: postgresTools,
   },
   notion: {
@@ -198,7 +206,7 @@ function customServer(input: McpServerInput, scope: 'agent' | 'project', ownerId
       description: scope === 'agent' ? 'Custom MCP server configured for this Agent.' : 'Custom MCP server configured for this project.',
       scope, ownerId, transport: input.transport, endpoint: input.endpoint,
       enabled: true, status: 'connected', errorMessage: '',
-      tools: tools([
+      tools: tools(input.name, [
         ['ping', 'Check whether the MCP server responds.'],
         ['list_resources', 'List resources exposed by this server.'],
       ]),
@@ -239,7 +247,7 @@ export function mockConnectAgentMcpServer(agentId: string, serverId: string): Mc
     entry.baseStatus = 'connected'
     entry.server.status = 'connected'
     entry.server.errorMessage = ''
-    if (entry.server.tools.length === 0) entry.server.tools = tools([['ping', 'Check whether the MCP server responds.']])
+    if (entry.server.tools.length === 0) entry.server.tools = tools(entry.server.name, [['ping', 'Check whether the MCP server responds.']])
   }
   return mockListAgentMcpServers(agentId)
 }
@@ -291,7 +299,7 @@ export function mockConnectProjectMcpServer(path: string, serverId: string): Mcp
     entry.baseStatus = 'connected'
     entry.server.status = 'connected'
     entry.server.errorMessage = ''
-    if (entry.server.tools.length === 0) entry.server.tools = tools([['ping', 'Check whether the MCP server responds.']])
+    if (entry.server.tools.length === 0) entry.server.tools = tools(entry.server.name, [['ping', 'Check whether the MCP server responds.']])
   }
   return mockListProjectMcpServers(path)
 }

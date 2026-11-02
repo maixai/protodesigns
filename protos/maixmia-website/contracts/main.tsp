@@ -535,13 +535,17 @@ enum McpServerScopeId { agent, project }
 enum McpTransportId { stdio, http, sse }
 // 状态闭集:connected / needsAuth / failed / disabled。pending 不进入 UI,连接中由操作的忙碌态表达。
 enum McpServerStatusId { connected, needsAuth, failed, disabled }
-model McpTool { name: string; description: string; }
+model McpTool {
+  name: string;              // 裸工具名,仅用于展示
+  description: string;
+  qualifiedName: string;     // SDK 完整工具名,供权限规则 / allowedTools / hook 使用
+}
 
 @summary("McpServer")
 @jsonSchema
 model McpServer {
-  id: string;                 // agent:<agentId>:<name> | project:<path>:<name>
-  name: string;               // mcpServers 键;工具名 mcp__<name>__<tool>
+  id: string;                 // UI 行标识,不是 SDK 服务器名;SDK 服务器名见 name
+  name: string;               // mcpServers 键,也是 SDK 运行时服务器名;工具名 mcp__<name>__<tool>
   displayName: string;
   description: string;
   scope: McpServerScopeId;
@@ -744,6 +748,32 @@ model PluginConfigField {
   isSet: boolean;
 }
 
+// 插件 manifest 声明的 MCP 贡献只描述能力;连接健康属于运行时,不写成 manifest 静态事实。
+model PluginMcpContribution {
+  name: string;
+  displayName: string;
+  description: string;
+  tools: McpTool[];
+}
+
+// 列表与详情共用的只读投影。插件停用与必填配置缺失由数据层派生,优先级高于连接状态。
+enum PluginMcpStatusId { connected, pending, needsAuth, failed, pluginDisabled, needsConfiguration }
+@summary("PluginMcpServer")
+@jsonSchema
+model PluginMcpServer {
+  id: string;                 // UI 行标识:plugin:<marketplaceId>:<pluginId>:<name>,不是 SDK 服务器名
+  sdkName: string;            // SDK 运行时标识:plugin:<plugin-name>:<server-name>(原型用 pluginId 充当 plugin-name),供重连 / 启停 / 权限使用;真实实现以 mcpServerStatus() 的 name 为准,不自行拼
+  pluginId: string;
+  marketplaceId: string;
+  pluginName: string;
+  name: string;
+  displayName: string;
+  description: string;
+  status: PluginMcpStatusId;
+  errorMessage: string;       // 仅 failed 有值的脱敏原因;不包含连接目标、命令或配置值
+  tools: McpTool[];
+}
+
 @summary("PluginConfigValue")
 @jsonSchema
 model PluginConfigValue {
@@ -763,6 +793,8 @@ model Plugin {
   version: string;
   icon: string;
   components: PluginComponentId[];
+  // 插件贡献定义属于 manifest;没有 MCP 能力的插件为空数组。
+  mcpServers: PluginMcpContribution[];
 }
 
 enum PluginInstallScopeId {

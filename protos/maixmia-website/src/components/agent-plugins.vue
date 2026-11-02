@@ -15,10 +15,11 @@ import {
 import { useI18n } from '../i18n'
 import DliIcon from './dl-icon.vue'
 
-const props = defineProps<{ agentId: string; agentName: string }>()
+const props = withDefaults(defineProps<{ agentId: string; agentName: string; requestedPluginKey?: string }>(), { requestedPluginKey: '' })
 const emit = defineEmits<{
   count: [count: number | undefined]
   announce: [message: string]
+  openRequestConsumed: []
 }>()
 const { t } = useI18n()
 const installed = ref<InstalledPlugin[]>([])
@@ -305,6 +306,13 @@ async function addMarket(): Promise<void> {
   }
 }
 watch([status, () => installed.value.length], () => emit('count', status.value === 'ready' ? installed.value.length : undefined), { immediate: true })
+watch([status, () => props.requestedPluginKey], ([nextStatus, requestedKey]) => {
+  if (nextStatus !== 'ready' || requestedKey === '') return
+  const item = installed.value.find((entry) => pluginKey(entry.plugin) === requestedKey)
+  if (item !== undefined) openDetail(item)
+  // 请求只消费一次;之后用户从详情返回列表不会被残留 key 再次推回详情。
+  emit('openRequestConsumed')
+})
 watch(() => props.agentId, () => {
   view.value = 'list'
   installed.value = []

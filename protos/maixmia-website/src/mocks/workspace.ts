@@ -6,7 +6,8 @@ import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
 import type { ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
-import type { PluginComponentId } from '../contracts/generated/plugin'
+import type { PluginComponentId, PluginMcpContribution } from '../contracts/generated/plugin'
+import type { PluginMcpServer } from '../contracts/generated/plugin-mcp-server'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
 import type { Marketplace, PluginTrustId } from '../contracts/generated/marketplace'
 import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
@@ -297,8 +298,25 @@ interface PluginSeed {
   version: string
   icon: string
   components: PluginComponentId[]
+  mcpServers?: PluginMcpContribution[]
   skills?: Pick<Skill, 'name' | 'description'>[]
   config: ConfigFieldSeed[]
+}
+
+function normalizeSdkSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '_')
+}
+
+function pluginTools(
+  pluginId: string,
+  serverName: string,
+  entries: ReadonlyArray<Pick<PluginMcpContribution['tools'][number], 'name' | 'description'>>,
+): PluginMcpContribution['tools'] {
+  return entries.map(({ name, description }) => ({
+    name,
+    description,
+    qualifiedName: `mcp__plugin_${normalizeSdkSegment(pluginId)}_${normalizeSdkSegment(serverName)}__${normalizeSdkSegment(name)}`,
+  }))
 }
 
 interface MarketplaceSeed {
@@ -355,6 +373,15 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '1.2.0',
         icon: 'database',
         components: ['skill', 'mcp'],
+        mcpServers: [{
+          name: 'data-analysis', displayName: 'Dataset Notebook',
+          description: 'Profile datasets, inspect distributions, and assemble reproducible analysis notebooks.',
+          tools: pluginTools('data-analysis', 'data-analysis', [
+            { name: 'profile_dataset', description: 'Summarize column types, missing values, and distribution outliers.' },
+            { name: 'query_dataset', description: 'Run a read-only structured query against a loaded dataset.' },
+            { name: 'create_notebook', description: 'Create a notebook containing the analysis steps and results.' },
+          ]),
+        }],
         skills: [{ name: 'profile-dataset', description: '检查数据字段、缺失值与异常分布' }],
         config: [
           { key: 'workspaceDir', label: 'Workspace directory', description: 'Where analysis notebooks are written.', type: 'text', required: false, defaultValue: '~/work' },
@@ -391,6 +418,15 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '0.8.1',
         icon: 'window',
         components: ['mcp', 'command'],
+        mcpServers: [{
+          name: 'browser', displayName: 'Browser Automation',
+          description: 'Navigate pages, inspect accessibility trees, and capture visual evidence.',
+          tools: pluginTools('browser-tools', 'browser', [
+            { name: 'browser_navigate', description: 'Open a URL in the controlled browser.' },
+            { name: 'browser_snapshot', description: 'Read the current page accessibility tree.' },
+            { name: 'browser_take_screenshot', description: 'Capture the current viewport as evidence.' },
+          ]),
+        }],
         config: [
           { key: 'headless', label: 'Headless mode', description: 'Run the browser without a visible window.', type: 'boolean', required: false, defaultValue: 'true' },
           { key: 'endpoint', label: 'DevTools endpoint', description: 'Optional remote debugging endpoint.', type: 'text', required: false, defaultValue: '' },
@@ -404,6 +440,15 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '1.1.3',
         icon: 'sync',
         components: ['mcp'],
+        mcpServers: [{
+          name: 'notion-workspace', displayName: 'Notion Workspace',
+          description: 'Search workspace pages and synchronize structured project notes.',
+          tools: pluginTools('notion-sync', 'notion-workspace', [
+            { name: 'search_pages', description: 'Find pages and databases by title or content.' },
+            { name: 'read_page', description: 'Read a page and its block content.' },
+            { name: 'sync_notes', description: 'Synchronize selected project notes with a database.' },
+          ]),
+        }],
         config: [
           { key: 'token', label: 'Integration token', description: 'Notion integration token with database access.', type: 'secret', required: true, defaultValue: '' },
           { key: 'databaseId', label: 'Database ID', description: 'Target Notion database.', type: 'text', required: true, defaultValue: '' },
@@ -440,6 +485,15 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         version: '0.9.0',
         icon: 'image',
         components: ['mcp', 'command'],
+        mcpServers: [{
+          name: 'figma', displayName: 'Figma Design',
+          description: 'Inspect design frames and export assets and design-token metadata.',
+          tools: pluginTools('figma-bridge', 'figma', [
+            { name: 'get_frame', description: 'Read the structure and layout of a Figma frame.' },
+            { name: 'export_asset', description: 'Export a selected layer in a supported image format.' },
+            { name: 'list_design_tokens', description: 'Read color, typography, and spacing tokens from a file.' },
+          ]),
+        }],
         config: [
           { key: 'accessToken', label: 'Figma access token', description: 'Personal access token with file read scope.', type: 'secret', required: true, defaultValue: '' },
           { key: 'fileKey', label: 'File key', description: 'Figma file to export from.', type: 'text', required: true, defaultValue: '' },
@@ -479,6 +533,14 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '0.4.2',
         icon: 'table',
         components: ['mcp'],
+        mcpServers: [{
+          name: 'design-tokens', displayName: 'Design Tokens',
+          description: 'Inspect token collections and generate platform-specific token artifacts.',
+          tools: pluginTools('design-tokens', 'design-tokens', [
+            { name: 'list_tokens', description: 'List token names, values, and collection membership.' },
+            { name: 'export_tokens', description: 'Generate token files for the requested platform.' },
+          ]),
+        }],
         config: [
           { key: 'outputDir', label: 'Output directory', description: 'Where generated token files are written.', type: 'text', required: false, defaultValue: 'tokens' },
         ],
@@ -512,6 +574,14 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '0.5.0',
         icon: 'image',
         components: ['mcp'],
+        mcpServers: [{
+          name: 'screenshot-diff', displayName: 'Screenshot Diff',
+          description: 'Capture build screenshots and summarize visual differences.',
+          tools: pluginTools('screenshot-diff', 'screenshot-diff', [
+            { name: 'capture_page', description: 'Capture a page at a specified viewport.' },
+            { name: 'compare_builds', description: 'Compare screenshots from two builds and report changed regions.' },
+          ]),
+        }],
         config: [],
       },
       {
@@ -543,6 +613,14 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         version: '1.1.0',
         icon: 'sync',
         components: ['mcp'],
+        mcpServers: [{
+          name: 'docs-sync', displayName: 'Documentation Sync',
+          description: 'Read source comments and keep generated reference pages synchronized.',
+          tools: pluginTools('docs-sync', 'docs-sync', [
+            { name: 'scan_comments', description: 'Extract documentation comments from source files.' },
+            { name: 'sync_reference', description: 'Update generated reference pages from extracted comments.' },
+          ]),
+        }],
         config: [],
       },
     ],
@@ -553,6 +631,7 @@ function clonePluginSeed(plugin: PluginSeed): PluginSeed {
   return {
     ...plugin,
     components: [...plugin.components],
+    mcpServers: structuredClone(plugin.mcpServers ?? []),
     config: plugin.config.map((field) => ({ ...field })),
     ...(plugin.skills === undefined ? {} : { skills: plugin.skills.map((skill) => ({ ...skill })) }),
   }
@@ -624,6 +703,7 @@ const INSTALL_SEEDS: { scope: InstallScope; ownerId: string; plugins: { marketpl
   { scope: 'agent', ownerId: 'planning', plugins: [
     { marketplaceId: 'anthropic', pluginId: 'code-review', enabled: true },
     { marketplaceId: 'anthropic', pluginId: 'data-analysis', enabled: true },
+    { marketplaceId: 'community', pluginId: 'browser-tools', enabled: true },
   ] },
   { scope: 'agent', ownerId: 'research', plugins: [
     { marketplaceId: 'community', pluginId: 'browser-tools', enabled: true, installedVersion: '0.8.0' },
@@ -728,6 +808,7 @@ function marketplaceOf(seed: MarketplaceSeed): Marketplace {
       version: plugin.version,
       icon: plugin.icon,
       components: [...plugin.components],
+      mcpServers: structuredClone(plugin.mcpServers ?? []),
     })),
   }
 }
@@ -767,6 +848,7 @@ function installedPluginOf(scope: InstallScope, ownerId: string, marketplaceId: 
       version: plugin.version,
       icon: plugin.icon,
       components: [...plugin.components],
+      mcpServers: structuredClone(plugin.mcpServers ?? []),
     },
     enabled: state?.enabled ?? false,
     scope,
@@ -809,6 +891,74 @@ export function mockInstalledPlugins(scope: InstallScope, ownerId: string): Inst
     result.push(installedPluginOf(scope, ownerId, marketplaceId, plugin))
   }
   return result.sort((a, b) => a.plugin.name.localeCompare(b.plugin.name))
+}
+
+interface PluginMcpRuntimeState {
+  status: 'connected' | 'pending' | 'needsAuth' | 'failed'
+  errorMessage: string
+}
+
+function pluginMcpRuntimeKey(agentId: string, marketplaceId: string, pluginId: string, serverName: string): string {
+  return `${agentId}:${marketplaceId}:${pluginId}:${serverName}`
+}
+
+const INITIAL_PLUGIN_MCP_RUNTIME: readonly (readonly [string, PluginMcpRuntimeState])[] = [[
+  pluginMcpRuntimeKey('planning', 'anthropic', 'data-analysis', 'data-analysis'),
+  { status: 'failed', errorMessage: 'The analysis runtime stopped unexpectedly. Reconnect to resume dataset tools.' },
+]]
+const pluginMcpRuntime = new Map<string, PluginMcpRuntimeState>(INITIAL_PLUGIN_MCP_RUNTIME)
+
+function pluginMcpRuntimeOf(agentId: string, marketplaceId: string, pluginId: string, serverName: string): PluginMcpRuntimeState {
+  return pluginMcpRuntime.get(pluginMcpRuntimeKey(agentId, marketplaceId, pluginId, serverName))
+    ?? { status: 'connected', errorMessage: '' }
+}
+
+// 测试复位运行态;安装、配置与版本不属于这张表。
+export function mockResetAgentPluginMcpRuntime(): void {
+  pluginMcpRuntime.clear()
+  for (const [key, state] of INITIAL_PLUGIN_MCP_RUNTIME) pluginMcpRuntime.set(key, { ...state })
+}
+
+// Agent 级插件 MCP 的唯一投影:插件可用性与连接健康是两轴,可用性优先,再合并成 UI 单状态。
+export function mockAgentPluginMcpServers(agentId: string): PluginMcpServer[] | null {
+  const installed = mockInstalledPlugins('agent', agentId)
+  if (installed === null) return null
+  return installed.flatMap((item) => item.plugin.mcpServers.map((server) => {
+    const runtime = pluginMcpRuntimeOf(agentId, item.plugin.marketplaceId, item.plugin.id, server.name)
+    const availability: 'available' | 'pluginDisabled' | 'needsConfiguration' = !item.enabled
+      ? 'pluginDisabled'
+      : item.config.some((field) => field.required && !field.isSet)
+        ? 'needsConfiguration'
+        : 'available'
+    const connection: 'connected' | 'pending' | 'needsAuth' | 'failed' = runtime.status
+    const status: PluginMcpServer['status'] = availability !== 'available' ? availability : connection
+    return {
+      id: `plugin:${item.plugin.marketplaceId}:${item.plugin.id}:${server.name}`,
+      sdkName: `plugin:${item.plugin.id}:${server.name}`,
+      pluginId: item.plugin.id,
+      marketplaceId: item.plugin.marketplaceId,
+      pluginName: item.plugin.name,
+      name: server.name,
+      displayName: server.displayName,
+      description: server.description,
+      status,
+      errorMessage: status === 'failed' ? runtime.errorMessage : '',
+      tools: structuredClone(server.tools),
+    }
+  }))
+}
+
+export function mockReconnectAgentPluginMcpServer(agentId: string, sdkName: string): PluginMcpServer[] {
+  const installed = mockInstalledPlugins('agent', agentId) ?? []
+  for (const item of installed) {
+    for (const server of item.plugin.mcpServers) {
+      const serverSdkName = `plugin:${item.plugin.id}:${server.name}`
+      if (serverSdkName !== sdkName) continue
+      pluginMcpRuntime.set(pluginMcpRuntimeKey(agentId, item.plugin.marketplaceId, item.plugin.id, server.name), { status: 'connected', errorMessage: '' })
+      return mockAgentPluginMcpServers(agentId) ?? []
+    }
+  }
+  return mockAgentPluginMcpServers(agentId) ?? []
 }
 
 export function mockInstallPlugin(scope: InstallScope, ownerId: string, marketplaceId: string, pluginId: string): InstalledPlugin | null {

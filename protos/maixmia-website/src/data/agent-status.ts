@@ -26,9 +26,9 @@ export function agentDisplayStatus(agent: AgentSummary, copy: Messages['workspac
 
 // 两处状态提示共用开合、定位和动效生命周期；在线始终保持安静。
 // popover 留在原有 DOM 树继承主题，但进入 top layer 避开祖先滚动裁切。
-export function useAgentStatusTooltip(
-  findAgent: (id: string) => AgentSummary | undefined,
-  describe: (agent: AgentSummary) => ReturnType<typeof agentDisplayStatus>,
+export function useAgentStatusTooltip<T extends { id: string }>(
+  findAgent: (id: string) => T | undefined,
+  describe: (agent: T) => { state: string; tooltip: string },
   getBoundary: (anchor: HTMLElement) => DOMRect | undefined = () => undefined,
   preferAbove = false,
 ) {
@@ -52,7 +52,8 @@ export function useAgentStatusTooltip(
   }
   function duration(): number {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 0
-    return Number.parseFloat(getComputedStyle(tooltip.value ?? document.documentElement).getPropertyValue('--dl-duration-fast'))
+    const parsed = Number.parseFloat(getComputedStyle(tooltip.value ?? document.documentElement).getPropertyValue('--dl-duration-fast'))
+    return Number.isFinite(parsed) ? parsed : 0
   }
   function clearTooltipTimer(): void {
     if (hideTimer.value !== null) clearTimeout(hideTimer.value)
@@ -112,7 +113,7 @@ export function useAgentStatusTooltip(
     bubble.style.setProperty('--agent-status-left', `${left}px`)
     bubble.style.setProperty('--agent-status-top', `${Math.max(gap, Math.min(top, window.innerHeight - bounds.height - gap))}px`)
   }
-  async function showTooltip(event: PointerEvent | FocusEvent, agent: AgentSummary | undefined): Promise<void> {
+  async function showTooltip(event: PointerEvent | FocusEvent, agent: T | undefined): Promise<void> {
     const anchor = event.currentTarget
     if (!(anchor instanceof HTMLElement) || agent === undefined) return
     if (describe(agent).state === 'online') { hideTooltip(); return }
@@ -152,14 +153,22 @@ export function useAgentStatusTooltip(
     await nextTick()
     positionTooltip()
   })
+  function onTooltipEscape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || !isTooltipOpen.value) return
+    event.preventDefault()
+    event.stopPropagation()
+    hideTooltip()
+  }
   onMounted(() => {
     window.addEventListener('scroll', positionTooltip, true)
     window.addEventListener('resize', positionTooltip)
+    document.addEventListener('keydown', onTooltipEscape)
   })
   onBeforeUnmount(() => {
     dismissTooltip()
     window.removeEventListener('scroll', positionTooltip, true)
     window.removeEventListener('resize', positionTooltip)
+    document.removeEventListener('keydown', onTooltipEscape)
   })
   return {
     setTooltipRef, tooltipAnchor, tooltipAgentId, tooltipId, tooltipText, isTooltipOpen, isTooltipVisible,

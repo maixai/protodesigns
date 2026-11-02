@@ -2,6 +2,7 @@
 import type { McpProjectGroup } from '../contracts/generated/mcp-project-group'
 import type { McpServer } from '../contracts/generated/mcp-server'
 import type { McpServerInput } from '../contracts/generated/mcp-server-input'
+import type { PluginMcpServer } from '../contracts/generated/plugin-mcp-server'
 import { useI18n } from '../i18n'
 import { delay } from '../mocks/delay'
 import {
@@ -12,6 +13,7 @@ import {
   mockSetProjectMcpServerEnabled,
 } from '../mocks/agent-mcp'
 import { currentRoute } from '../router'
+import { mockAgentPluginMcpServers, mockReconnectAgentPluginMcpServer } from '../mocks/workspace'
 import type { Result } from './result'
 
 const { t } = useI18n()
@@ -19,6 +21,10 @@ const SERVER_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
 
 function unavailableError(): Error | null {
   return currentRoute.value.demoState === 'error' ? new Error(t.value.workspace.mcp.loadError) : null
+}
+
+function pluginMutationError(serverId: string): Error | null {
+  return serverId.startsWith('plugin:') ? new Error(t.value.workspace.mcp.pluginReadOnly) : null
 }
 
 function validateInput(input: McpServerInput, existing: readonly McpServer[], duplicateMessage: string): Error | null {
@@ -41,6 +47,29 @@ export async function listAgentMcpServers(agentId: string): Promise<Result<McpSe
   return { ok: true, value: mockListAgentMcpServers(agentId) }
 }
 
+// 插件贡献走独立只读 API,与手配列表及写操作互不复用。
+export async function listAgentPluginMcpServers(agentId: string): Promise<Result<PluginMcpServer[]>> {
+  await delay()
+  const error = unavailableError()
+  if (error !== null) return { ok: false, error }
+  const servers = mockAgentPluginMcpServers(agentId)
+  if (servers === null) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
+  return { ok: true, value: servers }
+}
+
+// 插件重连只恢复运行时连接;非 failed 状态一律拒绝,不改安装态或配置。
+export async function reconnectAgentPluginMcpServer(agentId: string, sdkName: string): Promise<Result<PluginMcpServer[]>> {
+  await delay()
+  const error = unavailableError()
+  if (error !== null) return { ok: false, error }
+  const current = mockAgentPluginMcpServers(agentId)
+  if (current === null) return { ok: false, error: new Error(t.value.workspace.invalidAgent) }
+  const server = current.find((item) => item.sdkName === sdkName)
+  if (server === undefined) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  if (server.status !== 'failed') return { ok: false, error: new Error(t.value.workspace.mcp.pluginReconnectUnavailable) }
+  return { ok: true, value: mockReconnectAgentPluginMcpServer(agentId, sdkName) }
+}
+
 export async function addAgentMcpServer(agentId: string, input: McpServerInput): Promise<Result<McpServer[]>> {
   await delay()
   const unavailable = unavailableError()
@@ -52,6 +81,8 @@ export async function addAgentMcpServer(agentId: string, input: McpServerInput):
 
 export async function removeAgentMcpServer(agentId: string, serverId: string): Promise<Result<McpServer[]>> {
   await delay()
+  const readOnly = pluginMutationError(serverId)
+  if (readOnly !== null) return { ok: false, error: readOnly }
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
   return { ok: true, value: mockRemoveAgentMcpServer(agentId, serverId) }
@@ -59,6 +90,8 @@ export async function removeAgentMcpServer(agentId: string, serverId: string): P
 
 export async function setAgentMcpServerEnabled(agentId: string, serverId: string, enabled: boolean): Promise<Result<McpServer[]>> {
   await delay()
+  const readOnly = pluginMutationError(serverId)
+  if (readOnly !== null) return { ok: false, error: readOnly }
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
   return { ok: true, value: mockSetAgentMcpServerEnabled(agentId, serverId, enabled) }
@@ -66,6 +99,8 @@ export async function setAgentMcpServerEnabled(agentId: string, serverId: string
 
 export async function authenticateAgentMcpServer(agentId: string, serverId: string): Promise<Result<McpServer[]>> {
   await delay()
+  const readOnly = pluginMutationError(serverId)
+  if (readOnly !== null) return { ok: false, error: readOnly }
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
   return { ok: true, value: mockConnectAgentMcpServer(agentId, serverId) }
@@ -73,6 +108,8 @@ export async function authenticateAgentMcpServer(agentId: string, serverId: stri
 
 export async function reconnectAgentMcpServer(agentId: string, serverId: string): Promise<Result<McpServer[]>> {
   await delay()
+  const readOnly = pluginMutationError(serverId)
+  if (readOnly !== null) return { ok: false, error: readOnly }
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
   return { ok: true, value: mockConnectAgentMcpServer(agentId, serverId) }

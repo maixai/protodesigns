@@ -122,6 +122,7 @@ const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
 const sidebarView = ref('projects')
 const agentPluginCount = ref<number | undefined>(undefined)
 const agentMcpCount = ref<number | undefined>(undefined)
+const requestedPluginKey = ref('')
 const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
   id: 'projects',
   label: t.value.workspace.sidebarViews.projects,
@@ -132,6 +133,11 @@ const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
 }, {
   id: 'mcp', label: t.value.workspace.sidebarViews.mcp, count: agentMcpCount.value,
 }])
+function openPluginFromMcp(pluginId: string, marketplaceId: string, pluginName: string): void {
+  requestedPluginKey.value = `${pluginId}@${marketplaceId}`
+  sidebarView.value = 'plugins'
+  announcePlacement(t.value.workspace.mcp.openedPlugin.replace('{name}', pluginName))
+}
 // Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
 const agentEditorFocusIdentity = ref(false)
@@ -2214,6 +2220,7 @@ async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''):
   selectedAgent.value = agent
   // 顶层插件面板按 Agent 重建,加载完成前不沿用上一位的计数。
   agentPluginCount.value = undefined
+  requestedPluginKey.value = ''
   if (targetSessionId !== '') landingSessionId.value = targetSessionId
   await reloadWorkspace(targetSessionId === '', true, true)
 }
@@ -2658,7 +2665,9 @@ onBeforeUnmount(() => {
               <AgentPlugins
                 v-if="selectedAgent !== ''" :key="selectedAgent"
                 :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
+                :requested-plugin-key="requestedPluginKey"
                 @count="agentPluginCount = $event" @announce="announcePlacement"
+                @open-request-consumed="requestedPluginKey = ''"
               />
             </div>
           </div>
@@ -2670,7 +2679,9 @@ onBeforeUnmount(() => {
               <AgentMcp
                 v-if="selectedAgent !== ''" :key="selectedAgent"
                 :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
+                :active="sidebarView === 'mcp'"
                 @count="agentMcpCount = $event" @announce="announcePlacement"
+                @manage-plugin="openPluginFromMcp"
               />
             </div>
           </div>

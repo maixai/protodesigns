@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 窗体外观壳(L2):「面」+ 标题栏(槽)+ 内容(槽)+ 8 枚缩放手柄 + 右下角可见点阵抓手。
+// 窗体外观壳(L2):「面」+ 标题栏(槽)+ 内容(槽)+ 8 枚缩放手柄。
 //
 // 这一层**不含状态与手势**:几何 / 拖动 / 缩放 / FLIP 全在 use-window-frame(L1)。壳只负责
 // 把 L1 给出的样式与处理器绑到正确的元素上,并给标题栏与内容留槽 —— 因为两个窗体的标题栏
@@ -66,8 +66,8 @@ function setHeader(el: Element | ComponentPublicInstance | null): void {
          aria-valuenow/min/max 表达被调整尺寸的当前值与边界、aria-controls 指向被调整的内容区;
          方向键调整、Shift 大步长、Home/End 到最小 / 最大。四角是 44×44 的指针目标(本仓触达下限;
          Apple 建议桌面 20pt≈27px、触屏 28pt≈37px,这里取更严的 44),纯指针便利入口、不占 Tab 序。
-         右下角另有一枚**可见的点阵抓手**(与标题栏那枚同一套画法),其余三角保持完全透明 ——
-         可见抓手可以很细,光标 + 一次极淡的悬停强调就是全部暗示,真正的视觉提示是那枚点阵。 -->
+         静止态不在角上画任何抓手 —— 与设置窗体同一套暗示:常驻的光标 + 悬停 / 聚焦时
+         沿表面圆角轮廓的强调。 -->
     <!-- 缩放手柄只在**悬浮**形态存在:停靠时几何由区域内容区给出,没有可调整的自由尺寸。 -->
     <template v-if="!frame.isDocked.value">
       <button
@@ -100,9 +100,7 @@ function setHeader(el: Element | ComponentPublicInstance | null): void {
         @pointermove="frame.onResizePointerMove"
         @pointerup="frame.onResizePointerUp"
         @pointercancel="frame.onResizePointerUp"
-      >
-        <span v-if="corner.corner === 'se'" class="dl-window__resize-grip" aria-hidden="true" />
-      </span>
+      />
     </template>
   </section>
 </template>
@@ -297,25 +295,23 @@ function setHeader(el: Element | ComponentPublicInstance | null): void {
   cursor: nesw-resize;
 }
 
-/* 边条悬停 / 聚焦时给一层极淡的强调色(它就是那条「细的可见抓手」)。 */
-.dl-window__resize:hover,
-.dl-window__resize:focus-visible {
-  background: color-mix(in srgb, var(--dl-accent) 26%, transparent);
+/* 手柄自身永远不铺色块:方形底色会从表面圆角之外露出来,也会在窗体边缘外透出强调色。
+   反馈改为给**表面的轮廓**着色 / 加焦点环 —— 与设置窗体同一套做法,强调严格沿表面圆角走。 */
+.dl-window:has(.dl-window__resize:hover) .dl-window__surface,
+.dl-window:has(.dl-window__resize:focus-visible) .dl-window__surface {
+  border-color: var(--dl-accent);
 }
 
-/* 右下角那枚**可见的点阵抓手**:与标题栏抓手同一套画法(radial-gradient 点阵),
-   贴在角的里侧。纯装饰 —— 命中区是它所在的 44×44 角手柄,故不接收指针。
-   其余三角保持完全透明(光标 + 悬停强调已是全部暗示)。 */
-.dl-window__resize-grip {
-  position: absolute;
-  inset-block-end: var(--dl-space-2);
-  inset-inline-end: var(--dl-space-2);
-  inline-size: var(--dl-space-3);
-  block-size: var(--dl-space-3);
-  color: var(--dl-text-tertiary);
-  background-image: radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0);
-  background-size: var(--dl-space-1) var(--dl-space-1);
-  pointer-events: none;
+/* 键盘聚焦分隔条时用统一的焦点环,同样沿表面的圆角轮廓;浮层自带的外阴影一并保留。 */
+.dl-window:has(.dl-window__resize:focus-visible) .dl-window__surface {
+  box-shadow: var(--dl-shadow-lg), var(--dl-focus-ring);
+}
+
+/* 手柄是表面的兄弟、落在窗体边缘外:它自己不再画方环,只保留表面的轮廓强调。 */
+.dl-window__resize:focus-visible {
+  outline: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

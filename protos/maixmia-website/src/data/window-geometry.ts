@@ -51,6 +51,8 @@ export const KEY_STEP_LARGE = 64
 export const CASCADE_STEP = 28
 // 默认几何占视口高度的比例。
 export const DEFAULT_HEIGHT_RATIO = 0.66
+// 模态设置窗体的高度比例:视口九成,上下各留 5%。与宽度上限一起构成三窗体共用的尺寸策略。
+export const DIALOG_HEIGHT_RATIO = 0.9
 
 // ---- 轴向与手柄描述表 ----
 
@@ -198,4 +200,43 @@ export function defaultRect(input: DefaultGeometryInput): PanelRect {
   // 级联:第 n 个同时可见的窗口向右下各挪 n 档 —— 只对**没摆过位置**的窗口生效。
   const cascadeOffset = CASCADE_STEP * Math.max(0, cascade)
   return clampForResize({ x: center - w / 2 + cascadeOffset, y: y + cascadeOffset, w, h }, { box, margin, minW, minH })
+}
+
+// ---- 模态设置窗体的尺寸策略(三个设置窗体共用) ----
+//
+// 与悬浮窗体的区别:设置窗体没有"停靠区 / 输入坞"这类语境,落点就是视口居中;
+// 宽度差异只由**内容等级**表达(上限从 token 读),高度三窗体共用同一比例与硬上限。
+export interface DialogSizePolicy {
+  box: ViewportBox
+  // 窗体几何四周的安全边距。
+  margin: number
+  // 该窗体声明的内容等级宽度上限。
+  maxWidth: number
+  // 三窗体共用的高度硬上限。
+  maxHeight: number
+  minWidth: number
+  minHeight: number
+  // 视口高度参与的比例(见 DIALOG_HEIGHT_RATIO)。
+  heightRatio: number
+}
+
+// 把尺寸策略换算成既有钳制函数需要的上下文。
+export function dialogClampContext(policy: DialogSizePolicy): ClampContext {
+  return { box: policy.box, margin: policy.margin, minW: policy.minWidth, minH: policy.minHeight }
+}
+
+// 默认几何:视口居中,宽度取「内容等级上限」与「视口减两侧边距」的较小值,
+// 高度取「比例高度」「硬上限」「视口减两侧边距」三者的最小值。
+export function defaultDialogRect(policy: DialogSizePolicy): PanelRect {
+  const { box, margin, maxWidth, maxHeight, heightRatio } = policy
+  const limitW = Math.max(policy.minWidth, box.width - 2 * margin)
+  const limitH = Math.max(policy.minHeight, box.height - 2 * margin)
+  const w = Math.min(maxWidth, limitW)
+  const h = Math.min(maxHeight, box.height * heightRatio, limitH)
+  return clampForResize({ x: (box.width - w) / 2, y: (box.height - h) / 2, w, h }, dialogClampContext(policy))
+}
+
+// 视口变化后把标准几何重新钳进边界。
+export function clampDialogRect(rect: PanelRect, policy: DialogSizePolicy): PanelRect {
+  return clampForResize(rect, dialogClampContext(policy))
 }

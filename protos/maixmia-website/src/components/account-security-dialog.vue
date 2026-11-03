@@ -9,6 +9,7 @@ import { useI18n } from '../i18n'
 import { ACCOUNT_AVATAR_ACCEPT, readAccountAvatar, replaceAccountAvatar } from './account-avatar'
 import type { AvatarReadError } from './account-avatar'
 import AccountAvatar from './account-avatar.vue'
+import DialogWindow from './dialog-window.vue'
 import DliIcon from './dl-icon.vue'
 import AddPasskeyDialog from './add-passkey-dialog.vue'
 import RecoveryKeyDialog from './recovery-key-dialog.vue'
@@ -24,9 +25,10 @@ const emit = defineEmits<{ close: [] }>()
 const { t, locale } = useI18n()
 const copy = computed(() => t.value.workspace.settings)
 const profile = computed(() => session.value.profile)
-const dialog = ref<HTMLDialogElement | null>(null)
 const heading = ref<HTMLElement | null>(null)
 const body = ref<HTMLElement | null>(null)
+const bodyId = 'workspace-account-security-body'
+const dialogWindow = ref<InstanceType<typeof DialogWindow> | null>(null)
 const state = ref<VaultState>({ status: 'loading' })
 const activeTab = ref<AccountTab>('account')
 const subview = ref<SecuritySubview>(null)
@@ -294,27 +296,16 @@ function onKeydown(event: KeyboardEvent): void {
 function requestClose(): void {
   // 编辑时必须先保存或取消，避免关闭窗体隐式丢弃草稿。
   if (isEditingNickname.value) return
-  dialog.value?.close()
+  dialogWindow.value?.closeDialog?.()
   emit('close')
 }
 
-// 文件选择器与嵌套确认框的原生 cancel 会冒泡到本窗体；只响应窗体自身的 Esc，
-// 否则取消选图或关闭确认框会把整个账户设置一起关掉。
-function onDialogCancel(event: Event): void {
-  if (event.target !== event.currentTarget) return
-  event.preventDefault()
-  requestClose()
-}
-
-function onBackdrop(event: MouseEvent): void {
-  if (event.target !== dialog.value || dialog.value === null || removeTarget.value !== null) return
-  const rect = dialog.value.getBoundingClientRect()
-  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) requestClose()
+// 外壳 showModal 之后把焦点送到标题:读屏先听到窗体名,再由用户进入 tab。
+function focusHeading(): void {
+  heading.value?.focus({ preventScroll: true })
 }
 
 onMounted(() => {
-  dialog.value?.showModal()
-  heading.value?.focus({ preventScroll: true })
   document.addEventListener('pointerdown', onDocumentPointer)
   void load()
 })
@@ -323,20 +314,36 @@ onBeforeUnmount(() => {
   lifetime.isAlive = false
   document.removeEventListener('pointerdown', onDocumentPointer)
   removeDialog.value?.close()
-  dialog.value?.close()
 })
 </script>
 
 <template>
-  <dialog id="workspace-account-security-dialog" ref="dialog" class="account-security dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true" aria-labelledby="workspace-account-security-title" @cancel="onDialogCancel" @click="onBackdrop" @keydown="onKeydown" @keydown.stop>
-    <header class="account-security__header">
-      <h2 id="workspace-account-security-title" ref="heading" tabindex="-1">{{ copy.accountSecurity }}</h2>
-      <button type="button" class="account-security__close" data-account-security-close :disabled="isEditingNickname" :aria-label="copy.close" @click="requestClose"><DliIcon name="close" /></button>
-    </header>
+  <DialogWindow
+    id="workspace-account-security-dialog"
+    ref="dialogWindow"
+    class="account-security dl-scope dl-scope--dark dl-modal-scrim"
+    tier="regular"
+    :body-id="bodyId"
+    aria-labelledby="workspace-account-security-title"
+    @opened="focusHeading"
+    @request-close="requestClose"
+    @keydown="onKeydown"
+    @keydown.stop
+  >
+    <template #header>
+      <div class="account-security__header">
+        <h2 id="workspace-account-security-title" ref="heading" tabindex="-1">{{ copy.accountSecurity }}</h2>
+      </div>
+    </template>
+    <template #header-actions>
+      <button type="button" class="account-security__close" data-account-security-close :disabled="isEditingNickname" :aria-label="copy.close" @click="requestClose"><DliIcon name="close" size="sm" /></button>
+    </template>
 
-    <div v-if="state.status === 'ready'" class="account-security__tabs" role="tablist" :aria-label="copy.accountTabsLabel" @keydown="onTabKeydown">
-      <button v-for="tab in tabs" :id="`workspace-account-tab-${tab}`" :key="tab" type="button" role="tab" :disabled="isEditingNickname || subview !== null" :aria-selected="activeTab === tab" :aria-controls="`workspace-account-panel-${tab}`" :tabindex="activeTab === tab ? 0 : -1" @click="activateTab(tab)">{{ tab === 'account' ? copy.accountTab : copy.passkeysTab }}</button>
-    </div>
+    <template #nav>
+      <div v-if="state.status === 'ready'" class="account-security__tabs" role="tablist" :aria-label="copy.accountTabsLabel" @keydown="onTabKeydown">
+        <button v-for="tab in tabs" :id="`workspace-account-tab-${tab}`" :key="tab" type="button" role="tab" :disabled="isEditingNickname || subview !== null" :aria-selected="activeTab === tab" :aria-controls="`workspace-account-panel-${tab}`" :tabindex="activeTab === tab ? 0 : -1" @click="activateTab(tab)">{{ tab === 'account' ? copy.accountTab : copy.passkeysTab }}</button>
+      </div>
+    </template>
 
     <div ref="body" class="account-security__body" :aria-busy="state.status === 'loading'">
       <div v-if="state.status === 'loading'" role="status" class="account-security__state"><DliIcon name="sync" size="lg" /><p>{{ copy.loading }}</p></div>
@@ -447,31 +454,26 @@ onBeforeUnmount(() => {
       <template v-else><p>{{ copy.removePasskeyHint }}</p><p v-if="removalWarnsRecoveryOnly" role="alert">{{ copy.lastPasskeyWarning }}</p></template>
       <div class="account-security__actions"><button ref="removeCancel" type="button" class="account-security__button" @click="cancelRemove">{{ copy.cancel }}</button><button v-if="!removalBlocked" type="button" class="account-security__button account-security__danger" data-remove-passkey-confirm :disabled="busy" @click="confirmRemove">{{ copy.removePasskey }}</button></div>
     </dialog>
-  </dialog>
+  </DialogWindow>
 </template>
 
 <style scoped>
+/* 窗体几何由共享外壳统一执行;本文件只保留账户 / 安全自己的编排。 */
 .account-security {
-  inline-size: min(var(--workspace-settings-dialog-width), calc(100vw - 2 * var(--dl-space-6)));
-  max-inline-size: 100%;
-  block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-6)));
-  max-block-size: 100%;
-  margin: auto;
-  box-sizing: border-box;
-  padding: var(--workspace-settings-dialog-padding);
-  border: var(--dl-border-width) solid var(--dl-border-strong);
-  border-radius: var(--dl-radius-xl);
-  background: var(--dl-bg-elevated);
-  color: var(--dl-text-primary);
-  font: inherit;
+  color-scheme: dark;
   line-height: var(--dl-line-body);
-  text-align: left;
-  overflow: hidden;
 }
-.account-security { color-scheme: dark; }
-.account-security[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); animation: account-security-in var(--dl-duration-base) var(--dl-ease-standard); }
-.account-security__header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--dl-space-2); min-inline-size: 0; }
-h2 { inline-size: fit-content; max-inline-size: 100%; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
+.account-security__header {
+  display: flex; flex: 1; align-items: center; min-inline-size: 0;
+  box-sizing: border-box; block-size: 100%;
+  padding: var(--dl-space-2) var(--workspace-settings-dialog-padding);
+  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
+}
+/* 头部右端让出常驻的关闭钮。 */
+.account-security__header {
+  padding-inline-end: calc(var(--workspace-settings-dialog-padding) + var(--workspace-nav-control-size) + var(--dl-space-1));
+}
+h2 { min-inline-size: 0; max-inline-size: 100%; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
 h2:focus-visible { outline: none; box-shadow: none; }
 h3 { font-size: var(--dl-font-size-lg); font-weight: 500; line-height: var(--dl-line-snug); }
 .account-security__profile-header { display: flex; align-items: center; gap: var(--dl-space-4); padding-block: var(--dl-space-3); }
@@ -502,13 +504,14 @@ h3 { font-size: var(--dl-font-size-lg); font-weight: 500; line-height: var(--dl-
 .account-security__nickname-actions { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); }
 .account-security__email, .account-security__mono, time { font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .account-security__email { color: var(--dl-text-secondary); }
-/* 滚动容器会裁掉外扩焦点环:四周留一档内边距,再用负外边距抵消外部占位,
-   按钮与内容左缘的相对位置不变,焦点环获得不被裁切的缓冲。 */
-.account-security__tabs { display: flex; flex: none; gap: var(--dl-space-6); border-block-end: var(--dl-border-width) solid var(--dl-border-base); overflow-x: auto; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
+/* 横向 tab 条由外壳导航槽承载:占满整宽,按钮内缩到窗体内距。 */
+.account-security__tabs { display: flex; flex: none; gap: var(--dl-space-6); border-block-end: var(--dl-border-width) solid var(--dl-border-base); overflow-x: auto; padding: var(--dl-space-1) var(--workspace-settings-dialog-padding); }
 .account-security__tabs button { flex: none; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1); border: 0; border-block-end: var(--dl-border-width) solid transparent; border-radius: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); white-space: nowrap; }
 .account-security__tabs button:hover { background: transparent; }
 .account-security__tabs button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); }
 .account-security__tabs button[aria-selected='true'] { border-block-end-color: var(--dl-accent); color: var(--dl-text-primary); }
+/* 横向滚动容器会裁掉外扩焦点环,这里改用内收环。 */
+.account-security__tabs button:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
 .account-security__body { flex: 1; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
 .account-security__state { display: grid; justify-items: start; gap: var(--dl-space-3); color: var(--dl-text-secondary); }
 .account-security__page, .account-security__section { display: flex; flex-direction: column; gap: var(--dl-space-4); }
@@ -546,7 +549,26 @@ button:hover { background: var(--dl-bg-hover); }
 button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
 button:active { transform: translateY(var(--dl-lift-press)); }
 button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken); cursor: not-allowed; transform: none; }
-.account-security__close { flex: none; padding: 0; }
+/* 关闭钮与悬浮窗体头部的图标钮同档:32px 见方、无描边、无静止底色;
+   tertiary 文字色只在悬停时升到 primary,焦点 / 按压与其他按钮同一套反馈。 */
+.account-security__close {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dl-radius-md);
+  color: var(--dl-text-tertiary);
+  font-size: var(--dl-font-size-xs);
+  inline-size: var(--workspace-nav-control-size);
+  block-size: var(--workspace-nav-control-size);
+  min-inline-size: var(--workspace-nav-control-size);
+  min-block-size: var(--workspace-nav-control-size);
+}
+.account-security__close:hover {
+  color: var(--dl-text-primary);
+  background: var(--dl-bg-hover);
+}
+/* 关闭钮贴着窗体上缘,外扩焦点环会被表面的 overflow: hidden 裁掉,改用内收环。 */
+.account-security__close:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
 .account-security__icon-button { padding: 0; }
 .account-security__primary { background: var(--dl-accent); border-color: var(--dl-accent); color: var(--dl-text-on-accent); }
 .account-security__primary:hover { background: var(--dl-accent-hover); }
@@ -569,7 +591,6 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
 .account-security__safety > div { grid-template-columns: 1fr; gap: var(--dl-space-1); padding: 0; border: 0; }
 .account-security__safety dd { font-size: var(--dl-font-size-sm); }
 .account-security__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--dl-space-2); }
-@keyframes account-security-in { from { opacity: 0; transform: translateY(var(--dl-space-1)) scale(.99); } to { opacity: 1; transform: none; } }
 @media (hover: none), (pointer: coarse) {
   .account-security__avatar-badge { opacity: 1; }
 }
@@ -580,5 +601,5 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
 @media (max-width: 560px) {
   .account-security__profile-header { align-items: flex-start; }
 }
-@media (prefers-reduced-motion: reduce) { .account-security[open] { animation: none; } button:active { transform: none; } }
+@media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
 </style>

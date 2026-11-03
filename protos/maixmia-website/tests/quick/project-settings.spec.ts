@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
-import { collectRuntimeIssues, login, waitForWorkspace } from './helpers'
+import { collectRuntimeIssues, expectDialogButtonHitPriority, expectDialogOutsideCornerResize, expectDialogResizeCue, login, waitForWorkspace } from './helpers'
 import { unlockDemoIdentity } from '../calibrate/identity-helpers'
 
 // 统一项目设置窗体:一个 dialog、一个 Tab 控件(模型 / 权限 / MCP)、一个底部动作区;
@@ -247,6 +247,154 @@ test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无�
   expect(issues).toEqual([])
 })
 
+interface FrameMetrics {
+  width: number
+  height: number
+  top: number
+  bottom: number
+  left: number
+  right: number
+  contentClientWidth: number
+  contentClientHeight: number
+  contentScrollHeight: number
+  contentOverflowY: string
+  contentHoldsHead: boolean
+  contentHoldsActions: boolean
+  docScrollHeight: number
+  docClientHeight: number
+  innerWidth: number
+  innerHeight: number
+}
+
+// dvh 与上限的重算发生在 resize 后的下一帧,量几何前先等两帧,避免读到旧值。
+async function settleLayout(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+}
+
+// 只读窗框几何:宽高、安全边距、正文滚动容器与页面自身是否滚动。
+async function readFrame(dialog: Locator): Promise<FrameMetrics> {
+  return dialog.evaluate((element) => {
+    const content = element.querySelector<HTMLElement>('.project-settings__content')
+    const head = element.querySelector<HTMLElement>('.project-settings__head')
+    const actions = element.querySelector<HTMLElement>('.project-settings__actions')
+    if (content === null || head === null || actions === null) throw new Error('project settings frame is incomplete')
+    const bounds = element.getBoundingClientRect()
+    return {
+      width: bounds.width,
+      height: bounds.height,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      right: bounds.right,
+      contentClientWidth: content.clientWidth,
+      contentClientHeight: content.clientHeight,
+      contentScrollHeight: content.scrollHeight,
+      contentOverflowY: getComputedStyle(content).overflowY,
+      contentHoldsHead: content.contains(head),
+      contentHoldsActions: content.contains(actions),
+      docScrollHeight: document.documentElement.scrollHeight,
+      docClientHeight: document.documentElement.clientHeight,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    }
+  })
+}
+
+// 窗体高度由 dvh 推导:Chromium 在 resize 后可能延迟重算,断言前轮询到目标高度,
+// 避免并行负载下读到上一档视口的旧几何。
+async function expectFrameHeight(dialog: Locator, expected: number): Promise<void> {
+  await expect.poll(async () => {
+    const frame = await readFrame(dialog)
+    return Math.abs(frame.height - expected) <= 1
+  }).toBe(true)
+}
+
+test('@area:project-settings 大型设置面:宽高只随视口变化,正文是唯一滚动容器', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openSettings(page)
+  await expect(dialog.locator('.project-model__mode')).toBeVisible()
+  await expectFrameHeight(dialog, 810)
+
+  // 常见笔记本视口:高度取九成视口,旧的 720 上限不再提前截断;宽度收口在大型模态档。
+  const model = await readFrame(dialog)
+  expect(Math.abs(model.height - model.innerHeight * 0.9)).toBeLessThanOrEqual(1)
+  expect(model.width).toBe(1120)
+  expect(model.top).toBeGreaterThanOrEqual(16)
+  expect(model.innerHeight - model.bottom).toBeGreaterThanOrEqual(16)
+  expect(model.contentOverflowY).toBe('auto')
+  // 头部与动作区固定在滚动视口之外,只有正文滚动;权限默认态完整容纳。
+  expect(model.contentHoldsHead).toBe(false)
+  expect(model.contentHoldsActions).toBe(false)
+  expect(model.docScrollHeight).toBeLessThanOrEqual(model.docClientHeight)
+
+  await selectTab(page, dialog, '权限')
+  await expect(dialog.locator('.permission-editor')).toBeVisible()
+  const permissions = await readFrame(dialog)
+  expect(Math.abs(permissions.height - model.height)).toBeLessThanOrEqual(1)
+  expect(Math.abs(permissions.width - model.width)).toBeLessThanOrEqual(1)
+  expect(permissions.contentScrollHeight).toBeLessThanOrEqual(permissions.contentClientHeight + 1)
+
+  // MCP 内容更长、需要滚动:窗框尺寸不变,滚动条槽位预留使正文可用宽度不变。
+  await selectTab(page, dialog, 'MCP')
+  await expect(dialog.locator('.project-mcp__server').first()).toBeVisible()
+  const mcp = await readFrame(dialog)
+  expect(Math.abs(mcp.height - model.height)).toBeLessThanOrEqual(1)
+  expect(Math.abs(mcp.width - model.width)).toBeLessThanOrEqual(1)
+  expect(mcp.contentScrollHeight).toBeGreaterThan(mcp.contentClientHeight)
+  expect(mcp.contentClientWidth).toBe(model.contentClientWidth)
+  expect(mcp.docScrollHeight).toBeLessThanOrEqual(mcp.docClientHeight)
+
+  // 1440×900:高度仍是九成视口,宽度不跟着视口变宽。
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expectFrameHeight(dialog, 810)
+  const wide = await readFrame(dialog)
+  expect(Math.abs(wide.height - wide.innerHeight * 0.9)).toBeLessThanOrEqual(1)
+  expect(wide.width).toBe(1120)
+  expect(wide.left).toBeGreaterThanOrEqual(16)
+  expect(wide.innerWidth - wide.right).toBeGreaterThanOrEqual(16)
+  // 1440 宽下权限默认态同样完整容纳,不出现纵向滚动条。
+  await selectTab(page, dialog, '权限')
+  await expect(dialog.locator('.permission-editor')).toBeVisible()
+  const permissionsWide = await readFrame(dialog)
+  expect(permissionsWide.contentScrollHeight).toBeLessThanOrEqual(permissionsWide.contentClientHeight + 1)
+
+  // 1600 宽:有明确上限,不随视口无限拉宽。
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await expectFrameHeight(dialog, 810)
+  const capped = await readFrame(dialog)
+  expect(capped.width).toBe(1120)
+  expect(capped.width).toBeLessThan(capped.innerWidth - 2 * 16)
+
+  // 视口高 1100:90dvh 超过 900,高度上限此时才接管。
+  await page.setViewportSize({ width: 1280, height: 1100 })
+  await expectFrameHeight(dialog, 900)
+  const tall = await readFrame(dialog)
+  expect(Math.abs(tall.height - 900)).toBeLessThanOrEqual(1)
+  expect(tall.top).toBeGreaterThanOrEqual(16)
+  expect(tall.innerHeight - tall.bottom).toBeGreaterThanOrEqual(16)
+
+  // 短视口:窗体仍收在视口内、动作区可见,正文可滚,页面本身不滚。
+  await page.setViewportSize({ width: 375, height: 400 })
+  await expectFrameHeight(dialog, 360)
+  const short = await readFrame(dialog)
+  expect(Math.abs(short.height - short.innerHeight * 0.9)).toBeLessThanOrEqual(1)
+  expect(short.bottom).toBeLessThanOrEqual(short.innerHeight)
+  expect(short.contentScrollHeight).toBeGreaterThan(short.contentClientHeight)
+  expect(short.docScrollHeight).toBeLessThanOrEqual(short.docClientHeight)
+  expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await selectTab(page, dialog, '模型')
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  expect(issues).toEqual([])
+})
+
 test('@area:project-settings 短视口下键盘移动焦点会把选项滚入菜单可视区', async ({ page }) => {
   const issues = collectRuntimeIssues(page)
   await page.setViewportSize({ width: 1280, height: 900 })
@@ -350,6 +498,8 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
   // 窄屏:头部与 band 之间不加线,band 底缘线是唯一分界;动作区线横贯整窗内宽。
   await page.setViewportSize({ width: 375, height: 900 })
   await expect(dialog.locator('.project-settings__tablist')).toHaveAttribute('aria-orientation', 'horizontal')
+  // 窗框高度用 dvh,重算落在 resize 后的下一帧;等布局落定再量分隔线几何。
+  await settleLayout(page)
   const narrow = await readGeometry()
   expect(narrow).not.toBeNull()
   if (narrow !== null) {
@@ -389,4 +539,120 @@ test.describe('English project settings', () => {
     }
     expect(issues).toEqual([])
   })
+})
+
+interface DialogGeometry {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  width: number
+  height: number
+}
+
+async function readDialogGeometry(dialog: Locator): Promise<DialogGeometry> {
+  return dialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    }
+  })
+}
+
+test('@area:project-settings 窗口控制:拖动标题栏移动、Esc 取消拖动与窄屏退化', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openSettings(page)
+
+  const standard = await readDialogGeometry(dialog)
+  expect(Math.abs(standard.width - 1120)).toBeLessThanOrEqual(1)
+  expect(Math.abs(standard.height - 810)).toBeLessThanOrEqual(1)
+  // 窗体不再提供最大化控制。
+  await expect(dialog.getByRole('button', { name: /最大化窗口|还原标准大小/ })).toHaveCount(0)
+
+  // 拖动标题栏 = 平移,宽高不变。
+  const header = dialog.locator('.dl-dialog__header')
+  const headerBox = await header.boundingBox()
+  if (headerBox === null) throw new Error('header missing')
+  await page.mouse.move(headerBox.x + 200, headerBox.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(headerBox.x + 320, headerBox.y + 80, { steps: 8 })
+  await page.mouse.up()
+  await settleLayout(page)
+  const dragged = await readDialogGeometry(dialog)
+  expect(Math.abs(dragged.width - standard.width)).toBeLessThanOrEqual(1)
+  expect(Math.abs(dragged.height - standard.height)).toBeLessThanOrEqual(1)
+  expect(dragged.left).toBeGreaterThan(standard.left)
+
+  // 拖动过程中的 Esc 只取消拖动,不关闭窗体,并回到拖动前的几何。
+  const beforeEsc = await readDialogGeometry(dialog)
+  const dragBox = await header.boundingBox()
+  if (dragBox === null) throw new Error('header missing')
+  await page.mouse.move(dragBox.x + 200, dragBox.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(dragBox.x + 280, dragBox.y + 60, { steps: 4 })
+  await page.keyboard.press('Escape')
+  await page.mouse.up()
+  await expect(dialog).toBeVisible()
+  const afterEsc = await readDialogGeometry(dialog)
+  expect(Math.abs(afterEsc.left - beforeEsc.left)).toBeLessThanOrEqual(1)
+  expect(Math.abs(afterEsc.top - beforeEsc.top)).toBeLessThanOrEqual(1)
+
+  // 静止态没有常驻抓手;动作按钮恒优先于角手柄,按钮之外的外侧角落仍能缩放。
+  await expectDialogResizeCue(page, dialog)
+  await expectDialogButtonHitPriority(dialog)
+  await expectDialogOutsideCornerResize(page, dialog)
+
+  // 窄窗(仍可操作)下动作区换行,按钮的命中优先级不变。
+  await page.setViewportSize({ width: 800, height: 700 })
+  await settleLayout(page)
+  await expectDialogButtonHitPriority(dialog)
+
+  // 窄屏退化为固定 sheet:没有窗口操作,也没有缩放手柄。
+  await page.setViewportSize({ width: 375, height: 900 })
+  await expect(dialog.getByRole('button', { name: /最大化窗口|还原标准大小/ })).toHaveCount(0)
+  await expect(dialog.locator('[role="separator"]')).toHaveCount(0)
+  await expect(dialog.locator('.dl-dialog__header')).toHaveCSS('cursor', 'default')
+  expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  expect(issues).toEqual([])
+})
+
+test('@area:project-settings 1280×800 默认模型页滚动只发生在正文内', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openSettings(page)
+  await expect(dialog.locator('.project-model__mode')).toBeVisible()
+  await settleLayout(page)
+  // 模型页内容本身超长(用户已确认接受正文滚动,用最大化兜底);
+  // 这里断言的是「窗框高度来自共享策略」与「溢出被限制在正文容器内」。
+  const frame = await dialog.evaluate((element) => {
+    const content = element.querySelector<HTMLElement>('.project-settings__content')
+    if (content === null) throw new Error('content missing')
+    const bounds = element.getBoundingClientRect()
+    return {
+      height: bounds.height,
+      overflowY: getComputedStyle(content).overflowY,
+      docScrollHeight: document.documentElement.scrollHeight,
+      docClientHeight: document.documentElement.clientHeight,
+    }
+  })
+  expect(Math.abs(frame.height - 720)).toBeLessThanOrEqual(1)
+  expect(frame.overflowY).toBe('auto')
+  expect(frame.docScrollHeight).toBeLessThanOrEqual(frame.docClientHeight)
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  expect(issues).toEqual([])
 })

@@ -133,13 +133,17 @@
      把宽屏的横向空间用起来(内容区仍限宽居中)。 */
   --dl-chrome-gutter: var(--dl-space-6);
 
-  /* 设置窗体共用一套几何:账户与 Agent 不得各自漂移。 */
-  --workspace-settings-dialog-width: 720px;
-  --workspace-settings-dialog-max-height: 720px;
+  /* 模态设置窗体共用尺寸策略:宽度按内容等级声明上限(紧凑单栏 / 常规密集表单 /
+     双栏导航 + 正文),高度由视口推导并共用同一硬上限与最小高度。
+     换算在 src/data/window-geometry.ts,三个窗体不得各自内联一套尺寸计算。 */
+  --workspace-dialog-width-compact: 560px;
+  --workspace-dialog-width-regular: 720px;
+  --workspace-dialog-width-wide: 1120px;
+  --workspace-dialog-max-height: 900px;
+  --workspace-dialog-min-width: 320px;
+  --workspace-dialog-min-height: 320px;
+  --workspace-dialog-margin: var(--dl-space-4);
   --workspace-settings-dialog-padding: var(--dl-space-6);
-  /* 统一项目设置窗体:左栏 Tab + 正文并排,需要比共享设置窗体更宽;
-     只新增本窗体自己的宽度 token,不改上面的共享值。 */
-  --workspace-project-settings-dialog-width: 960px;
 }
 
 @media (max-width: 560px) {

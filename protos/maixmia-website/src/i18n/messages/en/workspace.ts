@@ -1132,6 +1132,8 @@ export const workspace = {
     resizeBottom: 'Resize window height (bottom edge)',
     resizeTop: 'Resize window height (top edge)',
     resizeHint: 'Arrow keys to resize · Shift for a large step · Home/End for min/max',
+    dialogHeaderLabel: 'Window title bar',
+    dialogHeaderHint: 'Drag to move · Arrow keys to move',
   },
   // The file panel shows the whole file with change markers by default (not just diff fragments),
   // and can switch to unified / side-by-side diff. Line markers use shapes, not colour alone

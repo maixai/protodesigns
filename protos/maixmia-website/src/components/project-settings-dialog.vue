@@ -6,6 +6,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
 import { useI18n } from '../i18n'
+import DialogWindow from './dialog-window.vue'
 import ProjectMcpPanel from './project-mcp-panel.vue'
 import ProjectModelPanel from './project-model-panel.vue'
 import ProjectPermissionPanel from './project-permission-panel.vue'
@@ -36,12 +37,12 @@ const dialogId = `project-settings-${Math.random().toString(36).slice(2)}`
 const titleId = `${dialogId}-title`
 const confirmTitleId = `${dialogId}-discard-title`
 const confirmBodyId = `${dialogId}-discard-body`
-const dialogRef = ref<HTMLDialogElement | null>(null)
+const contentId = `${dialogId}-content`
+const dialogWindow = ref<InstanceType<typeof DialogWindow> | null>(null)
 const confirmDialogRef = ref<HTMLDialogElement | null>(null)
 const confirmKeepRef = ref<HTMLButtonElement | null>(null)
 const tablistRef = ref<HTMLElement | null>(null)
 const saveStateRef = ref<HTMLElement | null>(null)
-const returnFocusRef = ref<HTMLElement | null>(null)
 const confirmReturnFocusRef = ref<HTMLElement | null>(null)
 const activeTab = ref<ProjectSettingsTab>('model')
 const isStacked = ref(false)
@@ -140,12 +141,11 @@ async function saveActive(): Promise<void> {
   saveStateRef.value?.focus()
 }
 
+// 关闭请求统一由外壳转交:本层只处理业务判断(保存中 / 脏草稿),真正关闭由父级卸载外壳完成。
 function finishClose(): void {
   if (isAnySaving.value) return
-  if (dialogRef.value?.open === true) dialogRef.value.close()
-  const target = returnFocusRef.value
+  dialogWindow.value?.closeDialog?.()
   emit('close')
-  if (target?.isConnected === true) target.focus()
 }
 
 async function openConfirm(domains: string[]): Promise<void> {
@@ -167,6 +167,7 @@ function closeConfirm(): void {
   if (target?.isConnected === true) target.focus()
 }
 
+// 外壳把窗体自身 Esc 转成 request-close;确认层的 Esc 由确认层自己的 cancel 处理。
 function requestClose(): void {
   if (isAnySaving.value || confirmOpen.value) return
   const dirty = TAB_ORDER.filter((tab) => states.value[tab].dirty)
@@ -180,19 +181,6 @@ function discardAndClose(): void {
   finishClose()
 }
 
-// 外层 Esc:确认层开着时只关确认层(确认层的 cancel 也会阻止冒泡到这里)。
-function onOuterCancel(): void {
-  if (confirmOpen.value) { closeConfirm(); return }
-  requestClose()
-}
-
-function onBackdropClick(event: MouseEvent): void {
-  const dialog = dialogRef.value
-  if (dialog === null || event.target !== dialog) return
-  const bounds = dialog.getBoundingClientRect()
-  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) requestClose()
-}
-
 function focusActiveTab(): void {
   tablistRef.value?.querySelector<HTMLElement>(`#${tabElementId(activeTab.value)}`)?.focus()
 }
@@ -201,21 +189,9 @@ function syncStacked(): void {
   isStacked.value = window.innerWidth <= STACK_BREAKPOINT
 }
 
-watch(() => props.open, async (isOpen) => {
-  await nextTick()
-  const dialog = dialogRef.value
-  if (dialog === null) return
-  if (!isOpen) {
-    if (dialog.open) dialog.close()
-    return
-  }
-  // 每次打开都回到模型页,不记忆上次停留的 Tab。
-  activeTab.value = 'model'
-  const active = document.activeElement
-  returnFocusRef.value = active instanceof HTMLElement ? active : null
-  if (!dialog.open) dialog.showModal()
-  await nextTick()
-  focusActiveTab()
+// 每次打开都回到模型页,不记忆上次停留的 Tab;窗体开合与还焦由共享外壳负责。
+watch(() => props.open, (isOpen) => {
+  if (isOpen) activeTab.value = 'model'
 }, { immediate: true })
 
 onMounted(() => {
@@ -225,23 +201,33 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', syncStacked)
   if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
-  if (dialogRef.value?.open === true) dialogRef.value.close()
 })
 </script>
 
 <template>
-  <dialog
-    ref="dialogRef" class="project-settings" :class="{ 'is-stacked': isStacked }" aria-modal="true"
-    :aria-labelledby="titleId" @cancel.prevent="onOuterCancel" @click="onBackdropClick"
+  <DialogWindow
+    ref="dialogWindow"
+    :open="open"
+    class="project-settings"
+    :class="{ 'is-stacked': isStacked }"
+    tier="wide"
+    :layout="isStacked ? 'stacked' : 'sidebar'"
+    :body-id="contentId"
+    :aria-labelledby="titleId"
+    @request-close="requestClose"
+    @opened="focusActiveTab"
   >
-    <header class="project-settings__head">
-      <span class="project-settings__mark" aria-hidden="true">{{ project.mark }}</span>
-      <div class="project-settings__identity">
-        <h2 :id="titleId" class="project-settings__title">{{ t.workspace.projectSettings.settingsDialogTitle }} · {{ project.name }}</h2>
-        <code class="project-settings__path">{{ project.path }}</code>
+    <template #header>
+      <div class="project-settings__head">
+        <span class="project-settings__mark" aria-hidden="true">{{ project.mark }}</span>
+        <div class="project-settings__identity">
+          <h2 :id="titleId" class="project-settings__title">{{ t.workspace.projectSettings.settingsDialogTitle }} · {{ project.name }}</h2>
+          <code class="project-settings__path">{{ project.path }}</code>
+        </div>
       </div>
-    </header>
-    <div class="project-settings__main">
+    </template>
+
+    <template #nav>
       <div
         ref="tablistRef" class="project-settings__tablist" role="tablist"
         :aria-label="t.workspace.projectSettings.settingsTabsLabel"
@@ -258,31 +244,33 @@ onBeforeUnmount(() => {
           <span v-if="tab.badge !== ''" class="project-settings__tab-badge" :data-tone="tab.tone">{{ tab.badge }}</span>
         </button>
       </div>
-      <!-- 内容 pane = 窗体表面本身:配置正文 + 底部动作区,不再另起底板或容器。
-           正文是唯一纵向滚动容器,动作区与正文共用同一条左/右缘。 -->
-      <div class="project-settings__right">
-        <div class="project-settings__content">
-          <div v-show="activeTab === 'model'" :id="panelElementId('model')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('model')">
-            <ProjectModelPanel ref="modelPanel" :project="project" :agent="agent" @state="setPanelState('model', $event)" />
-          </div>
-          <div v-show="activeTab === 'permissions'" :id="panelElementId('permissions')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('permissions')">
-            <ProjectPermissionPanel ref="permissionPanel" :project="project" :agent="agent" @state="setPanelState('permissions', $event)" />
-          </div>
-          <div v-show="activeTab === 'mcp'" :id="panelElementId('mcp')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('mcp')">
-            <ProjectMcpPanel ref="mcpPanel" :project="project" :agent="agent" @state="setPanelState('mcp', $event)" @announce="emit('announce', $event)" />
-          </div>
-        </div>
-        <footer class="project-settings__actions">
-          <!-- 动作区上方的发丝线;装饰元素不参与布局,由 CSS 锚在滚动视口底缘。 -->
-          <span class="project-settings__actions-rule" aria-hidden="true"></span>
-          <p ref="saveStateRef" class="project-config__save-state" :data-state="activeState.saveState" tabindex="-1">{{ activeStateLabel }}</p>
-          <div class="project-config__buttons">
-            <button type="button" class="dl-btn dl-btn--ghost" :disabled="isAnySaving" @click="requestClose">{{ t.workspace.projectSettings.close }}</button>
-            <button type="button" class="dl-btn dl-btn--primary" :disabled="!activeState.canSave || isAnySaving" @click="saveActive">{{ activeState.saving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button>
-          </div>
-        </footer>
+    </template>
+
+    <!-- 正文是唯一纵向滚动容器;头部与动作区由外壳固定在滚动视口之外。 -->
+    <div class="project-settings__content">
+      <div v-show="activeTab === 'model'" :id="panelElementId('model')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('model')">
+        <ProjectModelPanel ref="modelPanel" :project="project" :agent="agent" @state="setPanelState('model', $event)" />
+      </div>
+      <div v-show="activeTab === 'permissions'" :id="panelElementId('permissions')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('permissions')">
+        <ProjectPermissionPanel ref="permissionPanel" :project="project" :agent="agent" @state="setPanelState('permissions', $event)" />
+      </div>
+      <div v-show="activeTab === 'mcp'" :id="panelElementId('mcp')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('mcp')">
+        <ProjectMcpPanel ref="mcpPanel" :project="project" :agent="agent" @state="setPanelState('mcp', $event)" @announce="emit('announce', $event)" />
       </div>
     </div>
+
+    <template #actions>
+      <!-- 动作区上方的发丝线;装饰元素不参与布局,由 CSS 锚在外壳动作区的上缘。 -->
+      <span class="project-settings__actions-rule" aria-hidden="true"></span>
+      <div class="project-settings__actions">
+        <p ref="saveStateRef" class="project-config__save-state" :data-state="activeState.saveState" tabindex="-1">{{ activeStateLabel }}</p>
+        <div class="project-config__buttons">
+          <button type="button" class="dl-btn dl-btn--ghost" :disabled="isAnySaving" @click="requestClose">{{ t.workspace.projectSettings.close }}</button>
+          <button type="button" class="dl-btn dl-btn--primary" :disabled="!activeState.canSave || isAnySaving" @click="saveActive">{{ activeState.saving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button>
+        </div>
+      </div>
+    </template>
+
     <!-- 丢弃确认层:独立的 alertdialog,自带焦点陷阱与 Esc 语义;默认焦点在「继续编辑」上。 -->
     <dialog
       v-if="confirmOpen" ref="confirmDialogRef" class="project-settings__confirm dl-modal-scrim" role="alertdialog"
@@ -295,37 +283,24 @@ onBeforeUnmount(() => {
         <button type="button" class="dl-btn dl-btn--ghost project-settings__discard" @click="discardAndClose">{{ t.workspace.projectSettings.discardConfirm }}</button>
       </div>
     </dialog>
-  </dialog>
+  </DialogWindow>
 </template>
 
 <style scoped>
-/* 窗体是整窗唯一的大容器,不再在内部嵌第二只四边闭合、自带圆角与描边的卡片。
-   内距下沉到头部与内容 pane,导航 pane 才能与窗体引导边、主体底边共边;
-   共用宽度 / 内距 token 只读取不改写,账户与 Agent 窗体几何不受影响。 */
+/* 窗体几何由共享外壳统一执行(尺寸策略见 src/data/window-geometry.ts):
+   本文件只保留项目设置自己的头部 / 导航 / 正文 / 动作区编排,不再内联宽高。 */
 .project-settings {
   /* 头部与动作条共用的垂直内距节奏:同一档内距让窗体上下读作同一圈窗框。 */
   --project-settings-chrome-pad: var(--dl-space-2);
-  inline-size: min(var(--workspace-project-settings-dialog-width), calc(100% - 2 * var(--dl-space-4)));
-  block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-4)));
-  max-block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-4)));
-  margin: auto;
-  box-sizing: border-box;
-  padding: 0;
-  border: var(--dl-border-width) solid var(--dl-border-strong);
-  border-radius: var(--dl-radius-xl);
-  background: var(--dl-bg-elevated);
-  color: var(--dl-text-primary);
   color-scheme: dark;
-  font: inherit;
-  text-align: left;
 }
-.project-settings[open] { display: flex; flex-direction: column; }
 /* 头部横贯整窗:项目身份不随导航列宽变化,左右缘与主体两栏的内容缘对齐。
    底缘一条通栏发丝线是「固定头部 / 主体」的边界;它与导航竖线同一层级色,
    导航竖线上端正好从这条线的下缘开始,形成干净的 T 形交接。
    垂直内距与动作条同档,头部收成单行主体栏而不是一块内容区。 */
 .project-settings__head {
-  display: flex; flex-shrink: 0; align-items: center; gap: var(--dl-space-3); min-width: 0;
+  display: flex; flex: 1; align-items: center; gap: var(--dl-space-3); min-width: 0;
+  box-sizing: border-box; block-size: 100%;
   padding: var(--project-settings-chrome-pad) var(--workspace-settings-dialog-padding);
   border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
@@ -344,18 +319,9 @@ onBeforeUnmount(() => {
 .project-settings__title { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
 .project-settings__path { flex: 0 0 auto; min-inline-size: 0; max-inline-size: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
-/* 主体横贯整窗:左侧导航 pane 通到窗体底边、与引导边共边;
-   右侧内容 pane 直接是窗体表面。两 pane 之间只保留一条通高发丝线,
-   不叠加色调差、圆角、描边盒或阴影。导航 pane 不设 overflow ——
-   行的外扩焦点环靠内距留出余量即可,不做任何裁切。
-   内容与动作条之间不留 gap:动作条自己的上内距就是正文与按钮之间的节奏,
-   发丝线因此可以正好贴在滚动视口底缘。 */
-.project-settings__main { display: flex; flex: 1; min-block-size: 0; }
-.project-settings__right {
-  display: flex; flex: 1; flex-direction: column;
-  min-inline-size: 0; min-block-size: 0;
-  padding: 0 var(--workspace-settings-dialog-padding);
-}
+/* 主体由外壳排布:宽屏左导航 + 右列,窄屏导航在上、正文在下;两 pane 之间只保留
+   一条通高发丝线,不叠加色调差、圆角、描边盒或阴影。导航 pane 不设 overflow ——
+   行的外扩焦点环靠内距留出余量即可,不做任何裁切。 */
 .project-settings__tablist {
   display: flex; flex: none; flex-direction: column; align-self: stretch; gap: var(--dl-space-1);
   inline-size: calc(var(--dl-space-12) * 4 + var(--dl-space-4)); box-sizing: border-box;
@@ -384,8 +350,14 @@ onBeforeUnmount(() => {
 .project-settings__tab-badge[data-tone='dirty'] { color: var(--dl-warning); }
 .project-settings__tab-badge[data-tone='error'] { color: var(--dl-error); }
 .project-settings__tab-badge[data-tone='saving'] { color: var(--dl-text-secondary); }
-.project-settings__content { flex: 1; min-inline-size: 0; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
+/* 正文是唯一纵向滚动容器:头部与动作区固定在窗外侧,不进这个盒子。
+   scrollbar-gutter: stable 预留滚动条槽位,滚动条出现 / 消失时不改变正文可用宽度 ——
+   常规滚动条(Chromium / Windows)不会因此让内容横向跳动;覆盖式滚动条本就不占位。 */
+.project-settings__content { flex: 1; min-inline-size: 0; min-block-size: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
 .project-settings__panel { min-inline-size: 0; }
+/* 外壳内容区默认带一档纵向内距;项目窗体让正文直接贴到头部 / 动作区边界,
+   纵向余量由正文自己的内距与面板负责(动作区发丝线因此正好落在滚动视口底缘)。 */
+.project-settings :deep(.dl-dialog__content) { padding-block: 0; }
 
 /* 窄屏:导航仍是 pane,转为通栏横向 band,与窗体左右边共边、无独立圆角卡片;
    分隔机制与宽屏一致,只是发丝线换到 band 的底缘 —— 头部与 band 之间不再加线,
@@ -395,8 +367,7 @@ onBeforeUnmount(() => {
 .project-settings.is-stacked .project-settings__identity { display: block; }
 .project-settings.is-stacked .project-settings__title { display: block; }
 .project-settings.is-stacked .project-settings__path { display: block; max-inline-size: none; }
-.project-settings.is-stacked .project-settings__main { flex-direction: column; }
-.project-settings.is-stacked .project-settings__right { padding-block-start: var(--dl-space-3); }
+.project-settings.is-stacked :deep(.dl-dialog__content) { padding-block-start: var(--dl-space-3); }
 .project-settings.is-stacked .project-settings__tablist {
   flex-direction: row; align-items: stretch; inline-size: auto;
   padding: var(--dl-space-2);
@@ -411,17 +382,15 @@ onBeforeUnmount(() => {
 }
 .project-settings.is-stacked .project-settings__tab-label { overflow-wrap: normal; text-align: center; }
 
-/* 动作区归属内容 pane:与正文同一条左/右缘,不浮在空白里,也不另起容器。
-   垂直内距与头部同档,整条动作区 = 一个 44px 控件 + 上下各一档内距。
+/* 动作区由外壳固定在正文之外:这里只排状态与按钮。
    状态与按钮优先同行;放不下时按 flex 换行,窄屏最多两行。 */
-.project-settings__actions { position: relative; flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); padding: var(--project-settings-chrome-pad) var(--dl-space-1); }
-/* 动作区上方的发丝线只属于内容 pane:与正文视口之间没有 gap,
-   线正好落在滚动视口的底缘(不随正文滚动);左右各外扩一个 pane 内距,
-   左端与导航竖线像素相接、右端到窗体右内缘,宽屏不越入导航,窄屏则自然横贯整窗内宽。 */
+.project-settings__actions { flex: 1; min-inline-size: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); }
+/* 动作区上方的发丝线锚在外壳动作区的上缘(不在滚动容器内),
+   左端与导航竖线相接、右端到窗体右内缘;与外壳自带的 border-block-start 重叠成一条线。 */
 .project-settings__actions-rule {
   position: absolute;
-  inset-block-start: 0;
-  inset-inline: calc(-1 * var(--workspace-settings-dialog-padding));
+  inset-block-start: calc(-1 * var(--dl-border-width));
+  inset-inline: 0;
   block-size: var(--dl-border-width);
   background: var(--dl-border-base);
   pointer-events: none;

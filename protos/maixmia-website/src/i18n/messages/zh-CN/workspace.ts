@@ -1117,6 +1117,8 @@ export const workspace = {
     resizeBottom: '调整窗口高度(下缘)',
     resizeTop: '调整窗口高度(上缘)',
     resizeHint: '方向键调整 · Shift 大步长 · Home/End 到最小/最大',
+    dialogHeaderLabel: '窗口标题栏',
+    dialogHeaderHint: '拖动移动窗口 · 方向键移动',
   },
   // 文件面板:默认呈现**整个文件 + 变更标记**(不是只看 diff 片段),可切到统一 / 并排 diff。
   // 行级标记用形状而非仅颜色区分(新增 + / 删除 − / 修改 ~),词级高亮标出真正改动的字词。

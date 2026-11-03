@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
-import { collectRuntimeIssues, login, waitForWorkspace } from './helpers'
+import { collectRuntimeIssues, expectDialogButtonHitPriority, expectDialogOutsideCornerResize, expectDialogResizeCue, login, waitForWorkspace } from './helpers'
 
 const VALID_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
 const AVATAR_FILE = { name: 'agent.png', mimeType: 'image/png', buffer: VALID_PNG }
@@ -329,4 +329,47 @@ test('@area:agent-settings 侧栏 Agent 状态与设置头部一致', async ({ p
   await expect(dialog.getByTestId('agent-editor-connection')).toHaveAccessibleName('在线')
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(dialog).toHaveCount(0)
+})
+
+test('@area:agent-settings 设置窗体窄屏退化为固定 sheet', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const dialog = await openAgentSettings(page)
+  await expect(dialog.getByRole('button', { name: /最大化窗口|还原标准大小/ })).toHaveCount(0)
+  await expect(dialog.locator('[role="separator"]')).toHaveCount(4)
+
+  // 静止态没有常驻抓手;动作按钮恒优先于角手柄,按钮之外的外侧角落仍能缩放。
+  await expectDialogResizeCue(page, dialog)
+  await expectDialogButtonHitPriority(dialog)
+  await expectDialogOutsideCornerResize(page, dialog)
+
+  await page.setViewportSize({ width: 375, height: 900 })
+  await expect(dialog.getByRole('button', { name: /最大化窗口|还原标准大小/ })).toHaveCount(0)
+  await expect(dialog.locator('[role="separator"]')).toHaveCount(0)
+  expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+})
+
+test('@area:agent-settings 1280×800 基本页不出现正文纵向滚动', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await login(page)
+  await waitForWorkspace(page)
+  const dialog = await openAgentSettings(page)
+  await dialog.getByRole('tab', { name: '基本', exact: true }).click()
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  const frame = await dialog.evaluate((element) => {
+    const body = element.querySelector<HTMLElement>('.agent-editor__body')
+    if (body === null) throw new Error('body missing')
+    return { height: element.getBoundingClientRect().height, client: body.clientHeight, scroll: body.scrollHeight }
+  })
+  expect(Math.abs(frame.height - 720)).toBeLessThanOrEqual(1)
+  expect(frame.scroll).toBeLessThanOrEqual(frame.client + 1)
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
 })

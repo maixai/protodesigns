@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentEditorDialog from '../../src/components/agent-editor-dialog.vue'
 import AgentContextSwitcher from '../../src/components/agent-context-switcher.vue'
@@ -15,6 +16,21 @@ vi.mock('../../src/api/agent-permissions', () => ({ getAgentPermissions: vi.fn()
 
 const AVATAR_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const OTHER_AVATAR_URL = `${AVATAR_URL}#other`
+
+// shallow 挂载会把共享外壳也桩掉,而它承载标题栏 / 导航 / 动作区三个具名槽;
+// 用一个透传全部槽位的桩替代,才测得到 Agent 设置自己的 DOM 语义。
+const DialogWindowStub = defineComponent({
+  name: 'DialogWindow',
+  props: { open: { type: Boolean, default: true } },
+  emits: ['request-close', 'opened'],
+  setup(props, { slots, emit, expose }) {
+    expose({ closeDialog: () => undefined })
+    return () => h('dialog', {
+      open: props.open ? '' : undefined,
+      onCancel: () => emit('request-close'),
+    }, [slots.header?.(), slots.nav?.(), slots.default?.(), slots.actions?.()])
+  },
+})
 function agentFixture(): AgentSummary {
   const agent = mockAgentSummaries()[0]
   if (agent === undefined) throw new Error('Missing agent fixture')
@@ -25,7 +41,7 @@ async function editor(agent = agentFixture()) {
     props: { open: false, focusIdentity: false, agent, canDelete: false, busy: false, error: '', savedToken: 0 },
     attachTo: document.body,
     shallow: true,
-    global: { renderStubDefaultSlot: true },
+    global: { renderStubDefaultSlot: true, stubs: { DialogWindow: DialogWindowStub } },
   })
   await flushPromises()
   await wrapper.setProps({ open: true })

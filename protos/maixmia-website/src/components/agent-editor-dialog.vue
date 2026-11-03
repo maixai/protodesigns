@@ -17,6 +17,7 @@ import { DEFAULT_MODEL, EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_P
 import { checkSubscription as checkSubscriptionConnection, authorizeSubscription, reauthorizeSubscription, probeModelGateway } from '../api/workspace'
 import { useI18n } from '../i18n'
 import { agentDisplayStatus, useAgentStatusTooltip } from '../data/agent-status'
+import DialogWindow from './dialog-window.vue'
 import DliIcon from './dl-icon.vue'
 import SelectField from './select-field.vue'
 import SubscriptionUsage from './subscription-usage.vue'
@@ -61,8 +62,7 @@ interface SelectOption {
   label: string
 }
 
-const dialogRef = ref<HTMLDialogElement | null>(null)
-const returnFocusRef = ref<HTMLElement | null>(null)
+const dialogWindow = ref<InstanceType<typeof DialogWindow> | null>(null)
 const name = ref('')
 const note = ref('')
 const avatarUrl = ref<AgentConfig['avatarUrl']>('')
@@ -143,6 +143,7 @@ const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
 const permissionsTabRef = ref<HTMLButtonElement | null>(null)
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
+const bodyId = `${dialogId}-body`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
 const subjectId = `${dialogId}-subject`
@@ -187,7 +188,7 @@ const {
 } = useAgentStatusTooltip(
   (id) => props.agent?.id === id ? props.agent : undefined,
   (agent) => agentDisplayStatus(agent, t.value.workspace, locale.value),
-  () => dialogRef.value?.querySelector('.agent-editor__head')?.getBoundingClientRect(),
+  () => document.querySelector('.agent-editor__head')?.getBoundingClientRect(),
   true,
 )
 function onConnectionHintKeydown(event: KeyboardEvent): void {
@@ -1430,25 +1431,12 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
   }
   discardAvatarDraft()
   dismissConnectionTooltip()
-  dialogRef.value?.close()
-  if (returnFocusRef.value?.isConnected) returnFocusRef.value.focus()
+  dialogWindow.value?.closeDialog?.()
   emit('cancel')
 }
 
-// 删除与解除关联的交互都在基本页的身份组件内;本层只负责关闭与提交。
-function onBackdropClick(event: MouseEvent): void {
-  const dialog = dialogRef.value
-  if (dialog === null || event.target !== dialog) return
-  const bounds = dialog.getBoundingClientRect()
-  if (event.clientX < bounds.left || event.clientX > bounds.right
-    || event.clientY < bounds.top || event.clientY > bounds.bottom) finish('cancel')
-}
-
-// 文件选择器的原生 cancel 会冒泡到 dialog;只响应 dialog 自身的 Esc 取消,
-// 否则用户在选图时点「取消」会把整个设置弹窗关掉并丢掉草稿。
-function onDialogCancel(event: Event): void {
-  if (event.target !== event.currentTarget) return
-  event.preventDefault()
+// Esc / 背板由共享外壳转成 request-close:busy 时 finish 会自行忽略,不关闭窗体。
+function requestClose(): void {
   finish('cancel')
 }
 
@@ -1480,30 +1468,29 @@ watch(isDirty, (dirty) => {
   savedAnnouncement.value = ''
 })
 
-watch(() => props.open, async (isOpen): Promise<void> => {
-  await nextTick()
-  const dialog = dialogRef.value
-  if (dialog === null) return
+// 窗体开合与还焦由共享外壳负责;这里只做数据复位与关闭清理。
+watch(() => props.open, (isOpen) => {
   if (!isOpen) {
     permissionLoadVersion += 1
     discardAvatarDraft()
     dismissConnectionTooltip()
     abortAuthorization(false)
     clearSourceCheck()
-    if (dialog.open) dialog.close()
     return
   }
-  const active = document.activeElement
-  returnFocusRef.value = active instanceof HTMLElement ? active : null
   reset()
-  await nextTick()
-  dialog.showModal()
-  if (props.focusIdentity) {
-    await nextTick()
-    dialog.querySelector('.security-identity')?.scrollIntoView({ block: 'start' })
-    dialog.querySelector<HTMLElement>('#agent-identity-status')?.focus({ preventScroll: true })
-  } else document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
 }, { immediate: true })
+
+// 外壳 showModal 之后设置初始焦点:身份入口或模型页签。
+async function onDialogOpened(): Promise<void> {
+  await nextTick()
+  if (props.focusIdentity) {
+    document.querySelector('.agent-editor .security-identity')?.scrollIntoView({ block: 'start' })
+    document.getElementById('agent-identity-status')?.focus({ preventScroll: true })
+    return
+  }
+  document.getElementById(`${dialogId}-model-tab-${activeModelSection.value}`)?.focus()
+}
 
 onBeforeUnmount(() => {
   permissionLoadVersion += 1
@@ -1511,57 +1498,67 @@ onBeforeUnmount(() => {
   abortAuthorization(false)
   clearSourceCheck()
   closeSourceMenu()
-  dialogRef.value?.close()
 })
 </script>
 
 <template>
-  <dialog
-    ref="dialogRef" class="agent-editor dl-scope dl-scope--dark dl-modal-scrim" aria-modal="true"
-    :aria-labelledby="titleId" :aria-describedby="descriptionIds"
-    @cancel="onDialogCancel" @click="onBackdropClick" @keydown="onSourceSearchShortcut"
+  <DialogWindow
+    ref="dialogWindow"
+    :open="open"
+    class="agent-editor dl-scope dl-scope--dark dl-modal-scrim"
+    tier="regular"
+    :body-id="bodyId"
+    :aria-labelledby="titleId"
+    :aria-describedby="descriptionIds"
+    @opened="onDialogOpened"
+    @request-close="requestClose"
+    @keydown="onSourceSearchShortcut"
   >
-    <div class="agent-editor__head">
-      <span v-if="agent" class="agent-editor__subject" data-testid="agent-editor-subject" :title="agent.name">
-        <span class="agent-editor__avatar-mark" aria-hidden="true"><img v-if="agent.avatarUrl" :src="agent.avatarUrl" alt=""><template v-else>{{ agentInitial(agent.name) }}</template></span>
-        <span class="agent-editor__agent-name">{{ agent.name }}</span>
-        <span v-if="connectionStatus" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="showConnectionTooltip($event, agent)" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
-          <span class="agent-editor__connection-dot" aria-hidden="true" />
-          <span class="agent-editor__connection-label" aria-hidden="true">{{ connectionStatus.label }}</span>
+    <template #header>
+      <div class="agent-editor__head">
+        <span v-if="agent" class="agent-editor__subject" data-testid="agent-editor-subject" :title="agent.name">
+          <span class="agent-editor__avatar-mark" aria-hidden="true"><img v-if="agent.avatarUrl" :src="agent.avatarUrl" alt=""><template v-else>{{ agentInitial(agent.name) }}</template></span>
+          <span class="agent-editor__agent-name">{{ agent.name }}</span>
+          <span v-if="connectionStatus" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="showConnectionTooltip($event, agent)" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
+            <span class="agent-editor__connection-dot" aria-hidden="true" />
+            <span class="agent-editor__connection-label" aria-hidden="true">{{ connectionStatus.label }}</span>
+          </span>
+          <span v-if="agent.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
         </span>
-        <span v-if="agent.builtIn" class="agent-editor__badge">{{ t.workspace.agentAdmin.builtIn }}</span>
-      </span>
-      <span v-if="agent" class="agent-editor__separator" aria-hidden="true">/</span>
-      <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
-    </div>
-    <div :id="connectionTooltipId" :ref="setConnectionTooltipRef" class="agent-editor__connection-tooltip" popover="manual" role="tooltip" :data-visible="isConnectionTooltipVisible" @transitionend="onConnectionTooltipTransitionEnd" @pointerenter="clearConnectionTooltipTimer" @pointerleave="scheduleConnectionTooltipClose">{{ connectionTooltipText }}</div>
-    <span v-if="agent" :id="subjectId" class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
-    <span v-if="hint !== ''" :id="hintId" class="agent-editor__visually-hidden">{{ hint }}</span>
-
-    <div class="agent-editor__tabbar">
-      <div class="agent-editor__tabs" role="tablist" :aria-label="t.workspace.agentAdmin.tabsLabel" @keydown="onTabKeydown">
-        <button
-          :id="`${dialogId}-tab-basic`" ref="basicTabRef" type="button" role="tab"
-          :aria-selected="activeTab === 'basic'" :aria-controls="`${dialogId}-panel-basic`"
-          :tabindex="activeTab === 'basic' ? 0 : -1" @click="activateTab('basic')"
-        >{{ t.workspace.agentAdmin.tabBasic }}</button>
-        <button
-          :id="`${dialogId}-tab-model`" ref="modelTabRef" type="button" role="tab"
-          :aria-selected="activeTab === 'model'" :aria-controls="`${dialogId}-panel-model`"
-          :tabindex="activeTab === 'model' ? 0 : -1" @click="activateTab('model')"
-        >{{ t.workspace.agentAdmin.tabModel }}</button>
-        <button
-          v-if="agent" :id="`${dialogId}-tab-permissions`" ref="permissionsTabRef" type="button" role="tab"
-          :aria-selected="activeTab === 'permissions'" :aria-controls="`${dialogId}-panel-permissions`"
-          :tabindex="activeTab === 'permissions' ? 0 : -1" @click="activateTab('permissions')"
-        >{{ t.workspace.agentAdmin.tabPermissions }}</button>
+        <span v-if="agent" class="agent-editor__separator" aria-hidden="true">/</span>
+        <h2 :id="titleId" class="agent-editor__title">{{ title }}</h2>
       </div>
-      <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
-      <button
-        v-if="activeTab === 'model' && !isModelDefault" type="button" class="agent-editor__reset"
-        :disabled="busy" @click="resetModels"
-      >{{ t.workspace.agentAdmin.modelReset }}</button>
-    </div>
+      <div :id="connectionTooltipId" :ref="setConnectionTooltipRef" class="agent-editor__connection-tooltip" popover="manual" role="tooltip" :data-visible="isConnectionTooltipVisible" @transitionend="onConnectionTooltipTransitionEnd" @pointerenter="clearConnectionTooltipTimer" @pointerleave="scheduleConnectionTooltipClose">{{ connectionTooltipText }}</div>
+      <span v-if="agent" :id="subjectId" class="agent-editor__visually-hidden">{{ subjectDescription }}</span>
+      <span v-if="hint !== ''" :id="hintId" class="agent-editor__visually-hidden">{{ hint }}</span>
+    </template>
+
+    <template #nav>
+      <div class="agent-editor__tabbar">
+        <div class="agent-editor__tabs" role="tablist" :aria-label="t.workspace.agentAdmin.tabsLabel" @keydown="onTabKeydown">
+          <button
+            :id="`${dialogId}-tab-basic`" ref="basicTabRef" type="button" role="tab"
+            :aria-selected="activeTab === 'basic'" :aria-controls="`${dialogId}-panel-basic`"
+            :tabindex="activeTab === 'basic' ? 0 : -1" @click="activateTab('basic')"
+          >{{ t.workspace.agentAdmin.tabBasic }}</button>
+          <button
+            :id="`${dialogId}-tab-model`" ref="modelTabRef" type="button" role="tab"
+            :aria-selected="activeTab === 'model'" :aria-controls="`${dialogId}-panel-model`"
+            :tabindex="activeTab === 'model' ? 0 : -1" @click="activateTab('model')"
+          >{{ t.workspace.agentAdmin.tabModel }}</button>
+          <button
+            v-if="agent" :id="`${dialogId}-tab-permissions`" ref="permissionsTabRef" type="button" role="tab"
+            :aria-selected="activeTab === 'permissions'" :aria-controls="`${dialogId}-panel-permissions`"
+            :tabindex="activeTab === 'permissions' ? 0 : -1" @click="activateTab('permissions')"
+          >{{ t.workspace.agentAdmin.tabPermissions }}</button>
+        </div>
+        <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
+        <button
+          v-if="activeTab === 'model' && !isModelDefault" type="button" class="agent-editor__reset"
+          :disabled="busy" @click="resetModels"
+        >{{ t.workspace.agentAdmin.modelReset }}</button>
+      </div>
+    </template>
 
     <div ref="bodyRef" class="agent-editor__body">
       <div
@@ -2169,8 +2166,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
-    <div class="agent-editor__actions">
+    <template #actions>
+      <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
+      <div class="agent-editor__actions">
       <!-- 探测与保存共用底部状态槽,不撑高滚动内容;成功探测短暂优先,失败保留。 -->
       <p :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
         <template v-if="hasSourceCheck">
@@ -2206,10 +2204,12 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-  </dialog>
+    </template>
+  </DialogWindow>
 </template>
 
 <style scoped>
+/* 窗体几何由共享外壳统一执行;本文件只保留 Agent 设置自己的编排。 */
 .agent-editor {
   /* 面板内部的结构常量:只在来源/模型分区用,避免散落字面量。 */
   --agent-hairline: var(--dl-border-width);
@@ -2218,24 +2218,17 @@ onBeforeUnmount(() => {
   --agent-matrix-tier: 80px;
   --agent-matrix-label: 140px;
   --agent-matrix-control: 132px;
-  width: min(var(--workspace-settings-dialog-width), calc(100% - 2 * var(--dl-space-6)));
-  block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-6)));
-  max-block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-6)));
-  margin: auto;
-  box-sizing: border-box;
-  padding: var(--workspace-settings-dialog-padding);
-  border: var(--dl-border-width) solid var(--dl-border-strong);
-  border-radius: var(--dl-radius-xl);
-  background-color: var(--dl-bg-elevated);
-  color: var(--dl-text-primary);
-  font: inherit;
-  text-align: left;
+  color-scheme: dark;
 }
-.agent-editor { color-scheme: dark; }
-.agent-editor[open] { display: flex; flex-direction: column; gap: var(--dl-space-4); }
 
-/* 对象上下文不是导航；名称可以收缩，徽标、分隔符和可访问标题保持完整。 */
-.agent-editor__head { display: flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; white-space: nowrap; }
+/* 对象上下文不是导航；名称可以收缩，徽标、分隔符和可访问标题保持完整。
+   头部自带内距与发丝线。 */
+.agent-editor__head {
+  display: flex; flex: 1; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; white-space: nowrap;
+  box-sizing: border-box; block-size: 100%;
+  padding: var(--dl-space-2) var(--workspace-settings-dialog-padding);
+  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
+}
 .agent-editor__title { flex: none; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-body); }
 .agent-editor__badge { flex: none; padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .agent-editor__subject { display: inline-flex; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; color: var(--dl-text-secondary); }
@@ -2251,8 +2244,11 @@ onBeforeUnmount(() => {
 .agent-editor__separator { flex: none; color: var(--dl-text-tertiary); }
 .agent-editor__agent-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-md); font-weight: 500; }
 
-.agent-editor__head, .agent-editor__tabbar, .agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
-.agent-editor__tabbar { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+/* 外壳导航槽承载 tabbar:横向占满整宽,按钮内缩到窗体内距。 */
+.agent-editor__tabbar { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-4); padding-inline: var(--workspace-settings-dialog-padding); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+/* 外壳动作区在 Agent 窗体内改为纵向:错误信息在上,状态与按钮在下。 */
+.agent-editor :deep(.dl-dialog__actions) { flex-direction: column; align-items: stretch; }
+.agent-editor__error, .agent-editor__actions { flex-shrink: 0; }
 .agent-editor__tabs { display: flex; gap: var(--dl-space-6); min-inline-size: 0; }
 .agent-editor__tabs button { min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1); border-block-end: var(--dl-border-width) solid transparent; color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
 .agent-editor__tabs button[aria-selected='true'] { color: var(--dl-text-primary); border-block-end-color: var(--dl-accent); }

@@ -8174,7 +8174,7 @@ test('对话窗体⑥:对话 tab 上的「拆出」钮可点、Enter 即把该�
 // 对话窗的最小尺寸与文件窗**不同**(输入坞需要高度),故不能共用文件窗的 200 那一档。
 const CHAT_PANEL_MIN_H = 320
 
-test('对话窗体⑦:悬浮对话窗与文件窗同一套缩放手柄 —— 四边可聚焦分隔条 / 四角 44×44 / SE 可见抓手,指针与键盘都能调尺寸', async ({ page }) => {
+test('对话窗体⑦:悬浮对话窗与文件窗同一套缩放手柄 —— 四边可聚焦分隔条 / 四角 44×44 / 悬停轮廓强调,指针与键盘都能调尺寸', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: VIEWPORT_HEIGHT })
   await login(page)
   await waitForStable(page)
@@ -8213,21 +8213,42 @@ test('对话窗体⑦:悬浮对话窗与文件窗同一套缩放手柄 —— �
   const edgeBox = await chatPanel.locator('.dl-window__resize--e').boundingBox()
   expect(edgeBox?.width ?? 0, '边条宽 ≈8').toBeLessThanOrEqual(9)
 
-  // ② 右下角(SE)有**可见的点阵抓手**,其余三角完全透明 —— 两个窗体长得一样。
-  await expect(chatPanel.locator('.dl-window__resize-grip'), '只有一枚可见抓手').toHaveCount(1)
-  await expect(chatPanel.locator('.dl-window__resize--se .dl-window__resize-grip'), '抓手挂在 SE 角上').toHaveCount(1)
-  await expect(chatPanel.locator('.dl-window__resize-grip'), '抓手纯装饰').toHaveAttribute('aria-hidden', 'true')
-  const gripPaint = await chatPanel.locator('.dl-window__resize-grip').evaluate((el) => {
-    const style = getComputedStyle(el)
-    return { image: style.backgroundImage, color: style.color, pointerEvents: style.pointerEvents }
-  })
-  console.log(`[chat resize] SE 抓手 ${JSON.stringify(gripPaint)}`)
-  expect(gripPaint.image, '与标题栏抓手同一套点阵画法').toContain('radial-gradient')
-  expect(gripPaint.pointerEvents, '抓手本身不吃指针(命中区是角手柄)').toBe('none')
-  // 其余三角没有抓手(完全透明)。
-  for (const corner of ['ne', 'nw', 'sw'] as const) {
-    await expect(chatPanel.locator(`.dl-window__resize--${corner} .dl-window__resize-grip`), `${corner} 角无抓手`).toHaveCount(0)
+  // ② 静止态没有任何可见抓手(与设置窗体同一套缩放暗示):四角只是透明的指针目标,
+  //    反馈改为表面自身的轮廓强调 —— 手柄不得再铺方形色块。
+  await expect(chatPanel.locator('.dl-window__resize-grip'), '静止态无可见抓手').toHaveCount(0)
+  expect(await chatPanel.locator('.dl-window__resize--corner').evaluateAll(
+    (corners) => corners.map((corner) => corner.childElementCount),
+  ), '四角都是透明的指针目标').toEqual([0, 0, 0, 0])
+
+  const windowSurface = chatPanel.locator('.dl-window__surface')
+  const borderBefore = await windowSurface.evaluate((el) => getComputedStyle(el).borderTopColor)
+  const hoverEdge = await chatPanel.locator('.dl-window__resize--e').boundingBox()
+  expect(hoverEdge, 'E 边有几何盒').not.toBeNull()
+  if (hoverEdge !== null) {
+    await page.mouse.move(hoverEdge.x + hoverEdge.width / 2, hoverEdge.y + hoverEdge.height / 2)
+    await expect.poll(
+      () => windowSurface.evaluate((el) => getComputedStyle(el).borderTopColor),
+      { message: '悬停边条时表面的描边转为强调色' },
+    ).not.toBe(borderBefore)
+    const handleWash = await chatPanel.locator('.dl-window__resize--e').evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(handleWash, '手柄自身不铺方形色块').toBe('rgba(0, 0, 0, 0)')
   }
+  await page.mouse.move(0, 0)
+
+  // 键盘聚焦分隔条:焦点环沿表面圆角显示,手柄自身不画方环。
+  // 先聚焦 E 边再按 Tab → 焦点落到 W 边,这一刻起是「键盘模态」,focus-visible 必定成立。
+  await chatPanel.locator('.dl-window__resize--e').focus()
+  await page.keyboard.press('Tab')
+  const focusedEdge = chatPanel.locator('.dl-window__resize--w')
+  await expect(focusedEdge, 'Tab 把焦点交给下一枚分隔条').toBeFocused()
+  await expect.poll(
+    () => windowSurface.evaluate((el) => getComputedStyle(el).borderTopColor),
+    { message: '聚焦边条时表面同样着色' },
+  ).not.toBe(borderBefore)
+  expect(
+    await focusedEdge.evaluate((el) => getComputedStyle(el).boxShadow),
+    '手柄自身不画方环',
+  ).toBe('none')
 
   // ③ 分隔条的 ARIA(APG Window Splitter):role / 轴向 / 边界 / aria-controls 指向**对话**内容区。
   const east = chatPanel.locator('.dl-window__resize--e')
@@ -8243,7 +8264,7 @@ test('对话窗体⑦:悬浮对话窗与文件窗同一套缩放手柄 —— �
   const nowBefore = Number(await east.getAttribute('aria-valuenow'))
   expect(Math.abs(nowBefore - (await rectOf()).width), 'aria-valuenow = 当前宽').toBeLessThanOrEqual(1)
 
-  // ④ 指针:拖 SE 角改尺寸(右下角那枚可见抓手所在的角)。
+  // ④ 指针:拖 SE 角改尺寸(四角都是纯指针便利入口,不再有可见抓手)。
   const start = await rectOf()
   const se = await chatPanel.locator('.dl-window__resize--se').boundingBox()
   expect(se, 'SE 角有几何盒').not.toBeNull()

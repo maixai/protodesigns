@@ -303,6 +303,8 @@ onBeforeUnmount(() => {
    内距下沉到头部与内容 pane,导航 pane 才能与窗体引导边、主体底边共边;
    共用宽度 / 内距 token 只读取不改写,账户与 Agent 窗体几何不受影响。 */
 .project-settings {
+  /* 头部与动作条共用的垂直内距节奏:同一档内距让窗体上下读作同一圈窗框。 */
+  --project-settings-chrome-pad: var(--dl-space-2);
   inline-size: min(var(--workspace-project-settings-dialog-width), calc(100% - 2 * var(--dl-space-4)));
   block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-4)));
   max-block-size: min(var(--workspace-settings-dialog-max-height), calc(100dvh - 2 * var(--dl-space-4)));
@@ -320,26 +322,39 @@ onBeforeUnmount(() => {
 .project-settings[open] { display: flex; flex-direction: column; }
 /* 头部横贯整窗:项目身份不随导航列宽变化,左右缘与主体两栏的内容缘对齐。
    底缘一条通栏发丝线是「固定头部 / 主体」的边界;它与导航竖线同一层级色,
-   导航竖线上端正好从这条线的下缘开始,形成干净的 T 形交接。 */
+   导航竖线上端正好从这条线的下缘开始,形成干净的 T 形交接。
+   垂直内距与动作条同档,头部收成单行主体栏而不是一块内容区。 */
 .project-settings__head {
   display: flex; flex-shrink: 0; align-items: center; gap: var(--dl-space-3); min-width: 0;
-  padding: var(--workspace-settings-dialog-padding) var(--workspace-settings-dialog-padding) var(--dl-space-4);
+  padding: var(--project-settings-chrome-pad) var(--workspace-settings-dialog-padding);
   border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
-.project-settings__mark { display: grid; flex: none; place-items: center; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-raised); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
-.project-settings__identity { flex: 1; min-width: 0; }
-.project-settings__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
-.project-settings__path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+/* 项目缩写降为内联徽记:只表达身份,不是控件 —— 仍 aria-hidden、不可聚焦、不可点击。
+   尺寸取图标档而非交互目标档,缩小它不影响任何可交互目标的命中区。 */
+.project-settings__mark {
+  display: grid; flex: none; place-items: center;
+  inline-size: var(--dl-icon-lg); block-size: var(--dl-icon-lg);
+  overflow: hidden;
+  border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm);
+  background: var(--dl-bg-raised); color: var(--dl-text-secondary);
+  font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-tight);
+}
+/* 宽屏:标题占用剩余宽度并保持主导,路径作为同一行尾部的等宽元信息,过长时截断。 */
+.project-settings__identity { display: flex; flex: 1; align-items: center; gap: var(--dl-space-3); min-width: 0; }
+.project-settings__title { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
+.project-settings__path { flex: 0 0 auto; min-inline-size: 0; max-inline-size: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
 /* 主体横贯整窗:左侧导航 pane 通到窗体底边、与引导边共边;
    右侧内容 pane 直接是窗体表面。两 pane 之间只保留一条通高发丝线,
    不叠加色调差、圆角、描边盒或阴影。导航 pane 不设 overflow ——
-   行的外扩焦点环靠内距留出余量即可,不做任何裁切。 */
+   行的外扩焦点环靠内距留出余量即可,不做任何裁切。
+   内容与动作条之间不留 gap:动作条自己的上内距就是正文与按钮之间的节奏,
+   发丝线因此可以正好贴在滚动视口底缘。 */
 .project-settings__main { display: flex; flex: 1; min-block-size: 0; }
 .project-settings__right {
-  display: flex; flex: 1; flex-direction: column; gap: var(--dl-space-4);
+  display: flex; flex: 1; flex-direction: column;
   min-inline-size: 0; min-block-size: 0;
-  padding: 0 var(--workspace-settings-dialog-padding) var(--workspace-settings-dialog-padding);
+  padding: 0 var(--workspace-settings-dialog-padding);
 }
 .project-settings__tablist {
   display: flex; flex: none; flex-direction: column; align-self: stretch; gap: var(--dl-space-1);
@@ -376,6 +391,10 @@ onBeforeUnmount(() => {
    分隔机制与宽屏一致,只是发丝线换到 band 的底缘 —— 头部与 band 之间不再加线,
    band 底缘线是 chrome 与内容之间唯一的分界。触屏行的触达尺寸回到 44px。 */
 .project-settings.is-stacked .project-settings__head { border-block-end: none; }
+/* 窄屏允许路径回到第二行;mark 尺寸与头部内距不随行数变化。 */
+.project-settings.is-stacked .project-settings__identity { display: block; }
+.project-settings.is-stacked .project-settings__title { display: block; }
+.project-settings.is-stacked .project-settings__path { display: block; max-inline-size: none; }
 .project-settings.is-stacked .project-settings__main { flex-direction: column; }
 .project-settings.is-stacked .project-settings__right { padding-block-start: var(--dl-space-3); }
 .project-settings.is-stacked .project-settings__tablist {
@@ -392,27 +411,28 @@ onBeforeUnmount(() => {
 }
 .project-settings.is-stacked .project-settings__tab-label { overflow-wrap: normal; text-align: center; }
 
-/* 动作区归属内容 pane:与正文同一条左/右缘,不浮在空白里,也不另起容器。 */
-.project-settings__actions { position: relative; flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-3); padding-inline: var(--dl-space-1); }
-/* 动作区上方的发丝线只属于内容 pane:上移量必须与 .project-settings__right 的 gap 一致,
-   这样线正好落在滚动视口的底缘(不随正文滚动);左右各外扩一个 pane 内距,
+/* 动作区归属内容 pane:与正文同一条左/右缘,不浮在空白里,也不另起容器。
+   垂直内距与头部同档,整条动作区 = 一个 44px 控件 + 上下各一档内距。
+   状态与按钮优先同行;放不下时按 flex 换行,窄屏最多两行。 */
+.project-settings__actions { position: relative; flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); padding: var(--project-settings-chrome-pad) var(--dl-space-1); }
+/* 动作区上方的发丝线只属于内容 pane:与正文视口之间没有 gap,
+   线正好落在滚动视口的底缘(不随正文滚动);左右各外扩一个 pane 内距,
    左端与导航竖线像素相接、右端到窗体右内缘,宽屏不越入导航,窄屏则自然横贯整窗内宽。 */
 .project-settings__actions-rule {
   position: absolute;
-  inset-block-start: calc(-1 * var(--dl-space-4));
+  inset-block-start: 0;
   inset-inline: calc(-1 * var(--workspace-settings-dialog-padding));
   block-size: var(--dl-border-width);
   background: var(--dl-border-base);
   pointer-events: none;
 }
-.project-settings.is-stacked .project-settings__actions .project-config__save-state { flex-basis: 100%; }
-.project-config__save-state { flex: 1 1 0; min-width: 0; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
+/* 状态用 auto 基准参与换行:与按钮放得下就同行,放不下时按钮整体换到第二行。 */
+.project-config__save-state { flex: 1 1 auto; min-width: 0; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
 .project-config__save-state[data-state='dirty'], .project-config__save-state[data-state='saving'] { color: var(--dl-text-secondary); }
 .project-config__save-state[data-state='saved'] { color: var(--dl-success); }
 .project-config__save-state[data-state='error'], .project-config__save-state[data-state='invalid'] { color: var(--dl-error); }
 .project-config__buttons { display: flex; flex-wrap: wrap; gap: var(--dl-space-2); }
 .project-config__buttons .dl-btn { min-block-size: var(--dl-target-size); }
-.project-settings.is-stacked .project-config__buttons { width: 100%; justify-content: flex-end; }
 
 /* 面板内容:原先由三个独立窗体的外壳统一提供,现集中于统一窗体。 */
 .project-settings :deep(.project-config__scope) { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }

@@ -34,3 +34,14 @@ function tabStory(index: number): Story {
 export const 模型页: Story = tabStory(0)
 export const 权限页: Story = tabStory(1)
 export const MCP页: Story = tabStory(2)
+
+// 长标题与长路径:宽屏路径与标题同行并各自截断,头部不换行撑高。
+export const 长标题与长路径: Story = {
+  args: {
+    project: {
+      ...project,
+      name: 'quarterly-forecast-and-budget-review-for-northwind',
+      path: '~/work/clients/northwind/quarterly-forecast-and-budget-review',
+    },
+  },
+}

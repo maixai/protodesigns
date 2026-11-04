@@ -29,7 +29,7 @@ test('@area:project-menu ⋯ 菜单只有两个一级项,「设置」直接打�
   const tablist = dialog.locator('.project-settings__tablist')
   await expect(tablist).toHaveCount(1)
   await expect(tablist.getByRole('tab')).toHaveText(['模型', '权限', 'MCP'])
-  await expect(tablist).toHaveAttribute('aria-orientation', 'vertical')
+  await expect(tablist).toHaveAttribute('aria-orientation', 'horizontal')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
@@ -53,8 +53,8 @@ test('@area:project-menu 键盘从菜单进入设置窗体,Tab 间用方向键�
   await expect(modelTab).toBeFocused()
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
 
-  // 纵向 Tab:Down 切到下一个,焦点停留在 Tab 上,不自动跳进面板。
-  await page.keyboard.press('ArrowDown')
+  // 横向标签栏:Right 切到下一个,焦点停留在 Tab 上,不自动跳进面板。
+  await page.keyboard.press('ArrowRight')
   await expect(permissionTab).toBeFocused()
   await expect(permissionTab).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Home')

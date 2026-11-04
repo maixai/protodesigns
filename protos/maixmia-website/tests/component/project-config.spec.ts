@@ -74,7 +74,8 @@ describe('project-settings-dialog', () => {
     expect(wrapper.get('.project-settings__title').text()).toBe('项目设置 · weekly-report')
 
     const tablist = wrapper.get('.project-settings__tablist')
-    expect(tablist.attributes('aria-orientation')).toBe('vertical')
+    expect(tablist.attributes('aria-orientation')).toBe('horizontal')
+    expect(wrapper.get('.dl-dialog__main').classes()).toContain('dl-dialog__main--stacked')
     expect(tabs(wrapper).map((tab) => tab.find('.project-settings__tab-label').text())).toEqual(['模型', '权限', 'MCP'])
     expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')
     expect(tabs(wrapper).map((tab) => tab.attributes('tabindex'))).toEqual(['0', '-1', '-1'])
@@ -221,24 +222,36 @@ describe('project-settings-dialog', () => {
     wrapper.unmount()
   })
 
-  it('窄屏改为横向 Tab 条,方向键使用左右并在 Tab 间移动焦点', async () => {
-    window.innerWidth = 375
+  it('标签栏恒为横向:Left / Right 循环切换,Home / End 直达首末,上下键不生效', async () => {
     const wrapper = mountDialog()
     await flushPromises()
+    await flushPromises()
 
-    expect(wrapper.get('.project-settings').classes()).toContain('is-stacked')
     const tablist = wrapper.get('.project-settings__tablist')
     expect(tablist.attributes('aria-orientation')).toBe('horizontal')
 
-    await wrapper.get('.project-settings__title').trigger('keydown', { key: 'ArrowRight' })
+    // 首项向左回绕到最后一项。
+    await tablist.trigger('keydown', { key: 'ArrowLeft' })
+    await flushPromises()
+    expect(tabs(wrapper)[2]?.attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs(wrapper)[2]?.element)
+
     await tablist.trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(tabs(wrapper)[1]?.attributes('aria-selected')).toBe('true')
-    expect(document.activeElement).toBe(tabs(wrapper)[1]?.element)
+    expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')
 
+    // 纵向方向键不再有语义。
     await tablist.trigger('keydown', { key: 'ArrowDown' })
     await flushPromises()
-    expect(tabs(wrapper)[1]?.attributes('aria-selected')).toBe('true')
+    expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')
+
+    await tablist.trigger('keydown', { key: 'End' })
+    await flushPromises()
+    expect(tabs(wrapper)[2]?.attributes('aria-selected')).toBe('true')
+    await tablist.trigger('keydown', { key: 'Home' })
+    await flushPromises()
+    expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs(wrapper)[0]?.element)
 
     wrapper.unmount()
   })

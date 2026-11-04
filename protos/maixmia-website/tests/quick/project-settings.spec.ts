@@ -206,7 +206,7 @@ test('@area:project-settings 项目 MCP 启停保存后仍恢复需认证事实�
   expect(issues).toEqual([])
 })
 
-test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无横向溢出,窄屏 Tab 重排为横向', async ({ page }) => {
+test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无横向溢出,标签栏恒为横向', async ({ page }) => {
   const issues = collectRuntimeIssues(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await login(page)
@@ -221,7 +221,22 @@ test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无�
     for (const width of [375, 768, 1280, 1600]) {
       await page.setViewportSize({ width, height: 900 })
       await expect(tablist).toBeVisible()
-      await expect(tablist).toHaveAttribute('aria-orientation', width <= 839 ? 'horizontal' : 'vertical')
+      await expect(tablist).toHaveAttribute('aria-orientation', 'horizontal')
+      // 标签栏横贯窗体、紧接 Header 下缘,不随宽度切成左侧栏。
+      const geometry = await dialog.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        const list = element.querySelector('.project-settings__tablist')?.getBoundingClientRect()
+        const head = element.querySelector('.project-settings__head')?.getBoundingClientRect()
+        return {
+          left: bounds.left, right: bounds.right,
+          listLeft: list?.left ?? 0, listRight: list?.right ?? 0, listTop: list?.top ?? 0,
+          headBottom: head?.bottom ?? null,
+        }
+      })
+      expect(geometry.headBottom).not.toBeNull()
+      expect(Math.abs(geometry.listTop - (geometry.headBottom ?? 0))).toBeLessThanOrEqual(1)
+      expect(Math.abs(geometry.listLeft - (geometry.left + 1))).toBeLessThanOrEqual(1)
+      expect(Math.abs(geometry.listRight - (geometry.right - 1))).toBeLessThanOrEqual(1)
       // 路径在四档宽度都留在头部、可识别为路径(窄屏可折到第二行)。
       await expect(dialog.locator('.project-settings__head .project-settings__path')).toBeVisible()
       await expect(dialog.locator('.project-settings__head .project-settings__path')).toContainText('~/work/weekly-report')
@@ -432,7 +447,7 @@ test('@area:project-settings 短视口下键盘移动焦点会把选项滚入菜
   expect(issues).toEqual([])
 })
 
-test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏头线与动作区线,窄屏省略头线', async ({ page }) => {
+test('@area:project-settings 分隔线只落在区域边界:Header 不画线,标签栏底边线分隔 chrome 与正文,动作区线横贯全宽', async ({ page }) => {
   const issues = collectRuntimeIssues(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await login(page)
@@ -449,6 +464,7 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
     if (head === null || mark === null || tablist === null || content === null || rule === null) return null
     const headStyle = getComputedStyle(head)
     const tablistStyle = getComputedStyle(tablist)
+    const ruleStyle = getComputedStyle(rule)
     const dialogBounds = element.getBoundingClientRect()
     const headBounds = head.getBoundingClientRect()
     const markBounds = mark.getBoundingClientRect()
@@ -459,11 +475,13 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
       dialogLeft: dialogBounds.left, dialogRight: dialogBounds.right, dialogBottom: dialogBounds.bottom,
       headLeft: headBounds.left, headRight: headBounds.right, headBottom: headBounds.bottom, headHeight: headBounds.height,
       markWidth: markBounds.width, markHeight: markBounds.height,
-      headBorderWidth: headStyle.borderBlockEndWidth, headBorderStyle: headStyle.borderBlockEndStyle,
-      headBorderColor: headStyle.borderBlockEndColor, navBorderColor: tablistStyle.borderInlineEndColor,
-      navTop: tablistBounds.top, navRight: tablistBounds.right,
-      navInlineBorder: tablistStyle.borderInlineEndWidth, navBlockBorder: tablistStyle.borderBlockEndWidth,
-      contentBottom: contentBounds.bottom,
+      headBorderWidth: headStyle.borderBlockEndWidth,
+      listLeft: tablistBounds.left, listRight: tablistBounds.right, listTop: tablistBounds.top,
+      listBottom: tablistBounds.bottom, listHeight: tablistBounds.height,
+      listInlineBorder: tablistStyle.borderInlineEndWidth,
+      listBlockBorder: tablistStyle.borderBlockEndWidth, listBorderStyle: tablistStyle.borderBlockEndStyle,
+      listBorderColor: tablistStyle.borderBlockEndColor, ruleColor: ruleStyle.backgroundColor,
+      contentTop: contentBounds.top, contentBottom: contentBounds.bottom,
       ruleLeft: ruleBounds.left, ruleRight: ruleBounds.right, ruleTop: ruleBounds.top, ruleHeight: ruleBounds.height,
       isRuleInScrollContainer: content.contains(rule),
     }
@@ -472,17 +490,22 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
   const wide = await readGeometry()
   expect(wide).not.toBeNull()
   if (wide !== null) {
-    // 头线:贯通整窗内宽,与导航竖线同一发丝权重与层级色。
-    expect(wide.headBorderStyle).toBe('solid')
-    expect(wide.headBorderWidth).toBe('1px')
-    expect(wide.headBorderColor).toBe(wide.navBorderColor)
-    expect(wide.navInlineBorder).toBe('1px')
-    expect(Math.abs(wide.headLeft - (wide.dialogLeft + 1))).toBeLessThanOrEqual(1)
-    expect(Math.abs(wide.headRight - (wide.dialogRight - 1))).toBeLessThanOrEqual(1)
-    // T 形交接:竖线上端正好从横线下缘开始,不进头部、不留缝。
-    expect(Math.abs(wide.navTop - wide.headBottom)).toBeLessThanOrEqual(1)
-    // 动作区线:左端接竖线、右端到窗体右内缘,上缘落在滚动视口底缘且不在滚动容器内。
-    expect(Math.abs(wide.ruleLeft - wide.navRight)).toBeLessThanOrEqual(1)
+    // 头部不画线;标签栏底边线是 chrome 与正文之间唯一的分界。
+    expect(wide.headBorderWidth).toBe('0px')
+    expect(wide.listBlockBorder).toBe('1px')
+    expect(wide.listBorderStyle).toBe('solid')
+    expect(wide.listInlineBorder).toBe('0px')
+    expect(wide.listBorderColor).toBe(wide.ruleColor)
+    // 标签栏通栏:左右缘贴窗体左右内缘,上缘紧接头部下缘,正文从它的下缘开始。
+    expect(Math.abs(wide.listLeft - (wide.dialogLeft + 1))).toBeLessThanOrEqual(1)
+    expect(Math.abs(wide.listRight - (wide.dialogRight - 1))).toBeLessThanOrEqual(1)
+    expect(Math.abs(wide.listTop - wide.headBottom)).toBeLessThanOrEqual(1)
+    expect(Math.abs(wide.contentTop - wide.listBottom)).toBeLessThanOrEqual(1)
+    // 标签栏高度 = 44px 触达 + 1px 底边线,不再有纵向栏的通高留白。
+    expect(wide.listHeight).toBeGreaterThanOrEqual(44)
+    expect(wide.listHeight).toBeLessThanOrEqual(46)
+    // 动作区线横贯内容 pane 全宽,上缘落在滚动视口底缘且不在滚动容器内。
+    expect(Math.abs(wide.ruleLeft - (wide.dialogLeft + 1))).toBeLessThanOrEqual(1)
     expect(Math.abs(wide.ruleRight - (wide.dialogRight - 1))).toBeLessThanOrEqual(1)
     expect(Math.abs(wide.ruleTop - wide.contentBottom)).toBeLessThanOrEqual(1)
     expect(wide.ruleHeight).toBeLessThanOrEqual(1)
@@ -495,7 +518,7 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
     expect(wide.markHeight).toBeLessThanOrEqual(28)
   }
 
-  // 窄屏:头部与 band 之间不加线,band 底缘线是唯一分界;动作区线横贯整窗内宽。
+  // 窄屏与宽屏同一套结构:标签栏仍横贯整宽,底边线仍是唯一分界;动作区线同样横贯全宽。
   await page.setViewportSize({ width: 375, height: 900 })
   await expect(dialog.locator('.project-settings__tablist')).toHaveAttribute('aria-orientation', 'horizontal')
   // 窗框高度用 dvh,重算落在 resize 后的下一帧;等布局落定再量分隔线几何。
@@ -504,8 +527,11 @@ test('@area:project-settings 发丝分隔线只落在区域边界:宽屏通栏�
   expect(narrow).not.toBeNull()
   if (narrow !== null) {
     expect(narrow.headBorderWidth).toBe('0px')
-    expect(narrow.navInlineBorder).toBe('0px')
-    expect(narrow.navBlockBorder).toBe('1px')
+    expect(narrow.listBlockBorder).toBe('1px')
+    expect(narrow.listInlineBorder).toBe('0px')
+    expect(Math.abs(narrow.listLeft - (narrow.dialogLeft + 1))).toBeLessThanOrEqual(1)
+    expect(Math.abs(narrow.listRight - (narrow.dialogRight - 1))).toBeLessThanOrEqual(1)
+    expect(Math.abs(narrow.contentTop - narrow.listBottom)).toBeLessThanOrEqual(1)
     expect(Math.abs(narrow.ruleLeft - (narrow.dialogLeft + 1))).toBeLessThanOrEqual(1)
     expect(Math.abs(narrow.ruleRight - (narrow.dialogRight - 1))).toBeLessThanOrEqual(1)
     expect(narrow.isRuleInScrollContainer).toBe(false)

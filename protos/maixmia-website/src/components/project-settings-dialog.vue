@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 统一项目设置窗体:项目身份固定在头部,左侧垂直 Tab 在模型 / 权限 / MCP 之间切换,
+// 统一项目设置窗体:项目身份固定在头部,Header 下方的横向标签栏在模型 / 权限 / MCP 之间切换,
 // 底部动作区只作用于当前域。三个域在打开时并行预取并保持挂载,切换不重置草稿。
 // 关闭路径:任一域保存中 → 不可关闭;任一域有草稿 → 先确认并点名具体域。
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
 import { useI18n } from '../i18n'
@@ -17,10 +17,9 @@ const props = defineProps<{ open: boolean; project: Project; agent: AgentSummary
 const emit = defineEmits<{ close: []; announce: [message: string] }>()
 const { t } = useI18n()
 
-// 窗体宽度由视口推导:内宽 = min(960, 视口 - 32) - 48,故视口 ≤ 839px 时内宽 < 760px,
-// 左栏 + 正文会挤压正文,改为内容区上方的横向 Tab 条。
-// 视觉排版与键盘方向共用 isStacked 一个布尔,不存在「看起来横向、按键却按纵向」的错位。
-const STACK_BREAKPOINT = 839
+// 窗体宽度由视口推导:内宽 = min(960, 视口 - 32) - 48。一级导航始终是 Header 下方的
+// 横向标签栏,不再按宽度切换纵向 / 横向 —— 视觉排版与键盘方向因此恒定一致。
+// 视口 ≤ 839px 时只有头部身份区回到两行(标题 + 路径),标签栏本身不改变方向。
 const TAB_ORDER: readonly ProjectSettingsTab[] = ['model', 'permissions', 'mcp']
 
 type TabBadgeTone = 'saving' | 'error' | 'dirty'
@@ -45,7 +44,6 @@ const tablistRef = ref<HTMLElement | null>(null)
 const saveStateRef = ref<HTMLElement | null>(null)
 const confirmReturnFocusRef = ref<HTMLElement | null>(null)
 const activeTab = ref<ProjectSettingsTab>('model')
-const isStacked = ref(false)
 const confirmOpen = ref(false)
 const pendingDomains = ref<string[]>([])
 const states = ref<Record<ProjectSettingsTab, ProjectPanelState>>({
@@ -112,13 +110,11 @@ function activateTab(tab: ProjectSettingsTab, moveFocus: boolean): void {
   void nextTick(() => tablistRef.value?.querySelector<HTMLElement>(`#${tabElementId(tab)}`)?.focus())
 }
 
-// 方向键只认当前排版方向:纵向用 Up/Down,横向用 Left/Right;Home / End 两种都可用。
+// 标签栏恒为横向:Left / Right 循环切换,Home / End 直达首末;上下键不再有语义。
 function onTabKeydown(event: KeyboardEvent): void {
   const current = TAB_ORDER.indexOf(activeTab.value)
-  const forward = isStacked.value ? 'ArrowRight' : 'ArrowDown'
-  const backward = isStacked.value ? 'ArrowLeft' : 'ArrowUp'
-  const next = event.key === forward ? (current + 1) % TAB_ORDER.length
-    : event.key === backward ? (current - 1 + TAB_ORDER.length) % TAB_ORDER.length
+  const next = event.key === 'ArrowRight' ? (current + 1) % TAB_ORDER.length
+    : event.key === 'ArrowLeft' ? (current - 1 + TAB_ORDER.length) % TAB_ORDER.length
       : event.key === 'Home' ? 0
         : event.key === 'End' ? TAB_ORDER.length - 1 : -1
   if (next < 0) return
@@ -185,21 +181,12 @@ function focusActiveTab(): void {
   tablistRef.value?.querySelector<HTMLElement>(`#${tabElementId(activeTab.value)}`)?.focus()
 }
 
-function syncStacked(): void {
-  isStacked.value = window.innerWidth <= STACK_BREAKPOINT
-}
-
 // 每次打开都回到模型页,不记忆上次停留的 Tab;窗体开合与还焦由共享外壳负责。
 watch(() => props.open, (isOpen) => {
   if (isOpen) activeTab.value = 'model'
 }, { immediate: true })
 
-onMounted(() => {
-  syncStacked()
-  window.addEventListener('resize', syncStacked)
-})
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', syncStacked)
   if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
 })
 </script>
@@ -209,9 +196,7 @@ onBeforeUnmount(() => {
     ref="dialogWindow"
     :open="open"
     class="project-settings"
-    :class="{ 'is-stacked': isStacked }"
     tier="wide"
-    :layout="isStacked ? 'stacked' : 'sidebar'"
     :body-id="contentId"
     :aria-labelledby="titleId"
     @request-close="requestClose"
@@ -228,10 +213,10 @@ onBeforeUnmount(() => {
     </template>
 
     <template #nav>
+      <!-- Header 下方的横向标签栏:与 Agent 设置同款,一行排列,底边线即 chrome 与正文的分界。 -->
       <div
         ref="tablistRef" class="project-settings__tablist" role="tablist"
-        :aria-label="t.workspace.projectSettings.settingsTabsLabel"
-        :aria-orientation="isStacked ? 'horizontal' : 'vertical'"
+        :aria-label="t.workspace.projectSettings.settingsTabsLabel" aria-orientation="horizontal"
         @keydown="onTabKeydown"
       >
         <button
@@ -260,7 +245,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template #actions>
-      <!-- 动作区上方的发丝线;装饰元素不参与布局,由 CSS 锚在外壳动作区的上缘。 -->
+      <!-- 动作区上方的发丝线;装饰元素不参与布局,由 CSS 锚在外壳动作区的上缘并横贯内容 pane 全宽。 -->
       <span class="project-settings__actions-rule" aria-hidden="true"></span>
       <div class="project-settings__actions">
         <p ref="saveStateRef" class="project-config__save-state" :data-state="activeState.saveState" tabindex="-1">{{ activeStateLabel }}</p>
@@ -294,15 +279,14 @@ onBeforeUnmount(() => {
   --project-settings-chrome-pad: var(--dl-space-2);
   color-scheme: dark;
 }
-/* 头部横贯整窗:项目身份不随导航列宽变化,左右缘与主体两栏的内容缘对齐。
-   底缘一条通栏发丝线是「固定头部 / 主体」的边界;它与导航竖线同一层级色,
-   导航竖线上端正好从这条线的下缘开始,形成干净的 T 形交接。
+/* 头部横贯整窗:项目身份不随任何栏宽变化,左右缘与下方标签栏的内容缘对齐。
+   头部与标签栏同属 chrome,这里不再画线 —— 分界由标签栏底边线一条承担,
+   避免两条发丝线夹着一条 44px 标签带形成拥挤的双线。
    垂直内距与动作条同档,头部收成单行主体栏而不是一块内容区。 */
 .project-settings__head {
   display: flex; flex: 1; align-items: center; gap: var(--dl-space-3); min-width: 0;
   box-sizing: border-box; block-size: 100%;
   padding: var(--project-settings-chrome-pad) var(--workspace-settings-dialog-padding);
-  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
 /* 项目缩写降为内联徽记:只表达身份,不是控件 —— 仍 aria-hidden、不可聚焦、不可点击。
    尺寸取图标档而非交互目标档,缩小它不影响任何可交互目标的命中区。 */
@@ -319,34 +303,29 @@ onBeforeUnmount(() => {
 .project-settings__title { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-snug); }
 .project-settings__path { flex: 0 0 auto; min-inline-size: 0; max-inline-size: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 
-/* 主体由外壳排布:宽屏左导航 + 右列,窄屏导航在上、正文在下;两 pane 之间只保留
-   一条通高发丝线,不叠加色调差、圆角、描边盒或阴影。导航 pane 不设 overflow ——
-   行的外扩焦点环靠内距留出余量即可,不做任何裁切。 */
+/* 一级导航是 Header 下方的横向标签栏(与 Agent 设置同款):一行排列、一档 44px 触达,
+   选中项用强调色下划线表达,未选中只在悬停时铺一档背景。标签栏底边线同时是
+   chrome 与正文的分界,因此不再额外画头部横线,也不保留任何左侧栏结构。 */
 .project-settings__tablist {
-  display: flex; flex: none; flex-direction: column; align-self: stretch; gap: var(--dl-space-1);
-  inline-size: calc(var(--dl-space-12) * 4 + var(--dl-space-4)); box-sizing: border-box;
-  /* 行内距与头部同一左缘对齐;上内距让首行与头部横线之间留出焦点环余量,
-     下内距让末行的焦点环不贴窗体底边。 */
-  padding: var(--dl-space-2) calc(var(--workspace-settings-dialog-padding) - var(--dl-space-3)) var(--dl-space-3);
-  border-inline-end: var(--dl-border-width) solid var(--dl-border-base);
+  display: flex; flex: none; align-items: stretch; gap: var(--dl-space-6);
+  box-sizing: border-box;
+  padding-inline: var(--workspace-settings-dialog-padding);
+  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
 .project-settings__tablist button {
-  position: relative; display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2);
-  min-inline-size: 0; min-block-size: var(--dl-control-height); padding: var(--dl-space-1) var(--dl-space-3);
-  border-radius: var(--dl-radius-md); color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm);
-  text-align: left; transition: background-color var(--dl-duration-fast) var(--dl-ease-standard), color var(--dl-duration-fast) var(--dl-ease-standard);
+  display: inline-flex; align-items: center; gap: var(--dl-space-2);
+  min-inline-size: 0; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-1);
+  border-block-end: var(--dl-border-width) solid transparent;
+  color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body);
+  transition: background-color var(--dl-duration-fast) var(--dl-ease-standard), color var(--dl-duration-fast) var(--dl-ease-standard), border-color var(--dl-duration-fast) var(--dl-ease-standard);
 }
-.project-settings__tablist button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); color: var(--dl-text-primary); }
-.project-settings__tablist button[aria-selected='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); font-weight: 500; }
-/* 选中指示:贴着导航轴的强调色细条,只在选中行出现(全局同一时刻一条)。
-   宽屏在左缘、纵向居中留白;窄屏在底缘,由下面的 is-stacked 规则改写。 */
-.project-settings__tablist button[aria-selected='true']::before {
-  content: ''; position: absolute; inset-inline-start: var(--dl-space-1); inset-block: var(--dl-space-2);
-  inline-size: calc(var(--dl-border-width) * 2); border-radius: var(--dl-radius-sm); background: var(--dl-accent);
-}
+.project-settings__tablist button:hover:not([aria-selected='true']) { background: var(--dl-bg-hover); }
+/* 选中态只改文字层级与下划线颜色:整块高亮会把标签栏读成按钮组,也会盖过未保存徽标。 */
+.project-settings__tablist button[aria-selected='true'] { color: var(--dl-text-primary); border-block-end-color: var(--dl-accent); }
 .project-settings__tablist button:focus-visible { box-shadow: var(--dl-focus-ring); }
-.project-settings__tab-label { min-inline-size: 0; overflow-wrap: anywhere; }
-.project-settings__tab-badge { flex: none; font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); font-weight: 400; }
+/* 标签与徽标都不折行、不截断;标签栏放不下时整枚按钮换到下一行。 */
+.project-settings__tab-label { min-inline-size: 0; white-space: nowrap; }
+.project-settings__tab-badge { flex: none; white-space: nowrap; font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); font-weight: 400; }
 .project-settings__tab-badge[data-tone='dirty'] { color: var(--dl-warning); }
 .project-settings__tab-badge[data-tone='error'] { color: var(--dl-error); }
 .project-settings__tab-badge[data-tone='saving'] { color: var(--dl-text-secondary); }
@@ -355,38 +334,27 @@ onBeforeUnmount(() => {
    常规滚动条(Chromium / Windows)不会因此让内容横向跳动;覆盖式滚动条本就不占位。 */
 .project-settings__content { flex: 1; min-inline-size: 0; min-block-size: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
 .project-settings__panel { min-inline-size: 0; }
-/* 外壳内容区默认带一档纵向内距;项目窗体让正文直接贴到头部 / 动作区边界,
+/* 外壳内容区默认带一档纵向内距;项目窗体让正文直接贴到标签栏 / 动作区边界,
    纵向余量由正文自己的内距与面板负责(动作区发丝线因此正好落在滚动视口底缘)。 */
 .project-settings :deep(.dl-dialog__content) { padding-block: 0; }
 
-/* 窄屏:导航仍是 pane,转为通栏横向 band,与窗体左右边共边、无独立圆角卡片;
-   分隔机制与宽屏一致,只是发丝线换到 band 的底缘 —— 头部与 band 之间不再加线,
-   band 底缘线是 chrome 与内容之间唯一的分界。触屏行的触达尺寸回到 44px。 */
-.project-settings.is-stacked .project-settings__head { border-block-end: none; }
-/* 窄屏允许路径回到第二行;mark 尺寸与头部内距不随行数变化。 */
-.project-settings.is-stacked .project-settings__identity { display: block; }
-.project-settings.is-stacked .project-settings__title { display: block; }
-.project-settings.is-stacked .project-settings__path { display: block; max-inline-size: none; }
-.project-settings.is-stacked :deep(.dl-dialog__content) { padding-block-start: var(--dl-space-3); }
-.project-settings.is-stacked .project-settings__tablist {
-  flex-direction: row; align-items: stretch; inline-size: auto;
-  padding: var(--dl-space-2);
-  border-inline-end: none;
-  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
+/* 窄窗:标题与路径回到两行,mark 尺寸与头部内距不随行数变化;
+   标签栏仍是一行横排,仅在 560px 以下允许整枚按钮换行(标签本身不折行、不截断)。 */
+@media (max-width: 839px) {
+  .project-settings__identity { display: block; }
+  .project-settings__title { display: block; }
+  .project-settings__path { display: block; max-inline-size: none; }
 }
-.project-settings.is-stacked .project-settings__tablist button { flex: 1 1 0; flex-direction: column; justify-content: center; gap: var(--dl-space-1); min-block-size: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-1); }
-/* 横向导航的指示改到选中行的底缘,随选中项左右移动。 */
-.project-settings.is-stacked .project-settings__tablist button[aria-selected='true']::before {
-  inset-inline: var(--dl-space-2); inset-block: auto 0;
-  inline-size: auto; block-size: calc(var(--dl-border-width) * 2);
+@media (max-width: 560px) {
+  .project-settings__tablist { flex-wrap: wrap; gap: var(--dl-space-1); }
 }
-.project-settings.is-stacked .project-settings__tab-label { overflow-wrap: normal; text-align: center; }
 
 /* 动作区由外壳固定在正文之外:这里只排状态与按钮。
    状态与按钮优先同行;放不下时按 flex 换行,窄屏最多两行。 */
 .project-settings__actions { flex: 1; min-inline-size: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); }
-/* 动作区上方的发丝线锚在外壳动作区的上缘(不在滚动容器内),
-   左端与导航竖线相接、右端到窗体右内缘;与外壳自带的 border-block-start 重叠成一条线。 */
+/* 动作区上方的发丝线锚在外壳动作区的上缘(不在滚动容器内);
+   标签栏移出左栏后,内容 pane 就是整窗宽度,这条线因此横贯窗体全宽。
+   它与外壳自带的 border-block-start 重叠成一条线。 */
 .project-settings__actions-rule {
   position: absolute;
   inset-block-start: calc(-1 * var(--dl-border-width));

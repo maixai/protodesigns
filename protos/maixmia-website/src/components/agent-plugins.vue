@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { NInput, NSkeleton, NSwitch } from 'naive-ui'
 import type { InstalledPlugin } from '../contracts/generated/installed-plugin'
-import type { Plugin } from '../contracts/generated/plugin'
+import type { Plugin, PluginConfigSchema } from '../contracts/generated/plugin'
 import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
 import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
 import type { Result } from '../api/result'
@@ -13,29 +13,44 @@ import {
   uninstallPlugin, updateInstalledPlugin, updateMarketplace,
 } from '../api/workspace'
 import { useI18n } from '../i18n'
+import { pageSizeForHeight } from './agent-plugin-pagination'
+import { pluginConfigValues, validatePluginConfig } from './agent-plugin-config'
+import type { PluginConfigIssue, PluginConfigMode } from './agent-plugin-config'
+import PluginConfigFields from './plugin-config-fields.vue'
+import PluginConfigDialog from './plugin-config-dialog.vue'
 import DliIcon from './dl-icon.vue'
+
+type PluginView = 'list' | 'detail' | 'install' | 'addMarketplace'
 
 const props = withDefaults(defineProps<{ agentId: string; agentName: string; requestedPluginKey?: string }>(), { requestedPluginKey: '' })
 const emit = defineEmits<{
   count: [count: number | undefined]
   announce: [message: string]
   openRequestConsumed: []
+  viewChange: [view: PluginView]
 }>()
 const { t } = useI18n()
 const installed = ref<InstalledPlugin[]>([])
 const bindings = ref<MarketplaceBinding[]>([])
 const status = ref<'loading' | 'ready' | 'error'>('loading')
-const view = ref<'list' | 'detail' | 'install'>('list')
+const view = ref<PluginView>('list')
 const isPluginsExpanded = ref(true)
 const isMarketsExpanded = ref(true)
-const isAddingMarket = ref(false)
 const listFocusKey = ref('')
 const marketAddRef = ref<HTMLButtonElement | null>(null)
 const sectionPrefix = computed(() => `agent-plugins-${props.agentId}`)
 const selectedPluginKey = ref('')
 const error = ref('')
 const query = ref('')
+const selectedMarketId = ref('')
+const currentPage = ref(1)
+const pageSize = ref(1)
+const installListRef = ref<HTMLElement | null>(null)
+const installCandidate = ref<Plugin | null>(null)
+const installFocusKey = ref('')
+const installedFeedbackKey = ref('')
 const configDrafts = ref<Record<string, string>>({})
+const configErrors = ref<Record<string, string>>({})
 const isConfirmingUninstall = ref(false)
 const removeMarketId = ref('')
 const addName = ref('')
@@ -59,10 +74,26 @@ const available = computed(() => {
 })
 const filtered = computed(() => {
   const needle = query.value.trim().toLowerCase()
-  return available.value.filter(({ plugin, market }) => [plugin.name, plugin.description, plugin.id, market]
-    .some((field) => field.toLowerCase().includes(needle)))
+  return available.value.filter(({ plugin, market }) => {
+    if (selectedMarketId.value !== '' && plugin.marketplaceId !== selectedMarketId.value) return false
+    return [plugin.name, plugin.description, plugin.id, market].some((field) => field.toLowerCase().includes(needle))
+  })
 })
+const pageCount = computed(() => filtered.value.length === 0 ? 0 : Math.ceil(filtered.value.length / pageSize.value))
+const paginated = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
+const pageStatus = computed(() => t.value.workspace.plugins.installPageStatus
+  .replace('{page}', String(currentPage.value))
+  .replace('{pages}', String(Math.max(1, pageCount.value))))
 const formPrefix = computed(() => `agent-plugin-${props.agentId}-${selectedPluginKey.value}`)
+const installCandidateMarket = computed(() => {
+  const candidate = installCandidate.value
+  return candidate === null ? '' : bindings.value.find((binding) => binding.marketplace.id === candidate.marketplaceId)?.marketplace.name ?? candidate.marketplaceId
+})
+const detailSecretSet = computed(() => Object.fromEntries((selected.value?.config ?? []).map((field) => [field.key, field.isSet])))
+const installedFeedback = computed(() => installed.value.find((item) => pluginKey(item.plugin) === installedFeedbackKey.value))
 
 async function load(): Promise<void> {
   loadVersion.value += 1
@@ -123,8 +154,9 @@ async function mutate<T>(request: () => Promise<Result<T>>, success: (value: T) 
 function announce(template: string, name: string): void {
   emit('announce', template.replace('{name}', name))
 }
-async function navigate(next: typeof view.value): Promise<void> {
+async function navigate(next: PluginView): Promise<void> {
   error.value = ''
+  configErrors.value = {}
   isConfirmingUninstall.value = false
   removeMarketId.value = ''
   if (view.value === 'list') returnFocus.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -132,20 +164,31 @@ async function navigate(next: typeof view.value): Promise<void> {
   await nextTick()
   if (!busy.value) focusView(next)
 }
-function focusView(next: typeof view.value): void {
+function focusView(next: PluginView): void {
   // 顶层 tab 隐藏插件面板时不抢走项目视图的焦点。
   if (!rootRef.value?.getClientRects().length) return
   const pluginRow = [...rootRef.value.querySelectorAll<HTMLElement>('.plugin-main')]
     .find((element) => element.dataset['pluginKey'] === listFocusKey.value)
+  const installRowAction = [...rootRef.value.querySelectorAll<HTMLElement>('.install-row__action')]
+    .find((element) => element.dataset['pluginKey'] === installFocusKey.value)
   const target = next === 'list'
     ? pluginRow ?? (returnFocus.value?.isConnected === true ? returnFocus.value : rootRef.value.querySelector<HTMLElement>('.plugin-add'))
-    : rootRef.value.querySelector<HTMLElement>('.plugin-back')
+    : next === 'addMarketplace'
+      ? rootRef.value.querySelector<HTMLInputElement>('.add-market input')
+      : next === 'install' && installRowAction !== undefined
+        ? installRowAction
+        : rootRef.value.querySelector<HTMLElement>('.plugin-back')
   target?.focus({ preventScroll: true })
   target?.scrollIntoView({ block: 'nearest' })
 }
 function back(): void {
   if (busy.value) return
   isPluginsExpanded.value = true
+  if (view.value === 'addMarketplace') {
+    resetAddMarketDraft()
+    isMarketsExpanded.value = true
+    returnFocus.value = marketAddRef.value
+  }
   void navigate('list')
 }
 function onEscape(event: KeyboardEvent): void {
@@ -160,41 +203,105 @@ function resetConfigDrafts(): void {
 function openDetail(item: InstalledPlugin): void {
   selectedPluginKey.value = pluginKey(item.plugin)
   listFocusKey.value = selectedPluginKey.value
+  installedFeedbackKey.value = ''
   resetConfigDrafts()
   void navigate('detail')
 }
 function openInstall(): void {
   query.value = ''
+  selectedMarketId.value = ''
+  currentPage.value = 1
   listFocusKey.value = ''
+  installFocusKey.value = ''
+  installCandidate.value = null
+  installedFeedbackKey.value = ''
   void navigate('install')
 }
+async function scrollInstallTop(): Promise<void> {
+  await nextTick()
+  if (installListRef.value !== null) installListRef.value.scrollTop = 0
+}
+function goToPage(page: number): void {
+  if (busy.value || page < 1 || page > pageCount.value || page === currentPage.value) return
+  currentPage.value = page
+  void scrollInstallTop()
+}
+function measureInstallPageSize(): void {
+  const list = installListRef.value
+  if (list === null) return
+  const rowHeight = list.querySelector<HTMLElement>('.install-row')?.getBoundingClientRect().height ?? 0
+  pageSize.value = pageSizeForHeight(list.clientHeight, rowHeight)
+}
+watch(installListRef, (list, _previous, onCleanup) => {
+  if (list === null) return
+  const observer = new ResizeObserver(measureInstallPageSize)
+  observer.observe(list)
+  measureInstallPageSize()
+  onCleanup(() => observer.disconnect())
+}, { flush: 'post' })
+watch([query, selectedMarketId], () => {
+  currentPage.value = 1
+  void scrollInstallTop()
+})
+watch([pageCount, pageSize], ([pages, size], [_previousPages, previousSize]) => {
+  currentPage.value = Math.min(currentPage.value, Math.max(1, pages))
+  if (size !== previousSize) void scrollInstallTop()
+})
 function toggleMarkets(): void {
   isMarketsExpanded.value = !isMarketsExpanded.value
   if (!isMarketsExpanded.value) removeMarketId.value = ''
 }
-async function openAddMarket(): Promise<void> {
-  if (busy.value) return
-  if (view.value === 'install') await navigate('list')
-  isMarketsExpanded.value = true
-  isAddingMarket.value = true
-  error.value = ''
-  await nextTick()
-  rootRef.value?.querySelector<HTMLInputElement>('.add-market input')?.focus()
-}
-async function closeAddMarket(): Promise<void> {
-  isAddingMarket.value = false
+function resetAddMarketDraft(): void {
   addName.value = ''
   addSource.value = ''
   addAutoUpdate.value = false
+}
+async function openAddMarket(): Promise<void> {
+  if (busy.value) return
+  // 清掉上次详情的焦点键:从添加市场返回时应回到市场 ＋,而不是曾打开过的插件行。
+  listFocusKey.value = ''
+  isMarketsExpanded.value = true
   error.value = ''
-  await nextTick()
-  marketAddRef.value?.focus({ preventScroll: true })
+  await navigate('addMarketplace')
+  returnFocus.value = marketAddRef.value
 }
 function switchLabel(item: InstalledPlugin): string {
   return (item.enabled ? t.value.workspace.plugins.disableLabel : t.value.workspace.plugins.enableLabel).replace('{name}', item.plugin.name)
 }
 function needsConfig(item: InstalledPlugin): boolean {
   return item.config.some((field) => field.required && !field.isSet)
+}
+function requiresInstallConfig(plugin: Plugin): boolean {
+  return plugin.config.some((field) => field.required)
+}
+function updateConfigValue(key: string, value: string): void {
+  configDrafts.value[key] = value
+  const next = { ...configErrors.value }
+  delete next[key]
+  configErrors.value = next
+}
+function issueMessage(issue: PluginConfigIssue): string {
+  if (issue.kind === 'number') return t.value.workspace.plugins.configNumberInvalid
+  if (issue.kind === 'choice') return t.value.workspace.plugins.configChoiceInvalid
+  return t.value.workspace.plugins.configRequired
+}
+async function focusConfigField(key: string): Promise<void> {
+  await nextTick()
+  const control = [...(rootRef.value?.querySelectorAll<HTMLElement>('[data-config-control]') ?? [])]
+    .find((element) => element.dataset['configKey'] === key)
+  control?.focus({ preventScroll: true })
+  control?.scrollIntoView({ block: 'nearest' })
+}
+function configIsValid(fields: readonly PluginConfigSchema[], mode: PluginConfigMode): boolean {
+  const issues = validatePluginConfig(fields, configDrafts.value, mode, (key) => mode === 'detail' && detailSecretSet.value[key] === true)
+  if (issues.length === 0) {
+    configErrors.value = {}
+    return true
+  }
+  configErrors.value = Object.fromEntries(issues.map((issue) => [issue.key, issueMessage(issue)]))
+  const first = issues[0]
+  if (first !== undefined) void focusConfigField(first.key)
+  return false
 }
 function hasUpdate(item: InstalledPlugin): boolean {
   return item.installedVersion !== item.plugin.version
@@ -205,11 +312,34 @@ async function toggle(item: InstalledPlugin, enabled: boolean): Promise<void> {
     announce(enabled ? t.value.workspace.plugins.enabledAnnounce : t.value.workspace.plugins.disabledAnnounce, item.plugin.name)
   })
 }
-async function install(plugin: Plugin): Promise<void> {
-  await mutate(() => installPlugin('agent', props.agentId, plugin.marketplaceId, plugin.id), (item) => {
+async function performInstall(plugin: Plugin, values: readonly PluginConfigValue[]): Promise<void> {
+  await mutate(() => installPlugin('agent', props.agentId, plugin.marketplaceId, plugin.id, values), async (item) => {
     replaceInstalled(item)
+    listFocusKey.value = pluginKey(item.plugin)
+    isPluginsExpanded.value = true
+    // 仅 optional 配置的插件给一条非阻断提示与次级配置入口;必填配置已完成时不重复提醒。
+    installedFeedbackKey.value = item.plugin.config.length > 0 && !requiresInstallConfig(item.plugin) ? listFocusKey.value : ''
     announce(t.value.workspace.plugins.installedAnnounce, item.plugin.name)
+    await navigate('list')
+    installCandidate.value = null
   })
+}
+async function startInstall(plugin: Plugin): Promise<void> {
+  // 每次打开新窗体都清掉上一次安装错误;所有插件共用同一个安装窗体。
+  error.value = ''
+  installFocusKey.value = pluginKey(plugin)
+  installCandidate.value = plugin
+}
+async function cancelInstallConfig(): Promise<void> {
+  if (busy.value) return
+  error.value = ''
+  installCandidate.value = null
+  await nextTick()
+  focusView('install')
+}
+async function installFromDialog(values: readonly PluginConfigValue[]): Promise<void> {
+  const plugin = installCandidate.value
+  if (plugin !== null) await performInstall(plugin, values)
 }
 async function setUninstallConfirmation(isConfirming: boolean): Promise<void> {
   isConfirmingUninstall.value = isConfirming
@@ -235,18 +365,8 @@ async function updatePlugin(): Promise<void> {
 }
 async function saveConfig(): Promise<void> {
   const item = selected.value
-  if (item === undefined || busy.value) return
-  const values: PluginConfigValue[] = []
-  for (const field of item.config) {
-    const value = configDrafts.value[field.key] ?? ''
-    if (field.type !== 'boolean' && field.required && value.trim() === '' && !(field.type === 'secret' && field.isSet)) {
-      error.value = t.value.workspace.plugins.configRequired
-      return
-    }
-    // 密钥不回显;留空不传,由 API 保持原值。
-    if (field.type === 'secret' && value === '') continue
-    values.push({ key: field.key, value: field.type === 'boolean' ? String(value === 'true') : value })
-  }
+  if (item === undefined || busy.value || !configIsValid(item.config, 'detail')) return
+  const values = pluginConfigValues(item.config, configDrafts.value, 'detail')
   await mutate(() => savePluginConfig('agent', props.agentId, item.plugin.marketplaceId, item.plugin.id, values), (updated) => {
     replaceInstalled(updated)
     resetConfigDrafts()
@@ -292,20 +412,17 @@ async function addMarket(): Promise<void> {
     error.value = t.value.workspace.plugins.marketplaceRequired
     return
   }
-  await mutate(() => addMarketplace('agent', props.agentId, { name: addName.value.trim(), source: addSource.value.trim(), autoUpdate: addAutoUpdate.value }), (binding) => {
+  await mutate(() => addMarketplace('agent', props.agentId, { name: addName.value.trim(), source: addSource.value.trim(), autoUpdate: addAutoUpdate.value }), async (binding) => {
     replaceBinding(binding)
-    addName.value = ''
-    addSource.value = ''
-    addAutoUpdate.value = false
-    isAddingMarket.value = false
+    resetAddMarketDraft()
+    isMarketsExpanded.value = true
+    returnFocus.value = marketAddRef.value
     announce(t.value.workspace.plugins.addedMarketplace, binding.marketplace.name)
+    await navigate('list')
   })
-  if (!isAddingMarket.value) {
-    await nextTick()
-    marketAddRef.value?.focus({ preventScroll: true })
-  }
 }
 watch([status, () => installed.value.length], () => emit('count', status.value === 'ready' ? installed.value.length : undefined), { immediate: true })
+watch(view, (next) => emit('viewChange', next), { immediate: true })
 watch([status, () => props.requestedPluginKey], ([nextStatus, requestedKey]) => {
   if (nextStatus !== 'ready' || requestedKey === '') return
   const item = installed.value.find((entry) => pluginKey(entry.plugin) === requestedKey)
@@ -318,10 +435,16 @@ watch(() => props.agentId, () => {
   installed.value = []
   bindings.value = []
   selectedPluginKey.value = ''
+  selectedMarketId.value = ''
+  currentPage.value = 1
+  pageSize.value = 1
+  installCandidate.value = null
+  installFocusKey.value = ''
+  installedFeedbackKey.value = ''
   configDrafts.value = {}
+  configErrors.value = {}
   isPluginsExpanded.value = true
   isMarketsExpanded.value = true
-  isAddingMarket.value = false
   isConfirmingUninstall.value = false
   removeMarketId.value = ''
   listFocusKey.value = ''
@@ -342,9 +465,13 @@ onBeforeUnmount(() => { isAlive.value = false })
       <button type="button" class="plugin-action" @click="load">{{ t.workspace.plugins.retry }}</button>
     </div>
     <template v-else>
-      <p v-if="error" class="plugin-error" role="alert">{{ error }}</p>
-      <!-- 安装时只隐藏分组,保留折叠状态、详情草稿和市场添加表单。 -->
+      <p v-if="error && installCandidate === null" class="plugin-error" role="alert">{{ error }}</p>
+      <!-- 子页面只隐藏分组,保留折叠状态与详情草稿。 -->
       <div v-show="view === 'list'" class="plugin-groups">
+        <div v-if="view === 'list' && installedFeedback" class="plugin-install-feedback" role="status">
+          <p>{{ t.workspace.plugins.optionalConfigInstalled.replace('{name}', installedFeedback.plugin.name) }}</p>
+          <button type="button" class="plugin-action" :disabled="busy" :aria-label="t.workspace.plugins.configurePluginLabel.replace('{name}', installedFeedback.plugin.name)" @click="openDetail(installedFeedback)">{{ t.workspace.plugins.configure }}</button>
+        </div>
         <section class="plugin-group" data-group="plugins">
           <div class="plugin-group-head">
             <button type="button" class="plugin-disclosure" :disabled="busy" :aria-expanded="isPluginsExpanded" :aria-controls="`${sectionPrefix}-installed`" @click="isPluginsExpanded = !isPluginsExpanded">
@@ -378,13 +505,6 @@ onBeforeUnmount(() => { isAlive.value = false })
             <button ref="marketAddRef" type="button" class="plugin-add market-add" :disabled="busy" :aria-label="t.workspace.plugins.addMarketplace" :title="t.workspace.plugins.addMarketplace" @click="openAddMarket"><span aria-hidden="true">＋</span></button>
           </div>
           <div :id="`${sectionPrefix}-markets`" v-show="isMarketsExpanded" class="plugin-group-content">
-            <form v-if="isAddingMarket" class="plugin-pane add-market" @submit.prevent="addMarket">
-              <h4 class="plugin-section-label">{{ t.workspace.plugins.addMarketplaceTitle }}</h4>
-              <div class="plugin-field"><label :for="`${sectionPrefix}-market-name`">{{ t.workspace.plugins.name }}</label><NInput v-model:value="addName" :disabled="busy" :placeholder="t.workspace.plugins.namePlaceholder" :input-props="{ id: `${sectionPrefix}-market-name` }" /></div>
-              <div class="plugin-field"><label :for="`${sectionPrefix}-market-source`">{{ t.workspace.plugins.source }}</label><NInput v-model:value="addSource" :disabled="busy" :placeholder="t.workspace.plugins.sourcePlaceholder" :input-props="{ id: `${sectionPrefix}-market-source`, spellcheck: false }" /></div>
-              <div class="market-auto"><span>{{ t.workspace.plugins.marketplaceAutoUpdate }}</span><NSwitch v-model:value="addAutoUpdate" class="plugin-switch" size="small" :disabled="busy" :aria-label="t.workspace.plugins.marketplaceAutoUpdate" /></div>
-              <div class="plugin-actions"><button type="submit" class="plugin-action" :disabled="busy">{{ busy ? t.workspace.plugins.adding : t.workspace.plugins.add }}</button><button type="button" class="plugin-action" :disabled="busy" @click="closeAddMarket">{{ t.workspace.plugins.cancel }}</button></div>
-            </form>
             <div v-if="bindings.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.installNoMarketplaces }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openAddMarket">{{ t.workspace.plugins.addMarketplace }}</button></div>
             <ul v-else class="market-list"><li v-for="binding in bindings" :key="binding.marketplace.id" class="market-row" :data-marketplace="binding.marketplace.id">
               <p class="plugin-title"><span class="plugin-name">{{ binding.marketplace.name }}</span><span class="market-trust">{{ t.workspace.plugins.trustLabel[binding.marketplace.trust] }}</span></p>
@@ -420,17 +540,10 @@ onBeforeUnmount(() => { isAlive.value = false })
             <h4 class="plugin-section-label">{{ t.workspace.plugins.configure }}</h4>
             <span class="plugin-scope">{{ t.workspace.plugins.agentOnly }}</span>
           </div>
-          <div v-for="field in selected.config" :key="field.key" class="plugin-field" :class="{ 'plugin-field--switch': field.type === 'boolean' }" :data-type="field.type">
-            <div class="plugin-field-copy">
-              <div class="plugin-field-head">
-                <label :id="`${formPrefix}-${field.key}-label`" :for="`${formPrefix}-${field.key}`">{{ field.label }}</label>
-                <span v-if="field.required" class="plugin-required">{{ t.workspace.plugins.required }}</span>
-              </div>
-              <p :id="`${formPrefix}-${field.key}-desc`">{{ field.description }}</p>
-            </div>
-            <NSwitch v-if="field.type === 'boolean'" :id="`${formPrefix}-${field.key}`" class="plugin-switch" :value="configDrafts[field.key] === 'true'" :disabled="busy" :aria-labelledby="`${formPrefix}-${field.key}-label`" :aria-describedby="`${formPrefix}-${field.key}-desc`" @update:value="(value: boolean) => configDrafts[field.key] = String(value)" />
-            <NInput v-else :value="configDrafts[field.key] ?? ''" @update:value="(value: string) => configDrafts[field.key] = value" :type="field.type === 'secret' ? 'password' : 'text'" :disabled="busy" :placeholder="field.type === 'secret' ? (field.isSet ? t.workspace.plugins.secretSetPlaceholder : t.workspace.plugins.secretPlaceholder) : ''" :input-props="{ id: `${formPrefix}-${field.key}`, 'aria-describedby': `${formPrefix}-${field.key}-desc`, 'aria-required': field.required, autocomplete: 'off', spellcheck: false }" />
-          </div>
+          <PluginConfigFields
+            :fields="selected.config" :values="configDrafts" :errors="configErrors" :secret-set="detailSecretSet"
+            mode="detail" :form-prefix="formPrefix" :busy="busy" @update="updateConfigValue"
+          />
           <div v-if="!isConfirmingUninstall" class="plugin-actions plugin-actions--end">
             <button type="submit" class="plugin-action" :disabled="busy">{{ busy ? t.workspace.plugins.saving : t.workspace.plugins.saveConfig }}</button>
             <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
@@ -457,22 +570,64 @@ onBeforeUnmount(() => { isAlive.value = false })
           </div>
         </div>
         <p class="plugin-description">{{ t.workspace.plugins.installHintAgent.replace('{name}', agentName) }}</p>
-        <NInput v-model:value="query" :placeholder="t.workspace.plugins.installSearch" :input-props="{ 'aria-label': t.workspace.plugins.installSearch, type: 'search' }" />
+        <div class="install-toolbar">
+          <NInput v-model:value="query" :placeholder="t.workspace.plugins.installSearch" :input-props="{ 'aria-label': t.workspace.plugins.installSearch, type: 'search' }" />
+          <div class="install-market-wrap">
+            <select v-model="selectedMarketId" class="install-market" :disabled="busy || bindings.length === 0" :aria-label="t.workspace.plugins.installMarketFilter">
+              <option value="">{{ t.workspace.plugins.installAllMarketplaces }}</option>
+              <option v-for="binding in bindings" :key="binding.marketplace.id" :value="binding.marketplace.id">{{ binding.marketplace.name }}</option>
+            </select>
+            <DliIcon class="install-market-chevron" name="chevronDown" size="sm" />
+          </div>
+        </div>
         <div v-if="bindings.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.installNoMarketplaces }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openAddMarket">{{ t.workspace.plugins.addMarketplace }}</button></div>
         <p v-else-if="available.length === 0" class="plugin-empty">{{ t.workspace.plugins.installEmpty }}</p>
         <p v-else-if="filtered.length === 0" class="plugin-empty">{{ t.workspace.plugins.installNoMatch }}</p>
-        <ul v-else class="install-list"><li v-for="entry in filtered" :key="pluginKey(entry.plugin)" class="install-row">
-          <p class="plugin-title"><span class="plugin-name">{{ entry.plugin.name }}</span><span class="plugin-mono">v{{ entry.plugin.version }}</span></p><p class="plugin-source">{{ entry.market }}</p><p class="plugin-description dl-clamp-2">{{ entry.plugin.description }}</p>
-          <button type="button" class="plugin-action" :disabled="busy" :aria-label="t.workspace.plugins.installLabel.replace('{name}', entry.plugin.name)" @click="install(entry.plugin)">{{ busy ? t.workspace.plugins.installing : t.workspace.plugins.install }}</button>
-        </li></ul>
+        <ul v-else ref="installListRef" class="install-list" tabindex="0" :aria-label="t.workspace.plugins.installListLabel">
+          <li v-for="entry in paginated" :key="pluginKey(entry.plugin)" class="install-row" :data-marketplace="entry.plugin.marketplaceId">
+            <div class="install-row__info">
+              <p class="plugin-title"><span class="plugin-name">{{ entry.plugin.name }}</span><span class="plugin-mono">v{{ entry.plugin.version }}</span><span v-if="requiresInstallConfig(entry.plugin)" class="plugin-badge plugin-badge--warning">{{ t.workspace.plugins.configureRequired }}</span></p><p class="plugin-source">{{ entry.market }}</p><p class="plugin-description dl-clamp-2">{{ entry.plugin.description }}</p>
+            </div>
+            <button type="button" class="plugin-action install-row__action" :data-plugin-key="pluginKey(entry.plugin)" :disabled="busy" :aria-label="t.workspace.plugins.installLabel.replace('{name}', entry.plugin.name)" @click="startInstall(entry.plugin)">{{ busy ? t.workspace.plugins.installing : t.workspace.plugins.install }}</button>
+          </li>
+        </ul>
+        <nav v-if="filtered.length > 0" class="install-pagination" :aria-label="t.workspace.plugins.installPagination">
+          <button type="button" class="plugin-action" :disabled="busy || currentPage <= 1" @click="goToPage(currentPage - 1)">{{ t.workspace.plugins.installPreviousPage }}</button>
+          <span class="install-page-status" aria-live="polite" aria-atomic="true">{{ pageStatus }}</span>
+          <button type="button" class="plugin-action" :disabled="busy || currentPage >= pageCount" @click="goToPage(currentPage + 1)">{{ t.workspace.plugins.installNextPage }}</button>
+        </nav>
+      </div>
+      <div v-if="view === 'addMarketplace'" class="plugin-pane plugin-add-market">
+        <div class="plugin-page-head">
+          <div class="plugin-page-nav">
+            <button type="button" class="plugin-back" :disabled="busy" :aria-label="t.workspace.plugins.backToPlugins" :title="t.workspace.plugins.backToPlugins" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.plugins.backToPlugins }}</span></button>
+          </div>
+          <div class="plugin-page-identity">
+            <h3 class="plugin-page-title">{{ t.workspace.plugins.addMarketplaceTitle }}</h3>
+          </div>
+        </div>
+        <p class="plugin-description">{{ t.workspace.plugins.addMarketplaceHint }}</p>
+        <form class="add-market" @submit.prevent="addMarket">
+          <div class="plugin-field"><label :for="`${sectionPrefix}-market-name`">{{ t.workspace.plugins.name }}</label><NInput v-model:value="addName" :disabled="busy" :placeholder="t.workspace.plugins.namePlaceholder" :input-props="{ id: `${sectionPrefix}-market-name` }" /></div>
+          <div class="plugin-field"><label :for="`${sectionPrefix}-market-source`">{{ t.workspace.plugins.source }}</label><NInput v-model:value="addSource" :disabled="busy" :placeholder="t.workspace.plugins.sourcePlaceholder" :input-props="{ id: `${sectionPrefix}-market-source`, spellcheck: false }" /></div>
+          <div class="market-auto"><span>{{ t.workspace.plugins.marketplaceAutoUpdate }}</span><NSwitch v-model:value="addAutoUpdate" class="plugin-switch" size="small" :disabled="busy" :aria-label="t.workspace.plugins.marketplaceAutoUpdate" /></div>
+          <div class="plugin-actions plugin-actions--end"><button type="submit" class="plugin-action" :disabled="busy">{{ busy ? t.workspace.plugins.adding : t.workspace.plugins.add }}</button></div>
+        </form>
       </div>
     </template>
+    <PluginConfigDialog
+      v-if="installCandidate" :plugin="installCandidate" :marketplace-name="installCandidateMarket"
+      :agent-name="agentName" :busy="busy" :error="error" @cancel="cancelInstallConfig" @submit="installFromDialog"
+    />
   </section>
 </template>
 
 <style scoped>
 .agent-plugins { min-inline-size: 0; padding: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .plugin-groups { display: grid; gap: var(--dl-space-3); }
+.plugin-install-feedback { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dl-space-2); padding: var(--dl-space-2); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.plugin-install-feedback p { min-inline-size: 0; overflow-wrap: anywhere; }
+.plugin-install-feedback .plugin-action { flex: none; }
 .plugin-group, .plugin-group-content, .plugin-list, .plugin-pane, .plugin-state, .plugin-config { min-inline-size: 0; }
 .plugin-pane, .plugin-state, .plugin-config { display: grid; gap: var(--dl-space-2); }
 .plugin-group-head { display: flex; align-items: stretch; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
@@ -499,7 +654,24 @@ onBeforeUnmount(() => { isAlive.value = false })
 .plugin-badges { display: flex; flex-wrap: wrap; gap: var(--dl-space-1); }
 .plugin-badge { color: var(--dl-accent); font-size: var(--dl-font-size-xs); }
 .plugin-badge--warning, .plugin-required { color: var(--dl-warning); }
-.plugin-detail, .plugin-install { display: grid; gap: var(--dl-space-3); padding: 0 0 var(--dl-space-4); }
+.plugin-detail, .plugin-install, .plugin-add-market { display: grid; gap: var(--dl-space-3); padding: 0 0 var(--dl-space-4); }
+.agent-plugins[data-view='install'] { display: flex; flex-direction: column; min-block-size: 0; block-size: 100%; }
+.agent-plugins[data-view='install'] > .plugin-install { flex: 1; min-block-size: 0; grid-template-rows: auto auto auto minmax(0, 1fr) auto; padding-block-end: 0; }
+.install-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 14em); gap: var(--dl-space-2); min-inline-size: 0; }
+.install-market-wrap { position: relative; display: block; min-inline-size: 0; }
+.install-market { appearance: none; inline-size: 100%; min-inline-size: 0; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3) calc(var(--dl-space-3) + var(--dl-icon-sm) + var(--dl-space-1)); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font: inherit; font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); cursor: pointer; }
+.install-market-chevron { position: absolute; inset-inline-end: var(--dl-space-3); inset-block-start: 50%; transform: translateY(-50%); color: var(--dl-text-tertiary); pointer-events: none; }
+.install-market:hover:not(:disabled) { border-color: var(--dl-border-strong); }
+.install-market:focus-visible { outline: none; border-color: var(--dl-focus-border); box-shadow: var(--dl-focus-halo); }
+.install-market:active:not(:disabled) { border-color: var(--dl-accent); }
+.install-market:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
+.install-market:disabled + .install-market-chevron { color: var(--dl-text-disabled); }
+.install-list { min-inline-size: 0; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; border-radius: var(--dl-radius-sm); }
+.install-list:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
+.install-pagination { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; padding-block-start: var(--dl-space-2); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.install-pagination .plugin-action { justify-self: start; white-space: nowrap; }
+.install-pagination .plugin-action:last-child { justify-self: end; }
+.install-page-status { color: var(--dl-text-secondary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .plugin-page-head { display: grid; gap: var(--dl-space-2); }
 .plugin-page-nav { display: flex; align-items: stretch; border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
 .plugin-page-identity { display: grid; gap: var(--dl-space-1); }
@@ -532,13 +704,22 @@ onBeforeUnmount(() => { isAlive.value = false })
 .plugin-confirm .plugin-actions { justify-content: flex-end; }
 .plugin-confirm .plugin-action { min-block-size: var(--dl-control-height); padding-inline: var(--dl-space-2); }
 .install-row, .market-row { display: grid; gap: var(--dl-space-1); padding: var(--dl-space-2) var(--dl-space-1); min-inline-size: 0; }
+/* 安装行 = 信息在左、操作在右的定宽动作列;操作与整行垂直居中,
+   让每行的安装入口落在同一条竖线上,也把行高压回信息本身的高度。 */
+.install-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--dl-space-4); }
+.install-row__info { display: grid; gap: var(--dl-space-1); min-inline-size: 0; }
+.install-row__action { justify-self: end; align-self: center; white-space: nowrap; }
+.install-row .plugin-title { flex-wrap: nowrap; }
+.install-row .plugin-name, .install-row .plugin-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.install-row .plugin-mono { flex: none; }
+.install-row .plugin-description { min-block-size: calc(2 * var(--dl-font-size-sm) * var(--dl-line-body)); font-size: var(--dl-font-size-sm); }
 .install-row + .install-row, .market-row + .market-row { border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 .market-trust { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); margin-inline-start: auto; }
 .market-source { overflow-wrap: anywhere; }
 .market-controls { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-1); flex-wrap: wrap; }
 .market-auto { display: flex; align-items: center; gap: var(--dl-space-1); color: var(--dl-text-secondary); }
 .market-controls .plugin-action { min-block-size: var(--workspace-nav-control-size); padding-inline: var(--dl-space-1); }
-.add-market { padding: var(--dl-space-2) var(--dl-space-1); border-block-end: var(--dl-border-width) solid var(--dl-border-base); }
+.add-market { display: grid; gap: var(--dl-space-3); }
 .agent-plugins button:hover:not(:disabled) { background: var(--dl-bg-hover); }
 .agent-plugins button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
 .agent-plugins button:active:not(:disabled) { background: var(--dl-bg-sunken); }
@@ -549,5 +730,8 @@ onBeforeUnmount(() => { isAlive.value = false })
   .plugin-switch { min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); }
   .plugin-confirm .plugin-action { min-block-size: var(--dl-target-size); }
   .plugin-main { min-block-size: calc(var(--dl-target-size) + var(--dl-space-4)); padding-inline-end: calc(var(--dl-target-size) + var(--dl-space-6)); }
+}
+@media (max-width: 560px) {
+  .install-toolbar { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

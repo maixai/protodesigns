@@ -6,7 +6,7 @@ import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentModelConfig } from '../contracts/generated/agent-model-config'
 import type { ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
-import type { PluginComponentId, PluginMcpContribution } from '../contracts/generated/plugin'
+import type { Plugin, PluginComponentCount, PluginComponentId, PluginConfigSchema, PluginMcpContribution } from '../contracts/generated/plugin'
 import type { PluginMcpServer } from '../contracts/generated/plugin-mcp-server'
 import type { InstalledPlugin, PluginConfigTypeId } from '../contracts/generated/installed-plugin'
 import type { Marketplace, PluginTrustId } from '../contracts/generated/marketplace'
@@ -288,6 +288,7 @@ interface ConfigFieldSeed {
   type: PluginConfigTypeId
   required: boolean
   defaultValue: string
+  options?: string[]
 }
 
 interface PluginSeed {
@@ -297,7 +298,10 @@ interface PluginSeed {
   publisher: string
   version: string
   icon: string
-  components: PluginComponentId[]
+  // commands / agents / hooks 的数量由 seed 显式声明;skills 与 MCP 由下方数组派生。
+  commandCount?: number
+  agentCount?: number
+  hookCount?: number
   mcpServers?: PluginMcpContribution[]
   skills?: Pick<Skill, 'name' | 'description'>[]
   config: ConfigFieldSeed[]
@@ -347,7 +351,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Anthropic',
         version: '1.4.2',
         icon: 'code',
-        components: ['skill', 'command'],
+        commandCount: 2,
         skills: [{ name: 'review-diff', description: '检查改动中的正确性、安全问题与回归风险' }],
         config: [
           { key: 'githubToken', label: 'GitHub token', description: 'Used to read pull requests and post review comments.', type: 'secret', required: false, defaultValue: '' },
@@ -360,9 +364,12 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Anthropic',
         version: '2.1.0',
         icon: 'sliders',
-        components: ['command', 'hook'],
+        commandCount: 2, hookCount: 1,
         config: [
           { key: 'command', label: 'Test command', description: 'Command to run in the project root.', type: 'text', required: true, defaultValue: 'pnpm test' },
+          { key: 'timeout', label: 'Timeout (seconds)', description: 'Stop the test run after this many seconds.', type: 'number', required: true, defaultValue: '120' },
+          { key: 'scope', label: 'Test scope', description: 'Choose which tests run after a change.', type: 'choice', required: true, defaultValue: 'changed', options: ['changed', 'all', 'related'] },
+          { key: 'failFast', label: 'Fail fast', description: 'Stop after the first failing test file.', type: 'boolean', required: false, defaultValue: 'false' },
         ],
       },
       {
@@ -372,7 +379,6 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Anthropic',
         version: '1.2.0',
         icon: 'database',
-        components: ['skill', 'mcp'],
         mcpServers: [{
           name: 'data-analysis', displayName: 'Dataset Notebook',
           description: 'Profile datasets, inspect distributions, and assemble reproducible analysis notebooks.',
@@ -394,11 +400,55 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Anthropic',
         version: '1.0.5',
         icon: 'fileText',
-        components: ['skill', 'agent'],
+        agentCount: 2,
         skills: [{ name: 'revise-doc', description: '按产品文风修订文档并核对术语' }],
         config: [
           { key: 'styleGuide', label: 'Style guide path', description: 'Optional path to the documentation style guide.', type: 'text', required: false, defaultValue: '' },
         ],
+      },
+      {
+        id: 'dependency-graph',
+        name: 'Dependency Graph',
+        description: 'Maps module dependencies and highlights cycles before a refactor.',
+        publisher: 'Anthropic',
+        version: '1.3.1',
+        icon: 'code',
+        agentCount: 2,
+        skills: [{ name: 'trace-dependencies', description: '追踪模块依赖并标记循环引用' }],
+        config: [],
+      },
+      {
+        id: 'api-debugger',
+        name: 'API Debugger',
+        description: 'Builds reproducible requests and compares responses across environments.',
+        publisher: 'Anthropic',
+        version: '1.1.0',
+        icon: 'sliders',
+        commandCount: 2,
+        skills: [{ name: 'compare-response', description: '对比不同环境的响应结构与关键字段' }],
+        config: [],
+      },
+      {
+        id: 'migration-assistant',
+        name: 'Migration Assistant',
+        description: 'Plans framework upgrades and rewrites affected call sites incrementally.',
+        publisher: 'Anthropic',
+        version: '0.9.2',
+        icon: 'sync',
+        commandCount: 2,
+        skills: [{ name: 'plan-migration', description: '拆分升级步骤并识别受影响的调用点' }],
+        config: [],
+      },
+      {
+        id: 'performance-profiler',
+        name: 'Performance Profiler',
+        description: 'Summarizes runtime traces and points to the most expensive code paths.',
+        publisher: 'Anthropic',
+        version: '1.0.0',
+        icon: 'table',
+        agentCount: 2,
+        skills: [{ name: 'summarize-trace', description: '汇总性能采样并定位高开销路径' }],
+        config: [],
       },
     ],
   },
@@ -417,7 +467,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Chromium Labs',
         version: '0.8.1',
         icon: 'window',
-        components: ['mcp', 'command'],
+        commandCount: 2,
         mcpServers: [{
           name: 'browser', displayName: 'Browser Automation',
           description: 'Navigate pages, inspect accessibility trees, and capture visual evidence.',
@@ -439,7 +489,6 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Northwind',
         version: '1.1.3',
         icon: 'sync',
-        components: ['mcp'],
         mcpServers: [{
           name: 'notion-workspace', displayName: 'Notion Workspace',
           description: 'Search workspace pages and synchronize structured project notes.',
@@ -461,11 +510,64 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Redline Security',
         version: '0.6.4',
         icon: 'badge',
-        components: ['skill', 'agent', 'hook'],
+        agentCount: 2, hookCount: 2,
         skills: [{ name: 'scan-dependencies', description: '扫描依赖漏洞并整理可执行的升级建议' }],
         config: [
           { key: 'severityThreshold', label: 'Severity threshold', description: 'Lowest severity that fails the check.', type: 'text', required: false, defaultValue: 'high' },
         ],
+      },
+      {
+        id: 'linear-sync',
+        name: 'Linear Sync',
+        description: 'Links implementation work to Linear issues and posts concise progress updates.',
+        publisher: 'Relay Tools',
+        version: '1.4.0',
+        icon: 'sync',
+        commandCount: 2,
+        skills: [{ name: 'update-issue', description: '把实现进展整理为议题更新' }],
+        config: [],
+      },
+      {
+        id: 'database-inspector',
+        name: 'Database Inspector',
+        description: 'Explains query plans and checks migrations for locking or data-loss risks.',
+        publisher: 'Northwind',
+        version: '0.8.6',
+        icon: 'database',
+        commandCount: 2,
+        skills: [{ name: 'explain-query', description: '解读查询计划并检查迁移风险' }],
+        config: [],
+      },
+      {
+        id: 'docker-tools',
+        name: 'Docker Tools',
+        description: 'Diagnoses container builds and keeps compose services reproducible.',
+        publisher: 'Harbor Collective',
+        version: '1.0.7',
+        icon: 'window',
+        commandCount: 2, hookCount: 1,
+        config: [],
+      },
+      {
+        id: 'localization-review',
+        name: 'Localization Review',
+        description: 'Checks translated interface copy for truncation, tone, and placeholder drift.',
+        publisher: 'Common Words',
+        version: '0.5.3',
+        icon: 'fileText',
+        agentCount: 2,
+        skills: [{ name: 'review-locale', description: '核对译文语气、占位符与截断风险' }],
+        config: [],
+      },
+      {
+        id: 'api-mock',
+        name: 'API Mock',
+        description: 'Generates stateful endpoint fixtures from examples and error scenarios.',
+        publisher: 'Relay Tools',
+        version: '0.7.1',
+        icon: 'code',
+        commandCount: 2, hookCount: 1,
+        config: [],
       },
     ],
   },
@@ -484,7 +586,7 @@ const marketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Studio Nine',
         version: '0.9.0',
         icon: 'image',
-        components: ['mcp', 'command'],
+        commandCount: 2,
         mcpServers: [{
           name: 'figma', displayName: 'Figma Design',
           description: 'Inspect design frames and export assets and design-token metadata.',
@@ -498,6 +600,60 @@ const marketplaceCatalog: MarketplaceSeed[] = [
           { key: 'accessToken', label: 'Figma access token', description: 'Personal access token with file read scope.', type: 'secret', required: true, defaultValue: '' },
           { key: 'fileKey', label: 'File key', description: 'Figma file to export from.', type: 'text', required: true, defaultValue: '' },
         ],
+      },
+      {
+        id: 'storybook-bridge',
+        name: 'Storybook Bridge',
+        description: 'Finds component stories and turns interaction states into review checklists.',
+        publisher: 'Studio Nine',
+        version: '0.6.2',
+        icon: 'window',
+        commandCount: 2,
+        skills: [{ name: 'review-stories', description: '按组件故事整理交互状态检查项' }],
+        config: [],
+      },
+      {
+        id: 'asset-optimizer',
+        name: 'Asset Optimizer',
+        description: 'Compares image exports and recommends smaller formats without visible loss.',
+        publisher: 'Studio Nine',
+        version: '1.1.0',
+        icon: 'image',
+        commandCount: 2, hookCount: 1,
+        config: [],
+      },
+      {
+        id: 'accessibility-review',
+        name: 'Accessibility Review',
+        description: 'Reviews focus order, accessible names, and contrast in component previews.',
+        publisher: 'Studio Nine',
+        version: '0.8.0',
+        icon: 'badge',
+        agentCount: 2,
+        skills: [{ name: 'audit-preview', description: '检查预览中的焦点顺序、名称与对比度' }],
+        config: [],
+      },
+      {
+        id: 'motion-inspector',
+        name: 'Motion Inspector',
+        description: 'Checks transition timing and reduced-motion fallbacks against the design system.',
+        publisher: 'Studio Nine',
+        version: '0.4.1',
+        icon: 'sliders',
+        commandCount: 2,
+        skills: [{ name: 'inspect-motion', description: '核对动效时长与减弱动态效果降级' }],
+        config: [],
+      },
+      {
+        id: 'component-catalog',
+        name: 'Component Catalog',
+        description: 'Indexes reusable components and flags missing variants or duplicated patterns.',
+        publisher: 'Studio Nine',
+        version: '0.7.0',
+        icon: 'table',
+        agentCount: 2,
+        skills: [{ name: 'index-components', description: '整理组件变体并识别重复模式' }],
+        config: [],
       },
     ],
   },
@@ -521,7 +677,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '1.0.1',
         icon: 'fileText',
-        components: ['skill', 'command'],
+        commandCount: 2,
         skills: [{ name: 'draft-release', description: '按目标读者整理本次发布的重点' }],
         config: [],
       },
@@ -532,7 +688,6 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '0.4.2',
         icon: 'table',
-        components: ['mcp'],
         mcpServers: [{
           name: 'design-tokens', displayName: 'Design Tokens',
           description: 'Inspect token collections and generate platform-specific token artifacts.',
@@ -552,7 +707,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '1.2.0',
         icon: 'fileText',
-        components: ['skill', 'command'],
+        commandCount: 2,
         skills: [{ name: 'build-entry', description: '把合并记录归类为变更日志条目' }],
         config: [],
       },
@@ -563,7 +718,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '0.7.3',
         icon: 'code',
-        components: ['command', 'hook'],
+        commandCount: 2, hookCount: 1,
         config: [],
       },
       {
@@ -573,7 +728,6 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '0.5.0',
         icon: 'image',
-        components: ['mcp'],
         mcpServers: [{
           name: 'screenshot-diff', displayName: 'Screenshot Diff',
           description: 'Capture build screenshots and summarize visual differences.',
@@ -591,7 +745,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '1.0.4',
         icon: 'fileText',
-        components: ['skill', 'agent'],
+        agentCount: 2,
         skills: [{ name: 'review-copy', description: '检查界面文案的语气、清晰度与一致性' }],
         config: [],
       },
@@ -602,7 +756,7 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '0.9.1',
         icon: 'badge',
-        components: ['agent', 'hook'],
+        agentCount: 2, hookCount: 2,
         config: [],
       },
       {
@@ -612,7 +766,6 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
         publisher: 'Mia Labs',
         version: '1.1.0',
         icon: 'sync',
-        components: ['mcp'],
         mcpServers: [{
           name: 'docs-sync', displayName: 'Documentation Sync',
           description: 'Read source comments and keep generated reference pages synchronized.',
@@ -630,9 +783,8 @@ const extraMarketplaceCatalog: MarketplaceSeed[] = [
 function clonePluginSeed(plugin: PluginSeed): PluginSeed {
   return {
     ...plugin,
-    components: [...plugin.components],
     mcpServers: structuredClone(plugin.mcpServers ?? []),
-    config: plugin.config.map((field) => ({ ...field })),
+    config: plugin.config.map((field) => ({ ...field, ...(field.options === undefined ? {} : { options: [...field.options] }) })),
     ...(plugin.skills === undefined ? {} : { skills: plugin.skills.map((skill) => ({ ...skill })) }),
   }
 }
@@ -792,6 +944,49 @@ function installedCountOf(scope: InstallScope, ownerId: string, marketplaceId: s
   return count
 }
 
+// 市场目录与已安装记录里的 plugin 都走同一投影,配置声明不会在两条路径上漂移。
+function configSchemaOf(field: ConfigFieldSeed): PluginConfigSchema {
+  return {
+    key: field.key,
+    label: field.label,
+    description: field.description,
+    type: field.type,
+    required: field.required,
+    default: field.defaultValue,
+    options: [...(field.options ?? [])],
+  }
+}
+
+// 类型与计数在同一个投影里生成;数组顺序与安装窗体的固定展示顺序一致。
+function pluginComponentOf(id: PluginComponentId, count: number): PluginComponentCount[] {
+  return count > 0 ? [{ id, count }] : []
+}
+
+function pluginComponentsOf(plugin: PluginSeed): PluginComponentCount[] {
+  return [
+    ...pluginComponentOf('command', plugin.commandCount ?? 0),
+    ...pluginComponentOf('skill', plugin.skills?.length ?? 0),
+    ...pluginComponentOf('hook', plugin.hookCount ?? 0),
+    ...pluginComponentOf('agent', plugin.agentCount ?? 0),
+    ...pluginComponentOf('mcp', plugin.mcpServers?.length ?? 0),
+  ]
+}
+
+function pluginOf(marketplaceId: string, plugin: PluginSeed): Plugin {
+  return {
+    id: plugin.id,
+    marketplaceId,
+    name: plugin.name,
+    description: plugin.description,
+    publisher: plugin.publisher,
+    version: plugin.version,
+    icon: plugin.icon,
+    components: pluginComponentsOf(plugin),
+    config: plugin.config.map(configSchemaOf),
+    mcpServers: structuredClone(plugin.mcpServers ?? []),
+  }
+}
+
 // 市场目录:来源与插件元数据,不含任何作用域状态。
 function marketplaceOf(seed: MarketplaceSeed): Marketplace {
   return {
@@ -799,17 +994,7 @@ function marketplaceOf(seed: MarketplaceSeed): Marketplace {
     name: seed.name,
     source: seed.source,
     trust: seed.trust,
-    plugins: seed.plugins.map((plugin) => ({
-      id: plugin.id,
-      marketplaceId: seed.id,
-      name: plugin.name,
-      description: plugin.description,
-      publisher: plugin.publisher,
-      version: plugin.version,
-      icon: plugin.icon,
-      components: [...plugin.components],
-      mcpServers: structuredClone(plugin.mcpServers ?? []),
-    })),
+    plugins: seed.plugins.map((plugin) => pluginOf(seed.id, plugin)),
   }
 }
 
@@ -827,29 +1012,22 @@ function bindingOf(scope: InstallScope, ownerId: string, seed: MarketplaceSeed):
 function configOf(scope: InstallScope, ownerId: string, marketplaceId: string, plugin: PluginSeed): PluginConfigField[] {
   const stored = pluginConfigValues.get(scopeKey(scope, ownerId))?.get(pluginKey(marketplaceId, plugin.id))
   return plugin.config.map((field) => {
-    const raw = stored?.get(field.key) ?? field.defaultValue
+    const candidate = stored?.get(field.key) ?? field.defaultValue
+    // options 外的存储值视为未设置并回落 default,与 Claude Code 的 userConfig 语义一致。
+    const raw = field.type === 'choice' && candidate !== '' && !(field.options ?? []).includes(candidate) ? field.defaultValue : candidate
+    const schema = configSchemaOf(field)
     // 只回契约字段:种子里的 defaultValue 不外泄,配置值在安装后由 value / isSet 表达。
     if (field.type === 'secret') {
-      return { key: field.key, label: field.label, description: field.description, type: field.type, required: field.required, value: raw === '' ? '' : SECRET_MASK, isSet: raw !== '' }
+      return { ...schema, value: raw === '' ? '' : SECRET_MASK, isSet: raw !== '' }
     }
-    return { key: field.key, label: field.label, description: field.description, type: field.type, required: field.required, value: raw, isSet: field.type === 'boolean' ? true : raw !== '' }
+    return { ...schema, value: raw, isSet: field.type === 'boolean' ? true : raw !== '' }
   })
 }
 
 function installedPluginOf(scope: InstallScope, ownerId: string, marketplaceId: string, plugin: PluginSeed): InstalledPlugin {
   const state = stateMap(scope, ownerId).get(pluginKey(marketplaceId, plugin.id))
   return {
-    plugin: {
-      id: plugin.id,
-      marketplaceId,
-      name: plugin.name,
-      description: plugin.description,
-      publisher: plugin.publisher,
-      version: plugin.version,
-      icon: plugin.icon,
-      components: [...plugin.components],
-      mcpServers: structuredClone(plugin.mcpServers ?? []),
-    },
+    plugin: pluginOf(marketplaceId, plugin),
     enabled: state?.enabled ?? false,
     scope,
     marketplaceName: marketplaceSeedOf(marketplaceId)?.name ?? marketplaceId,
@@ -961,12 +1139,52 @@ export function mockReconnectAgentPluginMcpServer(agentId: string, sdkName: stri
   return mockAgentPluginMcpServers(agentId) ?? []
 }
 
-export function mockInstallPlugin(scope: InstallScope, ownerId: string, marketplaceId: string, pluginId: string): InstalledPlugin | null {
-  if (!isValidOwner(scope, ownerId)) return null
+export type PluginConfigIssueReason = 'required' | 'number' | 'choice'
+export type PluginConfigMutationResult =
+  | { status: 'ok'; installed: InstalledPlugin }
+  | { status: 'missing' }
+  | { status: 'invalid'; field: string; reason: PluginConfigIssueReason }
+
+// 数据层也执行同一套边界校验,避免只依赖界面预检。可选 choice 越界回落 default,
+// 其它非法值与缺失的必填值都拒绝整次写入并点名字段。
+function invalidConfigField(plugin: PluginSeed, values: Map<string, string>): { field: string; reason: PluginConfigIssueReason } | undefined {
+  for (const field of plugin.config) {
+    const raw = values.get(field.key) ?? field.defaultValue
+    if (field.type === 'choice' && !field.required && raw !== '' && !(field.options ?? []).includes(raw)) {
+      values.set(field.key, field.defaultValue)
+    }
+  }
+  for (const field of plugin.config) {
+    if (field.type === 'boolean') continue
+    const raw = (values.get(field.key) ?? field.defaultValue).trim()
+    if (field.required && raw === '') return { field: field.label, reason: 'required' }
+    if (raw === '') continue
+    if (field.type === 'number' && !Number.isFinite(Number(raw))) return { field: field.label, reason: 'number' }
+    if (field.type === 'choice' && !(field.options ?? []).includes(raw)) return { field: field.label, reason: 'choice' }
+  }
+  return undefined
+}
+
+export function mockInstallPlugin(
+  scope: InstallScope,
+  ownerId: string,
+  marketplaceId: string,
+  pluginId: string,
+  values: readonly PluginConfigValue[] = [],
+): PluginConfigMutationResult {
+  if (!isValidOwner(scope, ownerId)) return { status: 'missing' }
   const plugin = pluginSeedOf(marketplaceId, pluginId)
-  if (plugin === undefined) return null
+  if (plugin === undefined) return { status: 'missing' }
+  const next = new Map<string, string>()
+  for (const item of values) {
+    const field = plugin.config.find((entry) => entry.key === item.key)
+    if (field !== undefined) next.set(item.key, item.value)
+  }
+  const invalid = invalidConfigField(plugin, next)
+  if (invalid !== undefined) return { status: 'invalid', ...invalid }
   stateMap(scope, ownerId).set(pluginKey(marketplaceId, pluginId), { enabled: true, installedVersion: plugin.version })
-  return installedPluginOf(scope, ownerId, marketplaceId, plugin)
+  configMap(scope, ownerId).set(pluginKey(marketplaceId, pluginId), next)
+  return { status: 'ok', installed: installedPluginOf(scope, ownerId, marketplaceId, plugin) }
 }
 
 export function mockUninstallPlugin(scope: InstallScope, ownerId: string, marketplaceId: string, pluginId: string): boolean {
@@ -987,10 +1205,7 @@ export function mockSetPluginEnabled(scope: InstallScope, ownerId: string, marke
   return installedPluginOf(scope, ownerId, marketplaceId, plugin)
 }
 
-export type SavePluginConfigResult =
-  | { status: 'ok'; installed: InstalledPlugin }
-  | { status: 'missing' }
-  | { status: 'invalid' }
+export type SavePluginConfigResult = PluginConfigMutationResult
 
 // 保存插件配置:secret 的空值表示「保持原值」;必填项缺失时不提交任何改动。
 export function mockSavePluginConfig(
@@ -1015,11 +1230,8 @@ export function mockSavePluginConfig(
     if (field.type === 'secret' && item.value === '') continue
     next.set(item.key, item.value)
   }
-  for (const field of plugin.config) {
-    if (!field.required || field.type === 'boolean') continue
-    const raw = next.get(field.key) ?? field.defaultValue
-    if (raw === '') return { status: 'invalid' }
-  }
+  const invalid = invalidConfigField(plugin, next)
+  if (invalid !== undefined) return { status: 'invalid', ...invalid }
   configs.set(key, next)
   return { status: 'ok', installed: installedPluginOf(scope, ownerId, marketplaceId, plugin) }
 }

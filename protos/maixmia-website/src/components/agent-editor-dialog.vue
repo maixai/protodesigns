@@ -153,6 +153,7 @@ const permissionsTabRef = ref<HTMLButtonElement | null>(null)
 const pluginsTabRef = ref<HTMLButtonElement | null>(null)
 const mcpTabRef = ref<HTMLButtonElement | null>(null)
 const requestedPluginKey = ref('')
+const pluginView = ref<'list' | 'detail' | 'install' | 'addMarketplace'>('list')
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const confirmTitleId = `${dialogId}-discard-title`
 const confirmBodyId = `${dialogId}-discard-body`
@@ -1634,7 +1635,7 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <div ref="bodyRef" class="agent-editor__body">
+    <div ref="bodyRef" class="agent-editor__body" :class="{ 'agent-editor__body--plugin-install': activeTab === 'plugins' && pluginView === 'install' }">
       <div
         v-show="activeTab === 'basic'" :id="`${dialogId}-panel-basic`" class="agent-editor__panel"
         role="tabpanel" :aria-labelledby="`${dialogId}-tab-basic`" tabindex="0"
@@ -2240,13 +2241,13 @@ onBeforeUnmount(() => {
       </div>
       <div
         v-if="agent" v-show="activeTab === 'plugins'" :id="`${dialogId}-panel-plugins`"
-        class="agent-editor__panel agent-editor__panel--tools" role="tabpanel"
+        class="agent-editor__panel agent-editor__panel--tools agent-editor__panel--plugins" role="tabpanel"
         :aria-labelledby="`${dialogId}-tab-plugins`" tabindex="0"
       >
         <AgentPlugins
           :key="`plugins-${agent.id}`" :agent-id="agent.id" :agent-name="agent.name"
           :requested-plugin-key="requestedPluginKey" @announce="emit('announce', $event)"
-          @open-request-consumed="requestedPluginKey = ''"
+          @open-request-consumed="requestedPluginKey = ''" @view-change="pluginView = $event"
         />
       </div>
       <div
@@ -2366,6 +2367,9 @@ onBeforeUnmount(() => {
 .agent-editor__reset:disabled { background: transparent; color: var(--dl-text-disabled); cursor: not-allowed; }
 /* 限定辅助文本的绝对定位参照,长内容的静态位置不能撑出外壳滚动条。 */
 .agent-editor__body { position: relative; flex: 1; min-width: 0; min-inline-size: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; }
+.agent-editor__body--plugin-install { display: flex; flex-direction: column; overflow-y: hidden; }
+.agent-editor__body--plugin-install > .agent-editor__panel--plugins { flex: 1; min-block-size: 0; }
+.agent-editor__panel--plugins > :deep(.agent-plugins[data-view='install']) { block-size: 100%; }
 .agent-editor__body::-webkit-scrollbar { width: var(--dl-space-1); }
 .agent-editor__body::-webkit-scrollbar-thumb { background: var(--dl-border-strong); border-radius: var(--dl-radius-pill); }
 .agent-editor__body::-webkit-scrollbar-track { background: transparent; }

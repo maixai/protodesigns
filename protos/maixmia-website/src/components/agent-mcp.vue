@@ -491,7 +491,7 @@ onBeforeUnmount(() => { isAlive.value = false })
       <p class="mcp-description">{{ t.workspace.mcp.addHint.replace('{name}', agentName) }}</p>
       <div class="mcp-field"><label :for="`${sectionPrefix}-name`">{{ t.workspace.mcp.name }}</label><NInput v-model:value="addName" :disabled="busy" :placeholder="t.workspace.mcp.namePlaceholder" :input-props="{ id: `${sectionPrefix}-name`, spellcheck: false, autocomplete: 'off' }" /><p class="mcp-hint">{{ t.workspace.mcp.nameHint }}</p></div>
       <div class="mcp-field"><label :for="`${sectionPrefix}-display-name`">{{ t.workspace.mcp.displayName }}</label><NInput v-model:value="addDisplayName" :disabled="busy" :placeholder="t.workspace.mcp.displayNamePlaceholder" :input-props="{ id: `${sectionPrefix}-display-name` }" /></div>
-      <div class="mcp-field"><label :for="`${sectionPrefix}-transport`">{{ t.workspace.mcp.transportLabel }}</label><select :id="`${sectionPrefix}-transport`" v-model="addTransport" class="mcp-select" :disabled="busy"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select></div>
+      <div class="mcp-field"><label :for="`${sectionPrefix}-transport`">{{ t.workspace.mcp.transportLabel }}</label><div class="mcp-select-wrap"><select :id="`${sectionPrefix}-transport`" v-model="addTransport" class="mcp-select" :disabled="busy"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select><DliIcon class="mcp-select-chevron" name="chevronDown" size="sm" /></div></div>
       <div class="mcp-field"><label :for="`${sectionPrefix}-endpoint`">{{ t.workspace.mcp.endpointLabel }}</label><NInput v-model:value="addEndpoint" :disabled="busy" :placeholder="t.workspace.mcp.endpointPlaceholder" :input-props="{ id: `${sectionPrefix}-endpoint`, spellcheck: false, autocomplete: 'off' }" /></div>
       <div class="mcp-actions"><button type="submit" class="mcp-action" :disabled="busy">{{ busy ? t.workspace.mcp.adding : t.workspace.mcp.submitAdd }}</button><button type="button" class="mcp-action" :disabled="busy" @click="back">{{ t.workspace.mcp.cancel }}</button></div>
     </form>
@@ -566,7 +566,12 @@ onBeforeUnmount(() => { isAlive.value = false })
 .mcp-field { display: grid; gap: var(--dl-space-2); }
 .mcp-field label { font-weight: 500; }
 .mcp-field :deep(.n-input__input-el) { min-block-size: var(--dl-target-size); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
-.mcp-select { inline-size: 100%; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
+/* 原生 select 的箭头由浏览器贴在控件右缘,和字段内距脱节;改用自绘 chevron:
+   箭头与文字共用一档右侧内距,同时给文本预留箭头宽度,避免两者相撞。 */
+.mcp-select-wrap { position: relative; display: block; min-inline-size: 0; }
+.mcp-select { appearance: none; inline-size: 100%; min-block-size: var(--dl-target-size); padding-block: 0; padding-inline: var(--dl-space-3) calc(var(--dl-space-3) + var(--dl-icon-sm) + var(--dl-space-1)); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); cursor: pointer; }
+.mcp-select-chevron { position: absolute; inset-inline-end: var(--dl-space-3); inset-block-start: 50%; transform: translateY(-50%); color: var(--dl-text-tertiary); pointer-events: none; }
+.mcp-select:disabled + .mcp-select-chevron { color: var(--dl-text-disabled); }
 .agent-mcp button:hover:not(:disabled) { background: var(--dl-bg-hover); }
 .agent-mcp button:focus-visible, .mcp-select:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
 .agent-mcp button:active:not(:disabled) { background: var(--dl-bg-sunken); }

@@ -364,11 +364,24 @@ export async function listInstalledPlugins(scope: PluginInstallScopeId, ownerId:
   return { ok: true, value: installed }
 }
 
-export async function installPlugin(scope: PluginInstallScopeId, ownerId: string, marketplaceId: string, pluginId: string): Promise<Result<InstalledPlugin>> {
+function pluginConfigError(field: string, reason: 'required' | 'number' | 'choice'): Error {
+  const copy = t.value.workspace.plugins
+  const template = reason === 'required' ? copy.configRequiredField : reason === 'number' ? copy.configNumberField : copy.configChoiceField
+  return new Error(template.replace('{field}', field))
+}
+
+export async function installPlugin(
+  scope: PluginInstallScopeId,
+  ownerId: string,
+  marketplaceId: string,
+  pluginId: string,
+  values: readonly PluginConfigValue[] = [],
+): Promise<Result<InstalledPlugin>> {
   await delay()
-  const installed = mockInstallPlugin(scope, ownerId, marketplaceId, pluginId)
-  if (installed === null) return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  return { ok: true, value: installed }
+  const result = mockInstallPlugin(scope, ownerId, marketplaceId, pluginId, values)
+  if (result.status === 'missing') return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
+  if (result.status === 'invalid') return { ok: false, error: pluginConfigError(result.field, result.reason) }
+  return { ok: true, value: result.installed }
 }
 
 export async function uninstallPlugin(scope: PluginInstallScopeId, ownerId: string, marketplaceId: string, pluginId: string): Promise<Result<string>> {
@@ -410,7 +423,7 @@ export async function savePluginConfig(
   await delay()
   const result = mockSavePluginConfig(scope, ownerId, marketplaceId, pluginId, values)
   if (result.status === 'missing') return { ok: false, error: new Error(t.value.workspace.plugins.invalidPlugin) }
-  if (result.status === 'invalid') return { ok: false, error: new Error(t.value.workspace.plugins.configRequired) }
+  if (result.status === 'invalid') return { ok: false, error: pluginConfigError(result.field, result.reason) }
   return { ok: true, value: result.installed }
 }
 

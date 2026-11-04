@@ -35,6 +35,46 @@ test('@area:identity 文件选择器取消不会关闭账户设置', async ({ pa
   await expect(dialog).not.toBeVisible()
 })
 
+test('@area:identity 通行密钥页中文文案、⋯ 无底板与菜单单边框', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  await page.locator('.workspace-dock__settings-trigger').click()
+  await page.locator('[data-settings-section="accountSecurity"]').click()
+  const dialog = page.locator('#workspace-account-security-dialog')
+  const tab = dialog.getByRole('tab', { name: '通行密钥', exact: true })
+  await expect(tab).toBeVisible()
+  await tab.click()
+  await expect(dialog.getByRole('heading', { name: /^通行密钥/ })).toBeVisible()
+  await expect(dialog).not.toContainText('Passkey')
+
+  // 行尾 ⋯ 不再使用基础按钮的描边与悬停底色,只保留 44px 命中区。
+  const action = dialog.locator('.account-security__menu-wrap > .account-security__icon-button').first()
+  await expect(action).toBeVisible()
+  const readAction = async (): Promise<{ border: string; background: string; width: number; height: number }> => action.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const rect = element.getBoundingClientRect()
+    return { border: style.borderTopWidth, background: style.backgroundColor, width: rect.width, height: rect.height }
+  })
+  const resting = await readAction()
+  expect(resting.border).toBe('0px')
+  expect(resting.background).toBe('rgba(0, 0, 0, 0)')
+  expect(resting.width).toBeGreaterThanOrEqual(44)
+  expect(resting.height).toBeGreaterThanOrEqual(44)
+  await action.hover()
+  const hovered = await readAction()
+  expect(hovered.border).toBe('0px')
+  expect(hovered.background).toBe('rgba(0, 0, 0, 0)')
+
+  // 菜单表面只有外层一条边框;内层菜单项不再重复描边。
+  await action.click()
+  const menu = dialog.locator('.account-security__menu')
+  const item = menu.getByRole('button', { name: '移除通行密钥', exact: true })
+  await expect(item).toBeVisible()
+  expect(await menu.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('1px')
+  expect(await item.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('0px')
+})
+
 test('@area:identity 账户设置窄屏退化为固定 sheet', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await login(page)

@@ -731,20 +731,31 @@ enum PluginComponentId {
   hook,
 }
 
-// 插件可声明的配置项(Claude 插件 manifest 的 userConfig):密钥、端点、开关等。
-// secret 的 value 永远以掩码返回,isSet 告诉界面「已经保存过」;保存时留空表示保持原值。
+// 插件可声明的配置项(Claude 插件 manifest 的 userConfig):文本、密钥、数值、开关与单选。
+// 安装期与安装后共用这一份声明;配置值始终以字符串传输,number 只在输入与存储边界校验。
 enum PluginConfigTypeId {
   text,
   secret,
+  number,
   boolean,
+  choice,
 }
 
-model PluginConfigField {
+model PluginConfigSchema {
   key: string;
   label: string;
   description: string;
   type: PluginConfigTypeId;
   required: boolean;
+  // 可编辑的初始值,不只是 placeholder;secret 不得声明默认值。
+  `default`: string;
+  // choice 的原始候选值,不翻译、不美化;其它类型为空数组。
+  options: string[];
+}
+
+// 安装后的配置 = 同一份声明 + 当前值。secret 的 value 永远以掩码返回,
+// isSet 告诉界面「已经保存过」;详情页保存时留空表示保持原值。
+model PluginConfigField extends PluginConfigSchema {
   value: string;
   isSet: boolean;
 }
@@ -782,6 +793,12 @@ model PluginConfigValue {
   value: string;
 }
 
+// 每类能力与其数量来自同一份 manifest 投影;0 表示该类能力未声明,界面不展示。
+model PluginComponentCount {
+  id: PluginComponentId;
+  count: int32;
+}
+
 // 市场目录里的插件元数据:不含安装态(安装态因 Agent / 项目而异)。
 @summary("Plugin")
 @jsonSchema
@@ -793,7 +810,9 @@ model Plugin {
   publisher: string;
   version: string;
   icon: string;
-  components: PluginComponentId[];
+  components: PluginComponentCount[];
+  // 安装期配置窗体与安装后详情共用这份 manifest 声明。
+  config: PluginConfigSchema[];
   // 插件贡献定义属于 manifest;没有 MCP 能力的插件为空数组。
   mcpServers: PluginMcpContribution[];
 }

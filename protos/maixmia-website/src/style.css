@@ -140,6 +140,7 @@
   --workspace-dialog-width-regular: 720px;
   --workspace-dialog-width-wide: 1120px;
   --workspace-dialog-max-height: 900px;
+  --workspace-dialog-viewport-max-height: 90dvh;
   --workspace-dialog-min-width: 320px;
   --workspace-dialog-min-height: 320px;
   --workspace-dialog-margin: var(--dl-space-4);

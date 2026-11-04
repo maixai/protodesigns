@@ -545,6 +545,9 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .account-security__meta { display: flex; flex-wrap: wrap; gap: var(--dl-space-1) var(--dl-space-3); }
 .account-security__menu-wrap { position: relative; flex: none; }
 .account-security__menu { position: absolute; inset-inline-end: 0; inset-block-start: 100%; z-index: var(--dl-z-overlay); inline-size: max-content; max-inline-size: calc(100vw - 2 * var(--dl-space-6)); padding: var(--dl-space-1); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); box-shadow: var(--dl-shadow-md); }
+/* 菜单项只做行内文字动作:表面层级由外层菜单的一条描边承担,内层不再重复描边;
+   内圆角按「外圆角 − 间距」收敛,避免内外两圈弧线不同心。 */
+.account-security__menu > button { border: 0; border-radius: var(--dl-radius-sm); background: transparent; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: var(--dl-space-2); min-block-size: var(--dl-target-size); min-inline-size: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); text-align: left; }
 button:hover { background: var(--dl-bg-hover); }
 button:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
@@ -571,6 +574,16 @@ button:disabled { color: var(--dl-text-disabled); background: var(--dl-bg-sunken
 /* 关闭钮贴着窗体上缘,外扩焦点环会被表面的 overflow: hidden 裁掉,改用内收环。 */
 .account-security__close:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
 .account-security__icon-button { padding: 0; }
+/* 通行证行的 ⋯ 是纯字形动作:去掉基础按钮的描边与悬停底色,只保留 44px 命中区与焦点环。 */
+.account-security__menu-wrap > .account-security__icon-button {
+  border: 0;
+  background: transparent;
+  color: var(--dl-text-secondary);
+}
+.account-security__menu-wrap > .account-security__icon-button:hover {
+  background: transparent;
+  color: var(--dl-text-primary);
+}
 .account-security__primary { background: var(--dl-accent); border-color: var(--dl-accent); color: var(--dl-text-on-accent); }
 .account-security__primary:hover { background: var(--dl-accent-hover); }
 .account-security__danger { color: var(--dl-error); }

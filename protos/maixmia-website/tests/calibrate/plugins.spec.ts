@@ -58,7 +58,7 @@ async function noOverflow(page: Page, panel: Locator): Promise<void> {
   expect(await page.locator('.agent-editor__body').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
 }
 async function touchTargets(panel: Locator): Promise<void> {
-  for (const control of await panel.locator('button:visible, [role="switch"]:visible, input:visible').all()) {
+  for (const control of await panel.locator('button:visible, [role="switch"]:visible, input:visible, select:visible').all()) {
     const box = await control.boundingBox()
     expect(box?.width ?? 0, await control.getAttribute('aria-label') ?? await control.textContent() ?? '').toBeGreaterThanOrEqual(44)
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
@@ -66,6 +66,10 @@ async function touchTargets(panel: Locator): Promise<void> {
 }
 async function startAdding(panel: Locator): Promise<Locator> {
   await marketsGroup(panel).locator('.plugin-group-head').getByRole('button', { name: '添加市场', exact: true }).click()
+  await expect(panel).toHaveAttribute('data-view', 'addMarketplace')
+  await expect(panel.locator('.plugin-groups')).toBeHidden()
+  await expect(panel.locator('.plugin-add-market')).toBeVisible()
+  await expect(panel.getByRole('button', { name: '返回插件', exact: true })).toBeVisible()
   const form = panel.locator('.add-market')
   await expect(form.getByLabel('名称', { exact: true })).toBeFocused()
   return form
@@ -102,7 +106,7 @@ test('插件归入 Agent 设置:侧栏只有项目,切换一级标签保留插�
   await page.screenshot({ path: testInfo.outputPath('plugins-1280.png') })
 })
 
-test('插件和市场同页双分组:默认展开、独立加号、键盘折叠、详情独占一页、添加草稿保留', async ({ page }) => {
+test('插件和市场同页双分组:默认展开、独立加号、键盘折叠、详情独占一页、添加市场独立子页面', async ({ page }) => {
   await login(page)
   const panel = await openPlugins(page)
   const plugins = pluginsGroup(panel)
@@ -140,13 +144,15 @@ test('插件和市场同页双分组:默认展开、独立加号、键盘折叠�
   const form = await startAdding(panel)
   await expect(markets.locator('.plugin-disclosure')).toHaveAttribute('aria-expanded', 'true')
   await form.getByLabel('名称', { exact: true }).fill('Draft market')
-  await markets.locator('.plugin-disclosure').click()
-  await expect(form).toBeHidden()
-  await markets.locator('.plugin-disclosure').click()
-  await expect(form.getByLabel('名称', { exact: true })).toHaveValue('Draft market')
-  await form.getByRole('button', { name: '取消', exact: true }).click()
+  await panel.getByRole('button', { name: '返回插件', exact: true }).click()
+  await expect(panel).toHaveAttribute('data-view', 'list')
   await expect(markets.locator('.plugin-add')).toBeFocused()
   await expect(form).toHaveCount(0)
+  const reopened = await startAdding(panel)
+  await expect(reopened.getByLabel('名称', { exact: true })).toHaveValue('')
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveAttribute('data-view', 'list')
+  await expect(markets.locator('.plugin-add')).toBeFocused()
 })
 
 test('Agent 插件启停与隔离:启停不改计数,切换 Agent 不沿用上一位插件', async ({ page }) => {
@@ -180,7 +186,8 @@ test('详情内联配置:简介与卸载同时存在,必填校验、secret 留�
   await expect(secret).toHaveAttribute('aria-required', 'true')
   await expect(secret).toHaveValue('')
   await panel.getByRole('button', { name: '保存配置', exact: true }).click()
-  await expect(panel.getByRole('alert')).toHaveText('请填写必填配置项')
+  await expect(panel.locator('.plugin-field-error')).toHaveText(['请填写必填配置项', '请填写必填配置项'])
+  await expect(secret).toBeFocused()
   await secret.fill('secret_demo_token')
   await panel.getByLabel(/Database ID/).fill('database-for-research')
   await panel.getByRole('button', { name: '保存配置', exact: true }).click()
@@ -211,7 +218,7 @@ test('详情内联配置:简介与卸载同时存在,必填校验、secret 留�
   await expect(headless).toHaveAttribute('aria-checked', 'false')
 })
 
-test('安装流程:分组加号进入、搜索安装、原地更新计数、返回列表与 Esc', async ({ page }) => {
+test('安装流程:统一窗体预填必填默认值,完成后回已安装列表并聚焦新行', async ({ page }) => {
   await login(page)
   const panel = await openPlugins(page)
   await pluginsGroup(panel).locator('.plugin-add').click()
@@ -220,20 +227,21 @@ test('安装流程:分组加号进入、搜索安装、原地更新计数、返�
   await expect(marketsGroup(panel)).toBeHidden()
   await panel.getByRole('searchbox', { name: '搜索可安装的插件' }).fill('Test Runner')
   await panel.getByRole('button', { name: '安装「Test Runner」' }).click()
-  await expect(panel.getByRole('button', { name: '安装「Test Runner」' })).toHaveCount(0)
-  await expect(panel).toHaveAttribute('data-view', 'install')
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('3')
-  await expect(panel.getByRole('button', { name: '返回插件', exact: true })).toBeFocused()
-  await page.keyboard.press('Escape')
+  const config = page.locator('.plugin-config-dialog')
+  await expect(config).toBeVisible()
+  await expect(config.getByLabel('Test command', { exact: true })).toHaveValue('pnpm test')
+  await config.getByRole('button', { name: '安装', exact: true }).click()
+  await expect(config).toHaveCount(0)
   await expect(panel).toHaveAttribute('data-view', 'list')
-  await expect(pluginsGroup(panel).locator('.plugin-add')).toBeFocused()
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('3')
   await expect(panel.locator('.compact-plugin', { hasText: 'Test Runner' })).toBeVisible()
+  await expect(panel.locator('.plugin-main', { hasText: 'Test Runner' })).toBeFocused()
   await selectAgent(page, '研究助手')
   await expect(panel).not.toContainText('Test Runner')
   await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('2')
 })
 
-test('市场同页管理:自动更新、手动更新、内联添加、重复报错、移除与折叠清确认', async ({ page }, testInfo) => {
+test('市场同页管理:自动更新、手动更新、子页面添加、重复报错、移除与折叠清确认', async ({ page }, testInfo) => {
   await login(page)
   const panel = await openPlugins(page)
   const markets = marketsGroup(panel)
@@ -251,6 +259,7 @@ test('市场同页管理:自动更新、手动更新、内联添加、重复报�
   await form.getByLabel('来源', { exact: true }).fill('github.com/maixai/agent-plugins')
   await form.getByRole('switch', { name: '自动更新', exact: true }).click()
   await form.getByRole('button', { name: '添加市场', exact: true }).click()
+  await expect(panel).toHaveAttribute('data-view', 'list')
   const mia = panel.locator('.market-row', { hasText: 'Mia Labs' })
   await expect(mia).toBeVisible()
   await expect(markets.locator('.plugin-disclosure')).toHaveText('插件市场3')
@@ -261,7 +270,8 @@ test('市场同页管理:自动更新、手动更新、内联添加、重复报�
   await duplicate.getByLabel('来源', { exact: true }).fill('github.com/maixai/agent-plugins')
   await duplicate.getByRole('button', { name: '添加市场', exact: true }).click()
   await expect(panel.getByRole('alert')).toHaveText('这个市场已经添加过了')
-  await duplicate.getByRole('button', { name: '取消', exact: true }).click()
+  await panel.getByRole('button', { name: '返回插件', exact: true }).click()
+  await expect(markets.locator('.plugin-add')).toBeFocused()
   await mia.getByRole('button', { name: '移除市场', exact: true }).click()
   await expect(mia.locator('.plugin-confirm')).toContainText('0 个插件')
   await markets.locator('.plugin-disclosure').click()
@@ -296,7 +306,7 @@ test('详情更新与卸载:不跳配置页,行内确认取消及确认卸载并
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })
 
-test('空态:无插件与无市场双入口,安装页可返回同页添加,其它 Agent 不受影响', async ({ page }, testInfo) => {
+test('空态:无插件与无市场双入口,安装页可进入添加子页面,其它 Agent 不受影响', async ({ page }, testInfo) => {
   await login(page)
   const panel = await openPlugins(page)
   for (const name of ['Anthropic Plugins', 'Community Registry']) await removeMarket(panel, name)
@@ -308,7 +318,8 @@ test('空态:无插件与无市场双入口,安装页可返回同页添加,其�
   await pluginsGroup(panel).locator('.plugin-state').getByRole('button', { name: '安装插件' }).click()
   await expect(panel).toHaveAttribute('data-view', 'install')
   await panel.getByRole('button', { name: '添加市场', exact: true }).click()
-  await expect(panel).toHaveAttribute('data-view', 'list')
+  await expect(panel).toHaveAttribute('data-view', 'addMarketplace')
+  await expect(panel.locator('.plugin-groups')).toBeHidden()
   await expect(panel.locator('.add-market').getByLabel('名称', { exact: true })).toBeFocused()
   await selectAgent(page, '研究助手')
   await expect(panel.locator('.compact-plugin')).toHaveCount(2)
@@ -326,8 +337,14 @@ test('无配置插件详情只展示简介与卸载,移除来源市场后安全�
   await pluginsGroup(panel).locator('.plugin-add').click()
   await panel.getByRole('searchbox', { name: '搜索可安装的插件' }).fill('Release Notes')
   await panel.getByRole('button', { name: '安装「Release Notes」' }).click()
+  const review = page.locator('.plugin-config-dialog')
+  await expect(review).toBeVisible()
+  await expect(review).toContainText('Mia Labs')
+  await expect(panel).toHaveAttribute('data-view', 'install')
+  await review.getByRole('button', { name: '安装', exact: true }).click()
+  await expect(review).toHaveCount(0)
+  await expect(panel).toHaveAttribute('data-view', 'list')
   await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('3')
-  await panel.getByRole('button', { name: '返回插件', exact: true }).click()
   await openDetail(panel, 'Release Notes')
   await expect(panel.locator('.plugin-detail > .plugin-description')).toHaveText('Collects merged changes and drafts release notes by audience.')
   await expect(panel.locator('.plugin-config')).toHaveCount(0)
@@ -443,7 +460,7 @@ for (const width of [375, 768, 1280]) {
     await noOverflow(page, panel)
     if (width < 1024) await touchTargets(panel)
     await page.screenshot({ path: testInfo.outputPath(`plugins-market-${width}.png`) })
-    await form.getByRole('button', { name: '取消', exact: true }).click()
+    await panel.getByRole('button', { name: '返回插件', exact: true }).click()
     await pluginsGroup(panel).locator('.plugin-add').click()
     await expect(panel).toHaveAttribute('data-view', 'install')
     await expect(panel.locator('.install-row').first()).toBeVisible()
@@ -456,7 +473,11 @@ for (const width of [375, 768, 1280]) {
       const first = page.locator('.agent-context-switcher__trigger')
       await first.focus()
       await page.keyboard.press('Shift+Tab')
+      await expect(panel.getByRole('combobox', { name: '筛选插件市场' })).toBeFocused()
+      await page.keyboard.press('Shift+Tab')
       await expect(panel.getByRole('searchbox', { name: '搜索可安装的插件' })).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(panel.getByRole('combobox', { name: '筛选插件市场' })).toBeFocused()
       await page.keyboard.press('Tab')
       await expect(first).toBeFocused()
       await panel.getByRole('button', { name: '返回插件', exact: true }).click()

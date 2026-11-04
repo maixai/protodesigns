@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/vue3-vite'
-import { ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import AgentEditorDialog from './agent-editor-dialog.vue'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
@@ -59,6 +59,40 @@ export const 设置头像: Story = {
       return { agent, isOpen, savedToken, save }
     },
     template: '<div class="dl-scope dl-scope--dark" style="padding: var(--dl-space-4); background: var(--dl-bg-base);"><template v-if="agent"><AgentContextSwitcher :value="agent.id" :agents="[agent]" variant="sidebar" @settings="isOpen = true" /><AgentEditorDialog :open="isOpen" :focus-identity="false" :agent="agent" :can-delete="false" :busy="false" error="" :saved-token="savedToken" @submit="save" @cancel="isOpen = false" /></template></div>',
+  }),
+}
+
+function toolsStory(tab: 'plugins' | 'mcp'): Story {
+  return {
+    render: (args) => ({
+      components: { AgentContextSwitcher, AgentEditorDialog },
+      setup() {
+        const agent = ref<AgentSummary | undefined>(args.agents[0])
+        const isOpen = ref(false)
+        onMounted(async () => {
+          isOpen.value = true
+          await nextTick()
+          document.querySelector<HTMLButtonElement>(`[id$="tab-${tab}"]`)?.click()
+        })
+        return { agent, isOpen }
+      },
+      template: '<div class="dl-scope dl-scope--dark"><template v-if="agent"><AgentContextSwitcher :value="agent.id" :agents="[agent]" variant="sidebar" @settings="isOpen = true" /><AgentEditorDialog :open="isOpen" :focus-identity="false" :agent="agent" :can-delete="false" :busy="false" error="" :saved-token="0" @cancel="isOpen = false" /></template></div>',
+    }),
+  }
+}
+export const 设置插件页: Story = toolsStory('plugins')
+export const 设置MCP页: Story = toolsStory('mcp')
+
+export const 设置需处理: Story = {
+  ...侧栏档,
+  args: { settingsNeedsAttention: true },
+  render: (args) => ({
+    components: { AgentContextSwitcher },
+    setup() {
+      onMounted(() => document.querySelector<HTMLButtonElement>('.agent-context-switcher__trigger')?.click())
+      return { args }
+    },
+    template: '<div class="dl-scope dl-scope--dark" style="inline-size: 300px; padding: var(--dl-space-4); background: var(--dl-bg-base);"><AgentContextSwitcher v-bind="args" /></div>',
   }),
 }
 

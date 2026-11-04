@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// 项目模型面板:只保存模型覆盖;Agent 当前配置在 follow 与 custom 下都显示为只读上下文。
-// 面板挂载即加载(与另外两个域并行预取),切换 Tab 不卸载、不重置草稿;
+// 项目模型面板:只保存模型覆盖。模式开关是正文的第一个可交互元素;
+// 跟随态只读呈现 Agent 的生效值,自定义态才出现来源 / 模型 / 高级三个二级标签。
+// 面板挂载即加载(与权限域并行预取),切换 Tab 不卸载、不重置草稿;
 // 保存由统一设置窗体的底部动作区触发。
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ModelGateway, ModelSubscription } from '../contracts/generated/agent-model-config'
@@ -12,9 +13,9 @@ import { EFFORT_LEVELS, FALLBACK_PRIORITY, MODELS, SUBSCRIPTION_PROVIDER_LABELS,
 import type { ProjectSourceResolution } from '../data/project-model-settings'
 import { completeProjectModelOverrides, hasProjectModelCustomValues, projectModelSupportsEffort, resolveProjectModelSource, validateProjectModelOverrides } from '../data/project-model-settings'
 import { useI18n } from '../i18n'
-import AgentReadonlyContext from './agent-readonly-context.vue'
 import DliIcon from './dl-icon.vue'
 import ModelSourceContext from './model-source-context.vue'
+import ProjectFollowSummary from './project-follow-summary.vue'
 import type { ProjectPanelState } from './project-settings-state'
 import SegmentedControl from './segmented-control.vue'
 import type { SegmentedOption } from './segmented-control.vue'
@@ -111,6 +112,12 @@ const sourceRows = computed<SourceRow[]>(() => {
 })
 const selectedSourceRow = computed(() => sourceRows.value.find((row) => row.id === selectedSourceId.value))
 const hasMissingSelectedSource = computed(() => selectedSourceId.value !== '' && selectedSourceRow.value === undefined)
+const agentSourceRow = computed(() => sourceRows.value.find((row) => row.id === props.agent.model.source.activeSourceId))
+const agentSourceLine = computed(() => t.value.workspace.projectSettings.agentSourceLine
+  .replace('{value}', agentSourceRow.value === undefined ? props.agent.model.source.activeSourceId : sourceName(agentSourceRow.value)))
+const agentModelLine = computed(() => t.value.workspace.projectSettings.agentModelLine
+  .replace('{model}', displayModelName(props.agent.model.defaultModelId))
+  .replace('{effort}', props.agent.model.defaultEffortLevel || t.value.workspace.projectSettings.effortModelDefaultValue))
 function sourceName(row: SourceRow): string {
   return row.kind === 'subscription' ? `${SUBSCRIPTION_PROVIDER_LABELS[row.subscription.provider]} · ${subscriptionLabel(row.subscription)}` : row.gateway.name
 }
@@ -276,22 +283,26 @@ defineExpose({ save })
 
 <template>
   <div class="project-model">
-    <p class="project-config__scope">{{ t.workspace.projectSettings.modelScopeHint }}</p>
-    <AgentReadonlyContext kind="model" :agent="agent" />
     <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
     <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
     <template v-else>
+      <!-- 模式开关是正文的第一个可交互元素:说明文字放在它下方,不在上方堆叠。 -->
       <section class="project-model__mode" :aria-labelledby="`${dialogId}-mode-title`">
-        <div class="project-model__mode-copy"><h3 :id="`${dialogId}-mode-title`">{{ t.workspace.projectSettings.modelMode }}</h3><p :id="modelSectionHintId" class="project-model__hint">{{ modelMode === 'follow' ? t.workspace.projectSettings.followModeHint : t.workspace.projectSettings.customModeHint }}</p></div>
-        <SegmentedControl :model-value="modelMode" :options="modelModeOptions" :label="t.workspace.projectSettings.modelMode" @update:model-value="onModelModeChange" />
+        <div class="project-model__mode-head">
+          <h3 :id="`${dialogId}-mode-title`">{{ t.workspace.projectSettings.modelMode }}</h3>
+          <SegmentedControl :model-value="modelMode" :options="modelModeOptions" :label="t.workspace.projectSettings.modelMode" @update:model-value="onModelModeChange" />
+        </div>
+        <p :id="modelSectionHintId" class="project-model__hint">{{ modelMode === 'follow' ? t.workspace.projectSettings.followModeHint : t.workspace.projectSettings.customModeHint }}</p>
       </section>
-      <template v-if="modelMode === 'custom'">
+      <ProjectFollowSummary v-if="modelMode === 'follow'" kind="model" :agent="agent" />
+      <template v-else>
         <div ref="modelSubtabsRef" class="project-model__subtabs">
           <div class="project-model__subtabs-track" role="tablist" :aria-label="t.workspace.projectSettings.modelSectionsLabel" @keydown="onModelSectionKeydown">
             <button v-for="section in modelSections" :id="`${dialogId}-model-tab-${section.id}`" :key="section.id" type="button" role="tab" :data-section="section.id" :aria-selected="activeModelSection === section.id" :aria-controls="`${dialogId}-model-panel-${section.id}`" :tabindex="activeModelSection === section.id ? 0 : -1" @click="activateModelSection(section.id, false)">{{ section.label }}</button>
           </div>
         </div>
         <div v-show="activeModelSection === 'source'" :id="`${dialogId}-model-panel-source`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-source`">
+          <p class="project-model__agent-line">{{ agentSourceLine }}</p>
           <p class="project-model__hint">{{ t.workspace.projectSettings.sourceHint }}</p>
           <div class="project-model__source-list" role="radiogroup" :aria-label="t.workspace.projectSettings.source" :aria-describedby="sourceErrorMessage ? sourceErrorId : undefined">
             <label v-if="hasMissingSelectedSource" class="project-model__source-option" data-disabled="true"><input v-model="selectedSourceId" type="radio" name="project-model-source" :value="selectedSourceId" disabled :aria-describedby="sourceErrorId"><span class="project-model__source-copy"><span class="project-model__source-head"><span class="project-model__source-name"><code>{{ selectedSourceId }}</code></span><span class="project-model__source-secondary">{{ t.workspace.projectSettings.sourceMissingShort }}</span></span></span></label>
@@ -304,7 +315,7 @@ defineExpose({ save })
         </div>
         <div v-show="activeModelSection === 'model'" :id="`${dialogId}-model-panel-model`" class="project-model__subpanel" role="tabpanel" :aria-labelledby="`${dialogId}-model-tab-model`">
           <ModelSourceContext :name="selectedSourceName" account="" :usage="selectedSourceUsage" :is-draft-changed="false" :disabled="isBusy" @change="activateModelSection('source', true)" />
-          <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.modelGroup }}</h3></div><div class="project-model__block-body">
+          <section class="project-model__block"><div class="project-model__block-head"><h3>{{ t.workspace.projectSettings.modelGroup }}</h3><p class="project-model__agent-line">{{ agentModelLine }}</p></div><div class="project-model__block-body">
             <div class="project-model__row"><label :for="`${dialogId}-model`">{{ t.workspace.projectSettings.modelDefault }}</label><SelectField><select :id="`${dialogId}-model`" v-model="modelId" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="modelErrorMessage ? 'true' : undefined" :aria-describedby="modelErrorMessage ? modelErrorId : undefined"><option v-for="option in defaultModelOptions" :key="option" :value="option">{{ sourceModelIds.includes(option) ? displayModelName(option) : unavailableModelLabel(option) }} · {{ option }}</option></select></SelectField><p v-if="modelErrorMessage" :id="modelErrorId" class="project-config__error project-model__row-message" role="alert">{{ modelErrorMessage }}</p></div>
             <div class="project-model__row"><div><label :for="`${dialogId}-effort`">{{ t.workspace.projectSettings.effort }}</label><p v-if="isEffortUnsupported" :id="effortHintId" class="project-model__hint">{{ t.workspace.projectSettings.effortUnsupportedHint }}</p></div><SelectField><select :id="`${dialogId}-effort`" v-model="effortLevel" class="field__input field__select" :disabled="isBusy || sourceModelIds.length === 0" :aria-invalid="effortErrorMessage ? 'true' : undefined" :aria-describedby="effortErrorMessage ? effortErrorId : isEffortUnsupported ? effortHintId : undefined"><option value="">{{ t.workspace.projectSettings.effortModelDefaultValue }}</option><option v-for="level in EFFORT_LEVELS" :key="level" :value="level" :disabled="isEffortUnsupported">{{ level }}</option></select></SelectField><p v-if="effortErrorMessage" :id="effortErrorId" class="project-config__error project-model__row-message" role="alert">{{ effortErrorMessage }}</p></div>
           </div></section>
@@ -328,8 +339,9 @@ defineExpose({ save })
 /* 面板内的断点按内容区实际宽度判定,不复用视口断点:嵌在带左栏的窗体里时两者不等。 */
 .project-model { display: grid; gap: var(--dl-space-4); min-width: 0; container-type: inline-size; }
 .project-model__hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); }
-.project-model__mode { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--dl-space-3); padding-block-end: var(--dl-space-4); border-block-end: var(--dl-border-width) solid var(--dl-border-subtle); }
-.project-model__mode-copy { display: grid; flex: 1 1 calc(var(--dl-space-12) * 5); gap: var(--dl-space-1); min-width: 0; }
+.project-model__agent-line { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.project-model__mode { display: grid; gap: var(--dl-space-2); padding-block-end: var(--dl-space-3); border-block-end: var(--dl-border-width) solid var(--dl-border-subtle); }
+.project-model__mode-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2) var(--dl-space-3); }
 .project-model__mode h3, .project-model__block-head h3 { font-size: var(--dl-font-size-sm); font-weight: 500; line-height: var(--dl-line-snug); letter-spacing: var(--dl-tracking-label); }
 .project-model__subpanel { display: grid; gap: var(--dl-space-3); min-width: 0; }
 .project-model__subtabs { position: sticky; inset-block-start: calc(-1 * var(--dl-space-1)); z-index: var(--dl-z-sticky); min-inline-size: 0; padding-block: var(--dl-space-1); background: var(--dl-bg-elevated); }

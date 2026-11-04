@@ -1602,11 +1602,10 @@ test('侧栏切换 Agent:项目列表随之更换', async ({ page }) => {
   await login(page)
   await waitForStable(page)
   const projects = page.locator('.workspace-projects')
-  // 侧栏顶部是项目 / 插件 / MCP 三个平级视图 tab;默认项目列表中每个 Agent 有两个项目。
+  // 侧栏只保留项目导航,不再用 tab 表达单一视图。
   await expect(page.getByRole('button', { name: '关闭侧栏' })).toHaveCount(0)
-  await expect(projects.getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
-  // 只数顶层平级视图;项目内部始终只有文件树,没有内容 tab。
-  await expect(projects.locator(':scope > .view-tabs').getByRole('tab')).toHaveCount(3)
+  await expect(projects).toHaveAccessibleName('项目')
+  await expect(projects.locator('[role="tablist"]')).toHaveCount(0)
   await expect(projects.locator('.project-item').getByRole('tab')).toHaveCount(0)
   await expect(projects.locator('.project-item')).toHaveCount(2)
   await selectAgent(page, AGENT_NAMES['zh-CN'].research)
@@ -4420,30 +4419,18 @@ test('候选目录文件数与已打开项目的条目数对齐', async ({ page 
   await expect(dialog.locator('.picker__item', { hasText: 'weekly-report' }).locator('.picker__meta')).toContainText('23 个文件')
 })
 
-// 侧栏视图 tab:项目、Agent 插件与 MCP 平级,共用 28px 文字带 + 1px 青瓷下划线。
+// 侧栏只有项目导航:区域名称可读,不制造单一视图的 tab 语义。
 for (const width of [375, 1280]) {
-  test(`侧栏视图 tab:28px 文字带 + 1px 下划线(三个平级视图) @${width}`, async ({ page }) => {
+  test(`侧栏项目导航:无 tab 角色且列表不横向溢出 @${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: VIEWPORT_HEIGHT })
     await login(page)
     await waitForStable(page)
     if (width === 375) await page.getByRole('button', { name: '打开侧栏' }).click()
-    const tabs = page.getByRole('tablist', { name: '侧栏视图' })
-    await expect(tabs).toBeVisible()
-    const projects = tabs.getByRole('tab', { name: /^项目/ })
-    await expect(tabs.getByRole('tab')).toHaveCount(3)
-    await expect(projects).toHaveAttribute('aria-selected', 'true')
-    await expect(tabs.getByRole('tab', { name: /^插件/ })).toHaveCount(1)
-    const box = await projects.boundingBox()
-    expect(box?.height ?? 0, '视图 tab 高度 = 28').toBeGreaterThanOrEqual(27)
-    expect(box?.height ?? 0, '视图 tab 高度 = 28').toBeLessThanOrEqual(29)
-    const underline = await projects.evaluate((element) => {
-      const style = getComputedStyle(element, '::after')
-      return { height: style.height, background: style.backgroundColor, transform: style.transform }
-    })
-    expect(underline.height).toBe('1px')
-    expect(underline.background).not.toBe('rgba(0, 0, 0, 0)')
-    expect(underline.transform).not.toBe('none')
-    await expect(page.locator('#sidebar-view-panel-projects')).toBeVisible()
+    const projects = page.locator('.workspace-projects')
+    await expect(projects).toHaveAccessibleName('项目')
+    await expect(projects.locator('[role="tablist"], [role="tab"], [role="tabpanel"]')).toHaveCount(0)
+    await expect(projects.locator('.project-item')).toHaveCount(2)
+    expect(await projects.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
   })
 }
 
@@ -8596,7 +8583,9 @@ for (const width of [375, 768, 1280]) {
     await login(page)
     await waitForStable(page)
     await openSidebarIfNarrow(page, width)
-    await page.getByRole('tablist', { name: '侧栏视图' }).getByRole('tab', { name: /^插件/ }).click()
+    await page.locator('.agent-context-switcher__trigger').click()
+    await page.locator('.agent-context-switcher__settings').click()
+    await page.getByRole('dialog', { name: 'Agent 设置', exact: true }).getByRole('tab', { name: '插件', exact: true }).click()
     const plugins = page.locator('.agent-plugins')
     await expect(plugins.locator('.plugin-main')).toHaveCount(2)
     await plugins.locator('[data-group="markets"] .plugin-group-head').getByRole('button', { name: '添加市场', exact: true }).click()
@@ -9758,10 +9747,10 @@ test('新建对话:点浮层外部取消,什么都不创建', async ({ page }) =
   const tabsBefore = await page.locator('.tab-slot').count()
   await chooseNewConversation(page)
   await expect(page.locator(PICKER)).toHaveCount(1)
-  // 点侧栏视图 tab 条右端的空白处(它没有任何动作,不会改变工作台状态)。
-  const tabStrip = await page.getByRole('tablist', { name: '侧栏视图' }).boundingBox()
-  expect(tabStrip).not.toBeNull()
-  if (tabStrip !== null) await page.mouse.click(tabStrip.x + tabStrip.width - 8, tabStrip.y + tabStrip.height / 2)
+  // 点侧栏项目区空白处(它没有任何动作,不会改变工作台状态)。
+  const projectRegion = await page.locator('.workspace-projects').boundingBox()
+  expect(projectRegion).not.toBeNull()
+  if (projectRegion !== null) await page.mouse.click(projectRegion.x + projectRegion.width - 8, projectRegion.y + 8)
   await expect(page.locator(PICKER), '点外部即取消').toHaveCount(0)
   await expect(page.locator('.tab-slot'), '什么都不创建').toHaveCount(tabsBefore)
 })

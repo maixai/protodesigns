@@ -8,27 +8,27 @@ import * as mcpApi from '../../src/api/agent-mcp'
 import type { Result } from '../../src/api/result'
 import type { ProjectPermissionGroup } from '../../src/contracts/generated/project-permission-group'
 import { mockProjectModelSettings } from '../../src/mocks/project-settings'
-import { mockListProjectPermissionGroup } from '../../src/mocks/agent-permissions'
-import { mockListProjectMcpServers } from '../../src/mocks/agent-mcp'
+import { mockGetAgentPermissions, mockListProjectPermissionGroup } from '../../src/mocks/agent-permissions'
 import { mockAgentSummaries, mockProjects } from '../../src/mocks/workspace'
+import { mockListAgentMcpServers, mockListProjectMcpServers } from '../../src/mocks/agent-mcp'
 import { useI18n } from '../../src/i18n'
 
 vi.mock('../../src/api/project-settings', () => ({ getProjectModelSettings: vi.fn(), saveProjectModelSettings: vi.fn() }))
-vi.mock('../../src/api/agent-permissions', () => ({ listProjectPermissionGroup: vi.fn(), saveProjectPermissionGroup: vi.fn() }))
+vi.mock('../../src/api/agent-permissions', () => ({
+  getAgentPermissions: vi.fn(), listProjectPermissionGroup: vi.fn(), saveProjectPermissionGroup: vi.fn(),
+}))
+
 vi.mock('../../src/api/agent-mcp', () => ({
-  listProjectMcpServers: vi.fn(), saveProjectMcpGroup: vi.fn(), authenticateProjectMcpServer: vi.fn(), reconnectProjectMcpServer: vi.fn(),
+  listProjectMcpServers: vi.fn(), saveProjectMcpGroup: vi.fn(), authenticateProjectMcpServer: vi.fn(), reconnectProjectMcpServer: vi.fn(), listAgentMcpServers: vi.fn(),
 }))
 
 const agent = mockAgentSummaries()[0]
 const project = agent === undefined ? undefined : mockProjects(agent.id)[0]
 if (agent === undefined || project === undefined) throw new Error('Missing project settings fixture')
 
-const stubs = { AgentReadonlyContext: true }
-
 function mountDialog(): VueWrapper {
   return mount(ProjectSettingsDialog, {
     props: { open: true, agent, project },
-    global: { stubs },
     attachTo: document.body,
   })
 }
@@ -49,6 +49,10 @@ async function dirtyPermissions(wrapper: VueWrapper): Promise<void> {
   await flushPromises()
 }
 
+function firstInteractive(root: Element | null): Element | null {
+  return root?.querySelector('button, input, select, textarea') ?? null
+}
+
 describe('project-settings-dialog', () => {
   beforeEach(() => {
     useI18n().setLocale('zh-CN')
@@ -57,15 +61,16 @@ describe('project-settings-dialog', () => {
     vi.mocked(modelApi.saveProjectModelSettings).mockImplementation(async (_path, settings) => ({ ok: true, value: structuredClone(settings) }))
     vi.mocked(permissionApi.listProjectPermissionGroup).mockImplementation(async (path) => ({ ok: true, value: mockListProjectPermissionGroup(path) }))
     vi.mocked(permissionApi.saveProjectPermissionGroup).mockImplementation(async (_path, value) => ({ ok: true, value }))
+    vi.mocked(permissionApi.getAgentPermissions).mockImplementation(async (id) => ({ ok: true, value: mockGetAgentPermissions(id) }))
     vi.mocked(mcpApi.listProjectMcpServers).mockImplementation(async (path) => ({ ok: true, value: mockListProjectMcpServers(path) }))
-    vi.mocked(mcpApi.saveProjectMcpGroup).mockImplementation(async (path, servers) => ({ ok: true, value: { path, servers: structuredClone(servers) } }))
+    vi.mocked(mcpApi.listAgentMcpServers).mockImplementation(async (id) => ({ ok: true, value: mockListAgentMcpServers(id) }))
   })
   afterEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
   })
 
-  it('只有一个窗体与一个 Tab 控件,打开时并行预取三个域', async () => {
+  it('只有一个窗体与一个 Tab 控件,打开时并行预取模型与权限', async () => {
     const wrapper = mountDialog()
     await flushPromises()
     await flushPromises()
@@ -84,10 +89,102 @@ describe('project-settings-dialog', () => {
     expect(wrapper.findAll('.project-settings__panel[role="tabpanel"]')).toHaveLength(3)
     expect(modelApi.getProjectModelSettings).toHaveBeenCalledTimes(1)
     expect(permissionApi.listProjectPermissionGroup).toHaveBeenCalledTimes(1)
-    expect(mcpApi.listProjectMcpServers).toHaveBeenCalledTimes(1)
 
     // 打开后焦点落在当前 Tab,不跳进面板。
     expect(document.activeElement).toBe(tabs(wrapper)[0]?.element)
+
+    wrapper.unmount()
+  })
+
+  it('两页正文的第一个可交互元素都是模式开关,开关上方没有说明段落或 Agent 只读区块', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+    await flushPromises()
+
+    const modelPanel = wrapper.get('.project-model')
+    const modelFirst = firstInteractive(modelPanel.element)
+    expect(modelFirst?.getAttribute('role')).toBe('radio')
+    expect(modelFirst?.textContent?.trim()).toBe('跟随 Agent')
+    expect(modelPanel.find('.project-config__scope').exists()).toBe(false)
+
+    await selectTab(wrapper, 1)
+    const permissionPanel = wrapper.get('.project-permission')
+    const permissionFirst = firstInteractive(permissionPanel.element)
+    expect(permissionFirst?.getAttribute('role')).toBe('radio')
+    expect(permissionFirst?.textContent?.trim()).toBe('跟随 Agent')
+    expect(permissionPanel.find('.project-config__scope').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('模型跟随态只读呈现生效值,不出现任何可编辑控件;切回自定义恢复二级标签', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+    await flushPromises()
+
+    const modelPanel = wrapper.get('.project-model')
+    const radios = modelPanel.findAll('[role="radio"]')
+    await radios[0]?.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.follow-summary[data-kind="model"]').text()).toContain('当前生效')
+    expect(wrapper.get('.follow-summary[data-kind="model"]').text()).toContain('Claude Sonnet 5.5')
+    expect(wrapper.get('.follow-summary[data-kind="model"]').text()).toContain('回退')
+    expect(wrapper.find('.project-model input, .project-model select, .project-model textarea').exists()).toBe(false)
+    expect(wrapper.find('.project-model__subtabs').exists()).toBe(false)
+    expect(wrapper.get('.project-config__save-state').attributes('data-state')).toBe('dirty')
+
+    await radios[1]?.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.follow-summary').exists()).toBe(false)
+    expect(wrapper.findAll('.project-model__subtabs [role="tab"]')).toHaveLength(3)
+    expect(wrapper.find('.project-model select').exists()).toBe(true)
+
+    // 切回跟随并保存:payload 带 followAgent=true,保存后回到 clean。
+    await radios[0]?.trigger('click')
+    await flushPromises()
+    await wrapper.get('.project-config__buttons .dl-btn--primary').trigger('click')
+    await flushPromises()
+    expect(modelApi.saveProjectModelSettings).toHaveBeenCalledTimes(1)
+    const saved = vi.mocked(modelApi.saveProjectModelSettings).mock.calls[0]?.[1]
+    expect(saved?.model.followAgent).toBe(true)
+    expect(wrapper.get('.project-config__save-state').attributes('data-state')).toBe('saved')
+
+    wrapper.unmount()
+  })
+
+  it('权限跟随态只读呈现 Agent 模式与规则计数,不渲染编辑器;保存不因保留值失败', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+    await flushPromises()
+
+    await selectTab(wrapper, 1)
+    const permissionPanel = wrapper.get('.project-permission')
+    const radios = permissionPanel.findAll('[role="radio"]')
+    await radios[0]?.trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const summary = wrapper.get('.follow-summary[data-kind="permissions"]')
+    expect(summary.text()).toContain('默认权限模式')
+    expect(summary.text()).toContain('自动')
+    expect(summary.text()).toContain('允许 3 · 拒绝 2 · 询问 2')
+    expect(wrapper.find('.permission-editor').exists()).toBe(false)
+    expect(wrapper.find('.project-permission input, .project-permission select, .project-permission textarea').exists()).toBe(false)
+
+    // 展开可看到 Agent 规则明细。
+    const disclosure = summary.get('.follow-summary__disclosure')
+    expect(disclosure.attributes('aria-expanded')).toBe('false')
+    await disclosure.trigger('click')
+    expect(summary.get('.follow-summary__disclosure').attributes('aria-expanded')).toBe('true')
+    expect(summary.text()).toContain('Read(./.env)')
+
+    await wrapper.get('.project-config__buttons .dl-btn--primary').trigger('click')
+    await flushPromises()
+    expect(permissionApi.saveProjectPermissionGroup).toHaveBeenCalledTimes(1)
+    const saved = vi.mocked(permissionApi.saveProjectPermissionGroup).mock.calls[0]?.[1]
+    expect(saved?.followAgent).toBe(true)
+    expect(saved?.rules.length).toBeGreaterThan(0)
+    expect(wrapper.get('.project-config__save-state').attributes('data-state')).toBe('saved')
 
     wrapper.unmount()
   })
@@ -121,7 +218,6 @@ describe('project-settings-dialog', () => {
     await flushPromises()
     expect(permissionApi.saveProjectPermissionGroup).toHaveBeenCalledTimes(1)
     expect(modelApi.saveProjectModelSettings).not.toHaveBeenCalled()
-    expect(mcpApi.saveProjectMcpGroup).not.toHaveBeenCalled()
     expect(tabs(wrapper)[1]?.attributes('aria-label')).toBe('权限')
 
     wrapper.unmount()

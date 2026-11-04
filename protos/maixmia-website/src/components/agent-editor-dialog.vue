@@ -10,6 +10,8 @@ import type { AgentModelConfig } from '../contracts/generated/agent-model-config
 import type { AgentPermissions } from '../contracts/generated/agent-permissions'
 import { getAgentPermissions } from '../api/agent-permissions'
 import AgentPermissionsEditor from './agent-permissions.vue'
+import AgentPlugins from './agent-plugins.vue'
+import AgentMcp from './agent-mcp.vue'
 import type { ModelGateway, ModelSource, ModelSubscription, ModelSubscriptionProviderId } from '../contracts/generated/agent-model-config'
 import type { GatewayProbe } from '../contracts/generated/gateway-probe'
 import type { EffortLevel, ModelOption, ModelTierId } from '../data/models'
@@ -46,9 +48,11 @@ const emit = defineEmits<{
   identityUpdated: [agent: AgentSummary]
   rePair: []
   cancel: []
+  announce: [message: string]
 }>()
 
 const { t, locale } = useI18n()
+type AgentSettingsTab = 'basic' | 'model' | 'permissions' | 'plugins' | 'mcp'
 type ModelSection = 'source' | 'defaults' | 'tiers' | 'advanced'
 const MODEL_SECTIONS = ['source', 'defaults', 'tiers', 'advanced'] as const
 
@@ -63,6 +67,10 @@ interface SelectOption {
 }
 
 const dialogWindow = ref<InstanceType<typeof DialogWindow> | null>(null)
+const confirmDialogRef = ref<HTMLDialogElement | null>(null)
+const confirmKeepRef = ref<HTMLButtonElement | null>(null)
+const confirmReturnFocusRef = ref<HTMLElement | null>(null)
+const confirmOpen = ref(false)
 const name = ref('')
 const note = ref('')
 const avatarUrl = ref<AgentConfig['avatarUrl']>('')
@@ -122,7 +130,7 @@ async function removeAvatar(): Promise<void> {
   avatarButtonRef.value?.focus()
 }
 const modelConfig = ref<AgentModelConfig>(defaultModelConfig())
-const activeTab = ref<'basic' | 'model' | 'permissions'>('basic')
+const activeTab = ref<AgentSettingsTab>('basic')
 // 模型页内的三个并列分区;同一时刻只显示一个,避免展开后纵向过长。
 const activeModelSection = ref<ModelSection>('defaults')
 const bodyRef = ref<HTMLElement | null>(null)
@@ -142,7 +150,12 @@ watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
 const basicTabRef = ref<HTMLButtonElement | null>(null)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
 const permissionsTabRef = ref<HTMLButtonElement | null>(null)
+const pluginsTabRef = ref<HTMLButtonElement | null>(null)
+const mcpTabRef = ref<HTMLButtonElement | null>(null)
+const requestedPluginKey = ref('')
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
+const confirmTitleId = `${dialogId}-discard-title`
+const confirmBodyId = `${dialogId}-discard-body`
 const bodyId = `${dialogId}-body`
 const titleId = `${dialogId}-title`
 const hintId = `${dialogId}-hint`
@@ -155,7 +168,7 @@ const permissionBaseline = ref('')
 const permissionStatus = ref<'loading' | 'ready' | 'error'>('loading')
 const permissionLoadError = ref('')
 let permissionLoadVersion = 0
-const isPermissionDirty = computed(() => props.agent !== undefined && JSON.stringify(permissionDraft.value) !== permissionBaseline.value)
+const isPermissionDirty = computed(() => props.agent !== undefined && permissionStatus.value === 'ready' && JSON.stringify(permissionDraft.value) !== permissionBaseline.value)
 const permissionsReady = computed(() => props.agent === undefined || permissionStatus.value === 'ready')
 async function loadPermissions(): Promise<void> {
   const agent = props.agent
@@ -214,14 +227,27 @@ const subjectDescription = computed(() => {
   return `${admin.settingsSubjectLabel} ${agent.name} · ${connectionStatus.value?.label ?? ''}${admin.settingsSubjectSeparator}`
 })
 // 脏状态:当前规范化草稿与服务端基线比较。用户改回原值会重新变干净。
-const baselineSerialized = ref('')
+const baselineName = ref('')
+const baselineNote = ref('')
+const baselineModelSerialized = ref('')
 const baselineSourceId = ref('')
 const sourceDraftChanged = computed(() => modelConfig.value.source.activeSourceId !== baselineSourceId.value)
 const savedAt = ref('')
 const savedAnnouncement = ref('')
 const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
-const isDirty = computed(() => (isAvatarDirty.value || isPermissionDirty.value || gatewayDraftDirty.value || JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value }) !== baselineSerialized.value))
+const isBasicDirty = computed(() => isAvatarDirty.value || name.value.trim() !== baselineName.value || note.value.trim() !== baselineNote.value)
+const isModelDirty = computed(() => gatewayDraftDirty.value || JSON.stringify(modelConfig.value) !== baselineModelSerialized.value)
+const isDirty = computed(() => isBasicDirty.value || isModelDirty.value || isPermissionDirty.value)
+const usesDraftSave = computed(() => activeTab.value === 'basic' || activeTab.value === 'model' || activeTab.value === 'permissions')
+const dirtyDomains = computed(() => {
+  const copy = t.value.workspace.agentAdmin
+  return [
+    ...(isBasicDirty.value ? [copy.domainBasic] : []),
+    ...(isModelDirty.value ? [copy.tabModel] : []),
+    ...(isPermissionDirty.value ? [copy.tabPermissions] : []),
+  ]
+})
 const isValid = computed(() => name.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
 type SaveState = 'saving' | 'error' | 'saved' | 'incomplete' | 'blocked' | 'attention' | 'dirty' | 'clean'
 const saveStateKind = computed<SaveState>(() => {
@@ -1308,15 +1334,20 @@ function removeFallback(index: number): void {
   modelConfig.value = { ...modelConfig.value, fallbackModelIds: modelConfig.value.fallbackModelIds.filter((_, itemIndex) => itemIndex !== index) }
 }
 
-async function activateTab(tab: 'basic' | 'model' | 'permissions', focus = false): Promise<void> {
+async function activateTab(tab: AgentSettingsTab, focus = false): Promise<void> {
   activeTab.value = tab
   await nextTick()
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
-  if (focus) (tab === 'basic' ? basicTabRef.value : tab === 'model' ? modelTabRef.value : permissionsTabRef.value)?.focus()
+  if (!focus) return
+  const target = tab === 'basic' ? basicTabRef.value
+    : tab === 'model' ? modelTabRef.value
+      : tab === 'permissions' ? permissionsTabRef.value
+        : tab === 'plugins' ? pluginsTabRef.value : mcpTabRef.value
+  target?.focus()
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
-  const tabs: readonly ('basic' | 'model' | 'permissions')[] = props.agent === undefined ? ['basic', 'model'] : ['basic', 'model', 'permissions']
+  const tabs: readonly AgentSettingsTab[] = props.agent === undefined ? ['basic', 'model'] : ['basic', 'model', 'permissions', 'plugins', 'mcp']
   const current = tabs.indexOf(activeTab.value)
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
     : event.key === 'ArrowRight' ? (current + 1) % tabs.length
@@ -1360,6 +1391,12 @@ function onModelSectionKeydown(event: KeyboardEvent): void {
   void activateModelSection(section, true)
 }
 
+function openPluginFromMcp(pluginId: string, marketplaceId: string, pluginName: string): void {
+  requestedPluginKey.value = `${pluginId}@${marketplaceId}`
+  void activateTab('plugins')
+  emit('announce', t.value.workspace.mcp.openedPlugin.replace('{name}', pluginName))
+}
+
 function reset(): void {
   abortAuthorization(false)
   name.value = props.agent?.name ?? ''
@@ -1396,9 +1433,12 @@ function reset(): void {
   subscriptionCheckOk.value = true
   gatewayReturnFocusId.value = ''
   closeSourceMenu()
+  requestedPluginKey.value = ''
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
   // 打开时冻结基线:之后父组件刷新 Agent 也不会在用户编辑中静默改回表单。
-  baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
+  baselineName.value = name.value.trim()
+  baselineNote.value = note.value.trim()
+  baselineModelSerialized.value = JSON.stringify(modelConfig.value)
   baselineSourceId.value = modelConfig.value.source.activeSourceId
   savedAt.value = ''
   savedAnnouncement.value = ''
@@ -1435,8 +1475,28 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
   emit('cancel')
 }
 
-// Esc / 背板由共享外壳转成 request-close:busy 时 finish 会自行忽略,不关闭窗体。
+// Esc / 背板由共享外壳转成 request-close:保存中不可关闭;三个草稿域有改动时先确认。
 function requestClose(): void {
+  if (props.busy || confirmOpen.value) return
+  if (!isDirty.value) { finish('cancel'); return }
+  confirmReturnFocusRef.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  confirmOpen.value = true
+  void nextTick(() => {
+    const dialog = confirmDialogRef.value
+    if (dialog === null) return
+    if (!dialog.open) dialog.showModal()
+    confirmKeepRef.value?.focus()
+  })
+}
+function closeConfirm(): void {
+  if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
+  confirmOpen.value = false
+  const target = confirmReturnFocusRef.value
+  if (target?.isConnected === true) target.focus()
+}
+function discardAndClose(): void {
+  if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
+  confirmOpen.value = false
   finish('cancel')
 }
 
@@ -1446,7 +1506,9 @@ watch(() => props.savedToken, (token) => {
   seenSavedToken.value = token
   baselineAvatarUrl.value = props.agent?.avatarUrl ?? avatarUrl.value
   avatarFeedback.value = 'idle'
-  baselineSerialized.value = JSON.stringify({ name: name.value.trim(), note: note.value.trim(), model: modelConfig.value })
+  baselineName.value = name.value.trim()
+  baselineNote.value = note.value.trim()
+  baselineModelSerialized.value = JSON.stringify(modelConfig.value)
   baselineSourceId.value = modelConfig.value.source.activeSourceId
   permissionBaseline.value = JSON.stringify(permissionDraft.value)
   savedAt.value = formatSavedAt()
@@ -1493,7 +1555,9 @@ async function onDialogOpened(): Promise<void> {
 }
 
 onBeforeUnmount(() => {
+  if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
   permissionLoadVersion += 1
+  requestedPluginKey.value = ''
   avatarReadVersion.value += 1
   abortAuthorization(false)
   clearSourceCheck()
@@ -1551,6 +1615,16 @@ onBeforeUnmount(() => {
             :aria-selected="activeTab === 'permissions'" :aria-controls="`${dialogId}-panel-permissions`"
             :tabindex="activeTab === 'permissions' ? 0 : -1" @click="activateTab('permissions')"
           >{{ t.workspace.agentAdmin.tabPermissions }}</button>
+          <button
+            v-if="agent" :id="`${dialogId}-tab-plugins`" ref="pluginsTabRef" type="button" role="tab"
+            :aria-selected="activeTab === 'plugins'" :aria-controls="`${dialogId}-panel-plugins`"
+            :tabindex="activeTab === 'plugins' ? 0 : -1" @click="activateTab('plugins')"
+          >{{ t.workspace.agentAdmin.tabPlugins }}</button>
+          <button
+            v-if="agent" :id="`${dialogId}-tab-mcp`" ref="mcpTabRef" type="button" role="tab"
+            :aria-selected="activeTab === 'mcp'" :aria-controls="`${dialogId}-panel-mcp`"
+            :tabindex="activeTab === 'mcp' ? 0 : -1" @click="activateTab('mcp')"
+          >{{ t.workspace.agentAdmin.tabMcp }}</button>
         </div>
         <!-- 恢复默认只在模型配置非默认时出现:默认状态下不占视野,也不制造「有东西要修」的错觉。 -->
         <button
@@ -2164,13 +2238,33 @@ onBeforeUnmount(() => {
           v-model:default-mode="permissionDraft.defaultMode" v-model:rules="permissionDraft.rules" :disabled="busy"
         />
       </div>
+      <div
+        v-if="agent" v-show="activeTab === 'plugins'" :id="`${dialogId}-panel-plugins`"
+        class="agent-editor__panel agent-editor__panel--tools" role="tabpanel"
+        :aria-labelledby="`${dialogId}-tab-plugins`" tabindex="0"
+      >
+        <AgentPlugins
+          :key="`plugins-${agent.id}`" :agent-id="agent.id" :agent-name="agent.name"
+          :requested-plugin-key="requestedPluginKey" @announce="emit('announce', $event)"
+          @open-request-consumed="requestedPluginKey = ''"
+        />
+      </div>
+      <div
+        v-if="agent" v-show="activeTab === 'mcp'" :id="`${dialogId}-panel-mcp`"
+        class="agent-editor__panel agent-editor__panel--tools" role="tabpanel"
+        :aria-labelledby="`${dialogId}-tab-mcp`" tabindex="0"
+      >
+        <AgentMcp
+          :key="`mcp-${agent.id}`" :agent-id="agent.id" :agent-name="agent.name"
+          :active="activeTab === 'mcp'" @announce="emit('announce', $event)" @manage-plugin="openPluginFromMcp"
+        />
+      </div>
     </div>
-
     <template #actions>
       <p v-if="error !== ''" class="agent-editor__error" role="alert" aria-atomic="true">{{ error }}</p>
       <div class="agent-editor__actions">
       <!-- 探测与保存共用底部状态槽,不撑高滚动内容;成功探测短暂优先,失败保留。 -->
-      <p :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
+      <p v-if="usesDraftSave" :id="saveStateId" class="agent-editor__save-state" :data-state="hasSourceCheck ? (sourceCheckOk ? 'probe-ok' : 'probe-fail') : saveStateKind">
         <template v-if="hasSourceCheck">
           <DliIcon v-if="sourceCheckOk" name="check" size="sm" />
           <span v-else class="agent-editor__probe-fail-icon" aria-hidden="true">×</span>
@@ -2193,8 +2287,9 @@ onBeforeUnmount(() => {
       <span v-if="open" class="agent-editor__visually-hidden" role="status" aria-live="polite" aria-atomic="true">{{ probeAnnouncement }}</span>
       <span v-if="hasUnavailableSourceModels" class="agent-editor__visually-hidden" role="status" aria-live="polite">{{ t.workspace.agentAdmin.modelNeedsAttention }}</span>
       <div class="agent-editor__buttons">
-        <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="finish('cancel')">{{ t.workspace.agentAdmin.cancel }}</button>
+        <button type="button" class="dl-btn dl-btn--ghost" :disabled="busy" @click="requestClose">{{ usesDraftSave ? t.workspace.agentAdmin.cancel : t.workspace.agentAdmin.close }}</button>
         <button
+          v-if="usesDraftSave"
           type="button" class="dl-btn dl-btn--primary agent-editor__save-button"
           :aria-disabled="!canSubmit ? 'true' : undefined" :aria-busy="busy ? 'true' : undefined"
           :aria-describedby="saveStateId"
@@ -2205,6 +2300,18 @@ onBeforeUnmount(() => {
       </div>
     </div>
     </template>
+
+    <dialog
+      v-if="confirmOpen" ref="confirmDialogRef" class="agent-editor__confirm dl-modal-scrim" role="alertdialog"
+      aria-modal="true" :aria-labelledby="confirmTitleId" :aria-describedby="confirmBodyId" @cancel.prevent="closeConfirm"
+    >
+      <h2 :id="confirmTitleId" class="agent-editor__confirm-title">{{ t.workspace.agentAdmin.discardTitle }}</h2>
+      <p :id="confirmBodyId" class="agent-editor__confirm-body">{{ t.workspace.agentAdmin.discardBody.replace('{domains}', dirtyDomains.join(t.workspace.agentAdmin.listSeparator)) }}</p>
+      <div class="agent-editor__confirm-actions">
+        <button ref="confirmKeepRef" type="button" class="dl-btn dl-btn--ghost" @click="closeConfirm">{{ t.workspace.agentAdmin.discardCancel }}</button>
+        <button type="button" class="dl-btn dl-btn--ghost agent-editor__discard" @click="discardAndClose">{{ t.workspace.agentAdmin.discardConfirm }}</button>
+      </div>
+    </dialog>
   </DialogWindow>
 </template>
 
@@ -2422,6 +2529,7 @@ onBeforeUnmount(() => {
 /* 窄对话框里四个二级 tab 放不下:改为横向滚动,避免标签越出自身按钮盒。 */
 @media (max-width: 560px) {
   .agent-editor__tabbar { flex-wrap: wrap; gap: var(--dl-space-2); }
+  .agent-editor__tabs { flex-wrap: wrap; gap: var(--dl-space-1) var(--dl-space-3); }
   .agent-editor__tabs { flex-wrap: wrap; gap: var(--dl-space-1); }
   .source-config__facts { grid-template-columns: minmax(0, 1fr); gap: var(--dl-space-1); }
   .source-config__facts dd { margin-block-end: var(--dl-space-2); }
@@ -2539,6 +2647,21 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 .agent-editor__permission-state { display: grid; justify-items: start; gap: var(--dl-space-3); padding: var(--dl-space-4); color: var(--dl-text-secondary); }
 .agent-editor__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--dl-space-2); }
 .agent-editor__actions .dl-btn { min-block-size: var(--dl-target-size); }
+.agent-editor__panel--tools { display: block; }
+.agent-editor__panel--tools > * { min-inline-size: 0; }
+.agent-editor__panel--tools { --workspace-nav-control-size: var(--dl-control-height); }
+.agent-editor__panel--tools :deep(.agent-plugins), .agent-editor__panel--tools :deep(.agent-mcp) { padding: var(--dl-space-2); font-size: var(--dl-font-size-sm); }
+.agent-editor__panel--tools :deep(.plugin-main), .agent-editor__panel--tools :deep(.mcp-main) { padding: var(--dl-space-3) var(--dl-space-2); }
+.agent-editor__panel--tools :deep(.mcp-main) { padding-inline-end: var(--dl-space-2); }
+.agent-editor__panel--tools :deep(.plugin-page-title), .agent-editor__panel--tools :deep(.mcp-detail-identity h3), .agent-editor__panel--tools :deep(.mcp-add-form h3) { font-size: var(--dl-font-size-lg); line-height: var(--dl-line-snug); }
+.agent-editor__panel--tools :deep(.plugin-description), .agent-editor__panel--tools :deep(.mcp-description) { font-size: var(--dl-font-size-sm); }
+.agent-editor__confirm { inline-size: min(calc(var(--dl-space-12) * 9), calc(100% - 2 * var(--dl-space-4))); margin: auto; box-sizing: border-box; padding: var(--dl-space-6); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-xl); background: var(--dl-bg-elevated); color: var(--dl-text-primary); color-scheme: dark; text-align: left; }
+.agent-editor__confirm[open] { display: grid; gap: var(--dl-space-3); }
+.agent-editor__confirm-title { font-size: var(--dl-font-size-lg); font-weight: 600; line-height: var(--dl-line-snug); }
+.agent-editor__confirm-body { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
+.agent-editor__confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--dl-space-2); }
+.agent-editor__discard { color: var(--dl-error); border-color: var(--dl-error); }
+.agent-editor__discard:hover { background: var(--dl-bg-hover); }
 /* 状态行是「当前保存状态」的常驻指示,不进 Tab 顺序,也不抢焦点。 */
 .agent-editor__save-state { overflow-wrap: anywhere; position: relative; display: inline-flex; flex: 1 1 0; min-inline-size: 0; align-items: center; gap: var(--dl-space-2); min-block-size: var(--dl-space-6); margin-inline-end: auto; color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .agent-editor__save-state[data-state='dirty'],

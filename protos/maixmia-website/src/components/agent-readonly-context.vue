@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 项目窗体顶部的 Agent 只读上下文。默认折叠但摘要自足;加载失败只影响本区块。
+// 项目 MCP 窗体内的 Agent 服务器只读上下文。默认折叠但摘要自足;加载失败只影响本区块。
+// 模型 / 权限页的跟随态使用独立的 project-follow-summary,不再复用本组件。
 import { computed, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentPermissions, PermissionRuleKindId } from '../contracts/generated/agent-permissions'
@@ -18,6 +19,7 @@ const props = defineProps<{
   projectServers?: readonly McpServer[]
 }>()
 const { t } = useI18n()
+const emit = defineEmits<{ servers: [servers: readonly McpServer[]] }>()
 const isExpanded = ref(false)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const loadError = ref('')
@@ -85,7 +87,10 @@ async function load(): Promise<void> {
   if (props.kind === 'permissions') {
     // 两个 API 的返回形状不同,按当前领域接收对应值。
     if ('agentId' in result.value) permissions.value = result.value
-  } else if (Array.isArray(result.value)) agentServers.value = result.value
+  } else if (Array.isArray(result.value)) {
+    agentServers.value = result.value
+    emit('servers', result.value)
+  }
   status.value = 'ready'
 }
 watch(() => [props.kind, props.agent.id], () => {
@@ -150,7 +155,7 @@ watch(() => [props.kind, props.agent.id], () => {
           <strong>{{ server.displayName }}</strong><code>{{ server.name }}</code><code>{{ server.transport }}</code>
           <span>{{ t.workspace.mcp.status[server.status] }}</span>
           <span v-if="server.status === 'connected'">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span>
-          <span v-if="shadowedCount > 0 && (projectServers ?? []).some((item) => item.name === server.name)" class="agent-context__shadowed">{{ t.workspace.mcp.sameName }}</span>
+          <span v-if="shadowedCount > 0 && (projectServers ?? []).some((item) => item.name === server.name)" class="agent-context__shadowed">{{ t.workspace.mcp.agentShadowedByProject }}</span>
         </div>
       </div>
     </div>

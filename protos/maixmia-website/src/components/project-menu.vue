@@ -3,7 +3,8 @@
 // 的菜单项无 tabindex、键盘完全不可用(与 agent-selector 同因)。
 //
 // 菜单只有两个一级项:「设置」与分隔线之后的「关闭项目」。设置不再是可展开入口 ——
-// 点击或 Enter 直接交给父级打开唯一的项目设置窗体,模型 / 权限 / MCP 在窗体内用 Tab 切换。
+// 点击或 Enter 直接交给父级打开唯一的项目设置窗体(模型 / 权限在窗体内用 Tab 切换);
+// 项目 MCP 是项目行上的独立入口,不重复放进本菜单。
 //
 // 每个项目行各挂一个实例,开合状态留在组件内部:点其它行的 ⋯ 时,本实例会因「点击落在自己
 // 之外」而自行关闭,故同一时刻实际只有一个菜单打开,无需把状态提到页面。
@@ -186,12 +187,14 @@ watch(isOpen, syncRowStacking)
   opacity: 1;
 }
 
+/* 密集行里的次要动作:28px 命中区(纵向密集行档),悬停只提亮字形、不铺色块。
+   与右侧 caret 相邻排布,两个字形之间约 16px,读作一组动作而不是两个孤立按钮。 */
 .project-menu__trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--dl-target-size);
-  height: var(--dl-target-size);
+  width: calc(var(--dl-space-6) + var(--dl-space-1));
+  height: calc(var(--dl-space-6) + var(--dl-space-1));
   border-radius: var(--dl-radius-sm);
   color: var(--dl-text-secondary);
   font-size: var(--dl-font-size-md);
@@ -199,11 +202,11 @@ watch(isOpen, syncRowStacking)
 }
 
 .project-menu__trigger:hover {
-  background: var(--dl-bg-hover);
   color: var(--dl-text-primary);
 }
 
 .project-menu__trigger:focus-visible {
+  outline: none;
   box-shadow: var(--dl-focus-ring);
 }
 

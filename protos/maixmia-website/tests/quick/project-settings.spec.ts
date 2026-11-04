@@ -39,15 +39,23 @@ test('@area:project-settings 项目模型在统一窗体内切换,保存当前�
   await waitForWorkspace(page)
   const { trigger, dialog } = await openSettings(page)
 
-  const context = dialog.locator('.agent-context[data-kind="model"]')
-  await expect(context).toContainText('Agent 级 · 只读 · 规划助手')
-  await expect(context).toContainText('Claude Sonnet 5.5')
-  await expect(context.locator('input, select')).toHaveCount(0)
+  // 正文第一个可交互元素就是模式开关;上方没有说明段落或 Agent 只读区块。
+  const modelPanel = dialog.locator('.project-model')
+  const firstInteractive = modelPanel.locator('button, input, select, textarea').first()
+  await expect(firstInteractive).toHaveAttribute('role', 'radio')
+  await expect(firstInteractive).toHaveText('跟随 Agent')
 
   await dialog.getByRole('radio', { name: '跟随 Agent', exact: true }).click()
-  await expect(context).toBeVisible()
+  const summary = dialog.locator('.follow-summary[data-kind="model"]')
+  await expect(summary).toContainText('Agent 当前生效配置')
+  await expect(summary).toContainText('Claude Sonnet 5.5')
+  await expect(summary).toContainText('回退')
+  await expect(modelPanel.locator('input, select, textarea')).toHaveCount(0)
+  await expect(modelPanel.locator('[data-section]')).toHaveCount(0)
+
   await dialog.getByRole('radio', { name: '自定义', exact: true }).click()
-  await expect(context).toBeVisible()
+  await expect(summary).toHaveCount(0)
+  await expect(modelPanel.locator('[data-section]')).toHaveCount(3)
   await dialog.locator('[data-section="model"]').click()
   await dialog.locator('select[id$="-effort"]').selectOption('max')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
@@ -91,17 +99,33 @@ test('@area:project-settings 项目权限在 Tab 内切换后草稿保留,保存
   const { dialog } = await openSettings(page)
   await selectTab(page, dialog, '权限')
 
+  const permissionPanel = dialog.locator('.project-permission')
+  const firstInteractive = permissionPanel.locator('button, input, select, textarea').first()
+  await expect(firstInteractive).toHaveAttribute('role', 'radio')
+  await expect(firstInteractive).toHaveText('跟随 Agent')
+
   const editor = dialog.locator('.permission-editor[data-scope="project"]')
   await expect(editor).toBeVisible()
+
+  // 跟随态只读:模式与三类规则计数可见,编辑器与全部编辑控件不渲染。
+  await dialog.getByRole('radio', { name: '跟随 Agent', exact: true }).click()
+  const summary = dialog.locator('.follow-summary[data-kind="permissions"]')
+  await expect(summary).toContainText('默认权限模式')
+  await expect(summary).toContainText('自动')
+  await expect(summary).toContainText('允许 3 · 拒绝 2 · 询问 2')
+  await expect(editor).toHaveCount(0)
+  await expect(permissionPanel.locator('input, select, textarea')).toHaveCount(0)
+  await summary.getByRole('button', { name: '查看 Agent 规则明细', exact: true }).click()
+  await expect(summary).toContainText('Read(./.env)')
+
+  // 切回自定义:编辑器重新挂载,项目草稿值仍在。
+  await dialog.getByRole('radio', { name: '自定义', exact: true }).click()
+  await expect(editor).toBeVisible()
+
   const initialRuleTabs = dialog.getByRole('tablist', { name: '权限规则分组', exact: true }).getByRole('tab')
   await expect(initialRuleTabs).toHaveCount(3)
   expect(await initialRuleTabs.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-rule-kind')))).toEqual(['allow', 'deny', 'ask'])
   await expect(initialRuleTabs).toHaveText(['允许2', '拒绝1', '询问1'])
-  const context = dialog.locator('.agent-context[data-kind="permissions"]')
-  await expect(context).toContainText('允许 3 · 拒绝 2 · 询问 2')
-  await expect(context).toContainText('自动')
-  await context.getByRole('button').click()
-  await expect(context).toContainText('Read(./.env)')
 
   const projectMode = editor.locator('[data-mode-trigger]')
   await expect(projectMode).toHaveAccessibleName('模式 仅按规则')
@@ -147,64 +171,6 @@ test('@area:project-settings 项目权限在 Tab 内切换后草稿保留,保存
   expect(issues).toEqual([])
 })
 
-test('@area:project-settings 项目 MCP 配置草稿与即时连接分离,同名遮蔽按定义而非启停', async ({ page }) => {
-  const issues = collectRuntimeIssues(page)
-  await page.setViewportSize({ width: 1280, height: 900 })
-  await login(page)
-  await waitForWorkspace(page)
-  const { dialog } = await openSettings(page)
-  await selectTab(page, dialog, 'MCP')
-
-  const context = dialog.locator('.agent-context[data-kind="mcp"]')
-  await expect(context).toContainText('Agent 服务器数')
-  await expect(context).toContainText('被项目同名定义遮蔽')
-  await expect(context.locator('.agent-context__facts')).toContainText('2')
-  await expect(dialog).toContainText('停用项目服务器也仍然遮蔽 Agent 同名服务器')
-  const github = dialog.locator('[data-server-id="project:~/work/weekly-report:github"]')
-  const connect = github.locator('.project-mcp__connection button')
-  await expect(connect).toBeEnabled()
-  await github.locator('input').nth(1).fill('GitHub Project')
-  await expect(connect).toBeDisabled()
-  await expect(github).toContainText('先保存配置')
-  await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  expect(issues).toEqual([])
-  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
-  await expect(connect).toBeEnabled()
-  await connect.click()
-  await expect(github).toContainText('已连接')
-  await expect(dialog).toContainText('连接操作 · 立即生效')
-  await expect(dialog).toContainText('保存后，Agent 的同名服务器将重新生效')
-  expect(issues).toEqual([])
-})
-
-test('@area:project-settings 项目 MCP 启停保存后仍恢复需认证事实，不伪造已连接', async ({ page }) => {
-  const issues = collectRuntimeIssues(page)
-  await page.setViewportSize({ width: 1280, height: 900 })
-  await login(page)
-  await waitForWorkspace(page)
-  const { dialog } = await openSettings(page)
-  await selectTab(page, dialog, 'MCP')
-
-  const github = dialog.locator('[data-server-id="project:~/work/weekly-report:github"]')
-  const enabled = github.locator('.project-mcp__enabled input')
-  await expect(github).toContainText('需认证')
-  await enabled.uncheck()
-  await expect(github).toContainText('需认证')
-  await expect(github).toContainText('待保存')
-  await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
-  await expect(github).toContainText('已停用')
-  await expect(github).not.toContainText('已连接')
-  await enabled.check()
-  await expect(github).toContainText('已停用')
-  await expect(github).toContainText('待保存')
-  await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(dialog.locator('.project-config__save-state')).toHaveAttribute('data-state', 'saved')
-  await expect(github).toContainText('需认证')
-  await expect(github).not.toContainText('已连接')
-  await expect(github.locator('.project-mcp__connection button')).toBeEnabled()
-  expect(issues).toEqual([])
-})
 
 test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无横向溢出,标签栏恒为横向', async ({ page }) => {
   const issues = collectRuntimeIssues(page)
@@ -216,7 +182,7 @@ test('@area:project-settings 统一窗体在 375 / 768 / 1280 / 1600 下均无�
   // 项目徽记只表达身份,不是控件。
   await expect(dialog.locator('.project-settings__mark')).toHaveAttribute('aria-hidden', 'true')
 
-  for (const kind of ['模型', '权限', 'MCP'] as const) {
+  for (const kind of ['模型', '权限'] as const) {
     await selectTab(page, dialog, kind)
     for (const width of [375, 768, 1280, 1600]) {
       await page.setViewportSize({ width, height: 900 })
@@ -342,10 +308,19 @@ test('@area:project-settings 大型设置面:宽高只随视口变化,正文是�
   expect(model.top).toBeGreaterThanOrEqual(16)
   expect(model.innerHeight - model.bottom).toBeGreaterThanOrEqual(16)
   expect(model.contentOverflowY).toBe('auto')
-  // 头部与动作区固定在滚动视口之外,只有正文滚动;权限默认态完整容纳。
+  // 头部与动作区固定在滚动视口之外,只有正文滚动;1280×900 下模型自定义默认态完整容纳。
   expect(model.contentHoldsHead).toBe(false)
   expect(model.contentHoldsActions).toBe(false)
   expect(model.docScrollHeight).toBeLessThanOrEqual(model.docClientHeight)
+  expect(model.contentScrollHeight).toBeLessThanOrEqual(model.contentClientHeight + 1)
+
+  // 跟随态只读摘要同样不滚动(模型)。
+  await dialog.getByRole('radio', { name: '跟随 Agent', exact: true }).click()
+  await expect(dialog.locator('.follow-summary[data-kind="model"]')).toBeVisible()
+  const modelFollow = await readFrame(dialog)
+  expect(modelFollow.contentScrollHeight).toBeLessThanOrEqual(modelFollow.contentClientHeight + 1)
+  await dialog.getByRole('radio', { name: '自定义', exact: true }).click()
+  await expect(dialog.locator('.project-model__subtabs')).toBeVisible()
 
   await selectTab(page, dialog, '权限')
   await expect(dialog.locator('.permission-editor')).toBeVisible()
@@ -354,15 +329,13 @@ test('@area:project-settings 大型设置面:宽高只随视口变化,正文是�
   expect(Math.abs(permissions.width - model.width)).toBeLessThanOrEqual(1)
   expect(permissions.contentScrollHeight).toBeLessThanOrEqual(permissions.contentClientHeight + 1)
 
-  // MCP 内容更长、需要滚动:窗框尺寸不变,滚动条槽位预留使正文可用宽度不变。
-  await selectTab(page, dialog, 'MCP')
-  await expect(dialog.locator('.project-mcp__server').first()).toBeVisible()
-  const mcp = await readFrame(dialog)
-  expect(Math.abs(mcp.height - model.height)).toBeLessThanOrEqual(1)
-  expect(Math.abs(mcp.width - model.width)).toBeLessThanOrEqual(1)
-  expect(mcp.contentScrollHeight).toBeGreaterThan(mcp.contentClientHeight)
-  expect(mcp.contentClientWidth).toBe(model.contentClientWidth)
-  expect(mcp.docScrollHeight).toBeLessThanOrEqual(mcp.docClientHeight)
+  // 跟随态只读摘要同样不滚动(权限)。
+  await dialog.getByRole('radio', { name: '跟随 Agent', exact: true }).click()
+  await expect(dialog.locator('.follow-summary[data-kind="permissions"]')).toContainText('默认权限模式')
+  const permissionsFollow = await readFrame(dialog)
+  expect(permissionsFollow.contentScrollHeight).toBeLessThanOrEqual(permissionsFollow.contentClientHeight + 1)
+  await dialog.getByRole('radio', { name: '自定义', exact: true }).click()
+  await expect(dialog.locator('.permission-editor')).toBeVisible()
 
   // 1440×900:高度仍是九成视口,宽度不跟着视口变宽。
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -400,7 +373,11 @@ test('@area:project-settings 大型设置面:宽高只随视口变化,正文是�
   expect(Math.abs(short.height - short.innerHeight * 0.9)).toBeLessThanOrEqual(1)
   expect(short.bottom).toBeLessThanOrEqual(short.innerHeight)
   expect(short.contentScrollHeight).toBeGreaterThan(short.contentClientHeight)
-  expect(short.docScrollHeight).toBeLessThanOrEqual(short.docClientHeight)
+  // 页面高度在 resize 后的下一帧才落定;轮询到文档不再滚动再断言,避免读到旧布局。
+  await expect.poll(async () => {
+    const frame = await readFrame(dialog)
+    return frame.docScrollHeight <= frame.docClientHeight
+  }).toBe(true)
   expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
 
   await page.setViewportSize({ width: 1280, height: 900 })
@@ -556,8 +533,11 @@ test.describe('English project settings', () => {
     await page.getByRole('menuitem', { name: 'Project settings：weekly-report', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Project settings · weekly-report', exact: true })
     await expect(dialog).toBeVisible()
-    await dialog.locator('.project-settings__tablist [role="tab"]').nth(2).click()
-    await expect(dialog.locator('.agent-context[data-kind="mcp"]')).toContainText('Agent level · read-only')
+    await expect(dialog.locator('.project-settings__tablist [role="tab"]')).toHaveText(['Model', 'Permissions', 'MCP'])
+    await dialog.locator('.project-settings__tablist [role="tab"]').nth(1).click()
+    await expect(dialog.locator('.permission-editor')).toBeVisible()
+    await dialog.getByRole('radio', { name: 'Follow Agent', exact: true }).click()
+    await expect(dialog.locator('.follow-summary[data-kind="permissions"]')).toContainText('Default permission mode')
     for (const width of [375, 1280]) {
       await page.setViewportSize({ width, height: 900 })
       expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)

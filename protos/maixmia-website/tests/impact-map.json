@@ -52,6 +52,8 @@
         "src/components/project-settings-*.vue",
         "src/components/project-settings-state.ts",
         "src/components/project-*-panel.vue",
+        "src/components/project-follow-summary.vue",
+        "src/components/project-follow-summary.stories.ts",
         "src/components/dialog-window.vue",
         "src/composables/use-dialog-window.ts",
         "src/data/window-geometry.ts",
@@ -64,6 +66,19 @@
         "src/mocks/agent-permissions.ts",
         "src/mocks/agent-mcp.ts",
         "src/data/project-model-settings.ts",
+        "contracts/main.tsp",
+        "src/i18n/messages/*/workspace.ts"
+      ]
+    },
+    {
+      "area": "project-mcp",
+      "paths": [
+        "src/components/project-mcp-panel.vue",
+        "src/components/project-mcp-panel.stories.ts",
+        "src/api/agent-mcp.ts",
+        "src/mocks/agent-mcp.ts",
+        "src/components/agent-readonly-context.vue",
+        "src/pages/workspace-page.vue",
         "contracts/main.tsp",
         "src/i18n/messages/*/workspace.ts"
       ]
@@ -84,7 +99,7 @@
         "src/components/agent-mcp.stories.ts",
         "src/components/agent-permissions.vue",
         "src/components/agent-permissions.stories.ts",
-        "src/components/sidebar-view-tabs.vue",
+        "src/components/agent-plugins.vue",
         "src/api/agent-mcp.ts",
         "src/api/agent-permissions.ts",
         "src/mocks/agent-mcp.ts",

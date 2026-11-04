@@ -10,7 +10,7 @@ function rule(id: string, kind: PermissionRuleKindId, pattern: string, scope: 'a
   return { id, kind, pattern, scope, ownerId }
 }
 const agent: AgentPermissions = { agentId: 'planning', defaultMode: 'auto', rules: [rule('deny', 'deny', 'Read(./.env)'), rule('ask', 'ask', 'Bash(git push:*)'), rule('allow', 'allow', 'Read(./**)')] }
-const project: ProjectPermissionGroup = { path: '~/work/weekly-report', modeOverride: 'dontAsk', rules: [rule('project-ask', 'ask', 'Read(./.env)', 'project', '~/work/weekly-report')] }
+const project: ProjectPermissionGroup = { path: '~/work/weekly-report', followAgent: false, modeOverride: 'dontAsk', rules: [rule('project-ask', 'ask', 'Read(./.env)', 'project', '~/work/weekly-report')] }
 
 describe('agent-permissions controlled editor', () => {
   afterEach(() => { document.body.innerHTML = '' })

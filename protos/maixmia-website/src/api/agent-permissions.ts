@@ -92,11 +92,15 @@ export async function saveProjectPermissionGroup(path: string, value: ProjectPer
   await delay()
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
-  if (value.path !== path || (value.modeOverride !== null && !isMode(value.modeOverride))) {
-    return { ok: false, error: new Error(t.value.workspace.permissions.saveError) }
+  if (value.path !== path) return { ok: false, error: new Error(t.value.workspace.permissions.saveError) }
+  // 跟随 Agent 时保留的自定义值不生效:不能因这些保留值失效而阻止保存。
+  if (!value.followAgent) {
+    if (value.modeOverride !== null && !isMode(value.modeOverride)) {
+      return { ok: false, error: new Error(t.value.workspace.permissions.saveError) }
+    }
+    const invalid = validateRules(value.rules)
+    if (invalid !== null) return { ok: false, error: invalid }
   }
-  const invalid = validateRules(value.rules)
-  if (invalid !== null) return { ok: false, error: invalid }
   return { ok: true, value: mockSaveProjectPermissionGroup(path, value) }
 }
 

@@ -14,6 +14,8 @@ const props = defineProps<{
   rules: readonly PermissionRule[]
   disabled?: boolean
   idPrefix: string
+  // 仅在需要「收起时保留当前模式说明」的宿主(项目设置)打开;Agent 设置保持原结构。
+  showModeHint?: boolean
 }>()
 const emit = defineEmits<{
   'update:defaultMode': [mode: PermissionModeId | null]
@@ -436,6 +438,7 @@ async function removeRule(rule: PermissionRule): Promise<void> {
         <span :id="`${idPrefix}-mode-value`" class="permissions-selected">{{ modeOptionLabel(defaultMode) }}</span>
         <DliIcon name="chevronDown" size="sm" class="permissions-chevron" />
       </button>
+      <p v-if="showModeHint" class="permissions-mode-hint">{{ modeHint(defaultMode) }}</p>
       <div v-if="isModeOpen" :id="modeListId" ref="modeMenuRef" class="permissions-menu" :style="modeMenuStyle" role="listbox" :aria-labelledby="modeLabelId">
         <button
           v-for="(option, index) in modeOptions"
@@ -529,6 +532,7 @@ async function removeRule(rule: PermissionRule): Promise<void> {
 .model-subtabs__track button[aria-selected='true'] { background: var(--dl-accent-soft); color: var(--dl-text-primary); }
 .permissions-mode { display: grid; gap: var(--dl-space-2); }
 .permissions-mode label { font-weight: 500; }
+.permissions-mode-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .permissions-select { display: flex; align-items: center; justify-content: space-between; gap: var(--dl-space-2); inline-size: 100%; min-block-size: var(--dl-target-size); padding: var(--dl-space-2) var(--dl-space-3); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-md); background: var(--dl-bg-base); color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-snug); text-align: start; }
 .permissions-select:hover:not(:disabled) { border-color: var(--dl-border-strong); background: var(--dl-bg-hover); }
 .permissions-select:active:not(:disabled) { background: var(--dl-bg-sunken); }

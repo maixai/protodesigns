@@ -1,9 +1,8 @@
 // 描边图标几何与名称收窄:viewBox 24,fill none + stroke currentColor。
-// 渲染组件在 ../components/dl-icon.vue;契约里 icon 是开放字符串,
-// 经 toIconName 收窄到本地图标集合,凑不齐时回退 grid。
 export interface IconShape {
   paths: readonly string[]
   circles: readonly { cx: number; cy: number; r: number }[]
+  filled?: boolean
 }
 
 export const ICONS = {

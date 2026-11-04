@@ -39,7 +39,7 @@ const agentStore = new Map<string, AgentPermissions>([
 
 const projectStore = new Map<string, ProjectPermissionGroup>([
   ['~/work/weekly-report', {
-    path: '~/work/weekly-report', modeOverride: 'dontAsk',
+    path: '~/work/weekly-report', followAgent: false, modeOverride: 'dontAsk',
     rules: [
       rule('weekly-deny-prod', 'deny', 'Bash(pnpm deploy:production)', '~/work/weekly-report', 'project'),
       rule('weekly-ask-publish', 'ask', 'Bash(git push:*)', '~/work/weekly-report', 'project'),
@@ -47,17 +47,17 @@ const projectStore = new Map<string, ProjectPermissionGroup>([
       rule('weekly-allow-preview', 'allow', 'Bash(pnpm preview:*)', '~/work/weekly-report', 'project'),
     ],
   }],
-  ['~/work/knowledge-base', { path: '~/work/knowledge-base', modeOverride: null, rules: [] }],
+  ['~/work/knowledge-base', { path: '~/work/knowledge-base', followAgent: true, modeOverride: null, rules: [] }],
   ['~/work/user-research', {
-    path: '~/work/user-research', modeOverride: null,
+    path: '~/work/user-research', followAgent: false, modeOverride: null,
     rules: [
       rule('research-project-deny-raw', 'deny', 'Read(./interviews/raw/**)', '~/work/user-research', 'project'),
       rule('research-project-ask-export', 'ask', 'Bash(pnpm export:*)', '~/work/user-research', 'project'),
     ],
   }],
-  ['~/work/benchmarks', { path: '~/work/benchmarks', modeOverride: null, rules: [] }],
-  ['~/work/product-docs', { path: '~/work/product-docs', modeOverride: null, rules: [] }],
-  ['~/work/changelog', { path: '~/work/changelog', modeOverride: null, rules: [] }],
+  ['~/work/benchmarks', { path: '~/work/benchmarks', followAgent: true, modeOverride: null, rules: [] }],
+  ['~/work/product-docs', { path: '~/work/product-docs', followAgent: true, modeOverride: null, rules: [] }],
+  ['~/work/changelog', { path: '~/work/changelog', followAgent: true, modeOverride: null, rules: [] }],
 ])
 
 function cloneAgent(value: AgentPermissions): AgentPermissions {
@@ -79,7 +79,7 @@ function ensureAgent(agentId: string): AgentPermissions {
 function ensureProject(path: string): ProjectPermissionGroup {
   const existing = projectStore.get(path)
   if (existing !== undefined) return existing
-  const created: ProjectPermissionGroup = { path, modeOverride: null, rules: [] }
+  const created: ProjectPermissionGroup = { path, followAgent: true, modeOverride: null, rules: [] }
   projectStore.set(path, created)
   return created
 }

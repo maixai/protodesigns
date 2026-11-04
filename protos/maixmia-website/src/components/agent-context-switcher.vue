@@ -20,7 +20,8 @@ const props = withDefaults(defineProps<{
   agents: readonly AgentSummary[]
   // 两个宿主:底栏(紧凑档,向上展开)/ 侧栏顶部(整行控件,向下展开)。
   variant?: 'dock' | 'sidebar'
-}>(), { variant: 'dock' })
+  settingsNeedsAttention?: boolean
+}>(), { variant: 'dock', settingsNeedsAttention: false })
 const emit = defineEmits<{ select: [agent: AgentId]; create: []; settings: [] }>()
 const { t, locale } = useI18n()
 const root = ref<HTMLElement | null>(null)
@@ -138,9 +139,14 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             <span>{{ t.workspace.agentSwitcher.create }}</span>
           </button>
-          <button type="button" class="agent-context-switcher__add" @click="openSettings">
+          <button
+            type="button" class="agent-context-switcher__add agent-context-switcher__settings"
+            :aria-label="settingsNeedsAttention ? t.workspace.agentAdmin.settingsAttentionLabel : t.workspace.agentAdmin.settingsLabel"
+            @click="openSettings"
+          >
             <DliIcon name="settings" size="sm" />
             <span>{{ t.workspace.agentAdmin.settingsLabel }}</span>
+            <span v-if="settingsNeedsAttention" class="agent-context-switcher__attention-dot" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -194,6 +200,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
 .agent-context-switcher__add svg { inline-size: var(--dl-icon-sm); block-size: var(--dl-icon-sm); }
 .agent-context-switcher__add path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .agent-context-switcher__add:hover { color: var(--dl-text-primary); }
+.agent-context-switcher__attention-dot { flex: none; inline-size: var(--dl-space-2); block-size: var(--dl-space-2); margin-inline-start: auto; border-radius: var(--dl-radius-pill); background: var(--dl-warning); }
 /* 开合只动 opacity / transform(动效白名单);位移 4px 从触发钮方向浮出。 */
 .agent-context-panel-enter-active, .agent-context-panel-leave-active { transition: opacity var(--dl-duration-base) var(--dl-ease-standard), transform var(--dl-duration-base) var(--dl-ease-standard); }
 .agent-context-panel-enter-from, .agent-context-panel-leave-to { opacity: 0; transform: translateY(var(--dl-space-1)); }

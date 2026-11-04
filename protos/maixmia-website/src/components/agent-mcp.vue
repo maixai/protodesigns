@@ -380,8 +380,8 @@ onBeforeUnmount(() => { isAlive.value = false })
               @pointerenter="showTooltip($event, server)" @pointerleave="leaveTooltip"
               @focus="showTooltip($event, server)" @blur="leaveTooltip" @click="openDetail(server)"
             >
-              <span class="mcp-title"><span class="mcp-status-dot" aria-hidden="true" /><span class="mcp-name">{{ server.displayName }}</span><span class="mcp-visually-hidden">{{ statusLabel(server) }}</span></span>
-              <span v-if="server.status === 'connected' && server.tools.length > 0" class="mcp-meta"><span class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span></span>
+              <span class="mcp-title"><span class="mcp-status-dot" aria-hidden="true" /><span class="mcp-name">{{ server.displayName }}</span></span>
+              <span class="mcp-meta"><span class="mcp-source">{{ t.workspace.mcp.sourceAgent }}</span><span class="mcp-status-label">{{ statusLabel(server) }}</span><span class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span></span>
             </button>
             <div class="mcp-row-controls">
               <button v-if="server.status === 'needsAuth' || server.status === 'failed'" type="button" class="mcp-inline-action mcp-connect-action" :data-connect-id="server.id" :disabled="busy" :aria-label="actionLabel(server)" @click="connect(server)">{{ server.status === 'needsAuth' ? t.workspace.mcp.authenticate : t.workspace.mcp.reconnect }}</button>
@@ -414,10 +414,11 @@ onBeforeUnmount(() => { isAlive.value = false })
                 @pointerenter="showTooltip($event, server)" @pointerleave="leaveTooltip"
                 @focus="showTooltip($event, server)" @blur="leaveTooltip" @click="openPluginDetail(server)"
               >
-                <span class="mcp-title"><span class="mcp-status-dot" aria-hidden="true" /><span class="mcp-name">{{ server.displayName }}</span><span class="mcp-visually-hidden">{{ pluginStatusLabel(server) }}</span></span>
+                <span class="mcp-title"><span class="mcp-status-dot" aria-hidden="true" /><span class="mcp-name">{{ server.displayName }}</span></span>
                 <span class="mcp-meta mcp-plugin-meta">
                   <span class="mcp-plugin-source">{{ pluginSourceLabel(server) }}</span>
-                  <span v-if="server.status === 'connected' && server.tools.length > 0" class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span>
+                  <span class="mcp-status-label">{{ pluginStatusLabel(server) }}</span>
+                  <span class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span>
                 </span>
               </button>
               <button
@@ -527,7 +528,6 @@ onBeforeUnmount(() => { isAlive.value = false })
 .mcp-meta { color: var(--dl-text-secondary); }
 .mcp-plugin-row { grid-template-columns: minmax(0, 1fr) auto; }
 .mcp-plugin-source { color: var(--dl-text-secondary); overflow-wrap: anywhere; }
-.mcp-visually-hidden { position: absolute; inline-size: var(--dl-border-width); block-size: var(--dl-border-width); padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mcp-plugin-reconnect, .mcp-plugin-manage { display: inline-flex; align-items: center; justify-content: center; min-inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); margin-inline-end: var(--dl-space-1); padding-inline: var(--dl-space-2); color: var(--dl-accent); border-radius: var(--dl-radius-sm); }
 .mcp-plugin-reconnect[aria-disabled='true'] { color: var(--dl-text-secondary); }
 .mcp-status-dot { flex: none; inline-size: calc(var(--dl-space-2) + var(--dl-border-width) * 2); block-size: calc(var(--dl-space-2) + var(--dl-border-width) * 2); border: var(--dl-border-width) solid var(--dl-text-tertiary); border-radius: var(--dl-radius-pill); background: transparent; }
@@ -535,6 +535,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 .mcp-row[data-status='pending'] .mcp-status-dot, .mcp-detail-status[data-status='pending'] .mcp-status-dot { border-color: var(--dl-accent); }
 .mcp-row[data-status='needsAuth'] .mcp-status-dot, .mcp-detail-status[data-status='needsAuth'] .mcp-status-dot, .mcp-row[data-status='needsConfiguration'] .mcp-status-dot, .mcp-detail-status[data-status='needsConfiguration'] .mcp-status-dot { border-color: var(--dl-warning); background: var(--dl-warning); }
 .mcp-row[data-status='failed'] .mcp-status-dot, .mcp-detail-status[data-status='failed'] .mcp-status-dot { border-color: var(--dl-error); background: var(--dl-error); }
+.mcp-status-label { color: var(--dl-text-secondary); }
 .mcp-tools-count { font-family: var(--dl-font-mono); color: var(--dl-text-tertiary); }
 .mcp-status-tooltip { position: fixed; inset: auto; inset-inline-start: var(--agent-status-left); inset-block-start: var(--agent-status-top); margin: 0; padding: var(--dl-space-2) var(--dl-space-3); inline-size: max-content; max-inline-size: min(var(--dl-measure), calc(100vw - 2 * var(--dl-space-2))); border: var(--dl-border-width) solid var(--dl-border-strong); border-radius: var(--dl-radius-md); background: var(--dl-bg-elevated); color: var(--dl-text-primary); font-family: var(--dl-font-sans); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); overflow-wrap: anywhere; opacity: 0; pointer-events: none; transition: opacity var(--dl-duration-fast) var(--dl-ease-standard); }
 .mcp-status-tooltip[data-visible='true'] { opacity: 1; pointer-events: auto; }

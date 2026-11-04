@@ -597,8 +597,9 @@ model AgentPermissions {
 @jsonSchema
 model ProjectPermissionGroup {
   path: string;
-  modeOverride: PermissionModeId | null;  // null = 跟随 Agent
-  rules: PermissionRule[];                // 项目自有 allow/ask/deny,只追加不替换继承规则
+  followAgent: boolean;                   // true = 整块跟随 Agent,不应用项目模式与规则;mode/rules 保留为最近一次自定义值
+  modeOverride: PermissionModeId | null;  // null = 继承 Agent 模式;仅 followAgent=false 时生效
+  rules: PermissionRule[];                // 项目自有 allow/ask/deny,只追加不替换继承规则;仅 followAgent=false 时生效
 }
 
 // ---- 用户身份密钥与 Agent 的一次性配对 ----

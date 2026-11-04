@@ -9,7 +9,8 @@ test('@area:workspace 工作台首屏可用且无运行时错误', async ({ page
   const issues = collectRuntimeIssues(page)
   await login(page)
   await waitForWorkspace(page)
-  await expect(page.locator('.workspace-projects').getByRole('tab', { name: /^项目/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.workspace-projects')).toHaveAccessibleName('项目')
+  await expect(page.locator('.workspace-projects [role="tablist"]')).toHaveCount(0)
   expect(issues).toEqual([])
 })
 

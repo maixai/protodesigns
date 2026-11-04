@@ -7,9 +7,9 @@ import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { Project } from '../contracts/generated/project'
 import { useI18n } from '../i18n'
 import DialogWindow from './dialog-window.vue'
-import ProjectMcpPanel from './project-mcp-panel.vue'
 import ProjectModelPanel from './project-model-panel.vue'
 import ProjectPermissionPanel from './project-permission-panel.vue'
+import ProjectMcpPanel from './project-mcp-panel.vue'
 import { EMPTY_PANEL_STATE } from './project-settings-state'
 import type { ProjectPanelState, ProjectSettingsTab } from './project-settings-state'
 
@@ -60,8 +60,7 @@ function panelElementId(tab: ProjectSettingsTab): string { return `${dialogId}-p
 function tabLabel(tab: ProjectSettingsTab): string {
   const copy = t.value.workspace.projectSettings
   if (tab === 'model') return copy.tabModel
-  if (tab === 'permissions') return copy.tabPermissions
-  return copy.tabMcp
+  return tab === 'permissions' ? copy.tabPermissions : copy.tabMcp
 }
 function tabBadge(tab: ProjectSettingsTab): { text: string; tone: TabBadgeTone } | null {
   const copy = t.value.workspace.projectSettings

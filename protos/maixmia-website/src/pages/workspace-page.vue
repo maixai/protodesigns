@@ -7,6 +7,7 @@ import type { AgentSummary } from '../contracts/generated/agent-summary'
 import type { AgentConfig } from '../contracts/generated/agent-config'
 import type { AgentPermissions } from '../contracts/generated/agent-permissions'
 import { saveAgentPermissions } from '../api/agent-permissions'
+import { listAgentMcpServers, listAgentPluginMcpServers } from '../api/agent-mcp'
 import type { ChatMessage } from '../contracts/generated/chat-message'
 import type { Attachment } from '../contracts/generated/attachment'
 import type { TranscriptState } from '../contracts/generated/transcript-state'
@@ -41,10 +42,6 @@ import AgentEditorDialog from '../components/agent-editor-dialog.vue'
 import AgentPairingDialog from '../components/agent-pairing-dialog.vue'
 import IdentityVaultDialog from '../components/identity-vault-dialog.vue'
 import { readIdentityVaultState } from '../mocks/identity'
-import AgentPlugins from '../components/agent-plugins.vue'
-import AgentMcp from '../components/agent-mcp.vue'
-import type { SidebarViewOption } from '../components/sidebar-view-tabs.vue'
-import SidebarViewTabs from '../components/sidebar-view-tabs.vue'
 import WorkspaceDock from '../components/workspace-dock.vue'
 import ChatPanel from '../components/chat-panel.vue'
 import ChatSessionView from '../components/chat-session-view.vue'
@@ -116,26 +113,19 @@ let searchVersion = 0
 // 平权之后**没有「当前项目」**:多个项目可以同时展开,tab 区与悬浮层也混装不同项目的窗口。
 const projects = ref<Project[]>([])
 const projectsStatus = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
-// 侧栏顶层视图:项目文件与当前 Agent 的插件、MCP 平级;权限归入 Agent 设置。
-const sidebarView = ref('projects')
-const agentPluginCount = ref<number | undefined>(undefined)
-const agentMcpCount = ref<number | undefined>(undefined)
-const requestedPluginKey = ref('')
-const sidebarViewOptions = computed<SidebarViewOption[]>(() => [{
-  id: 'projects',
-  label: t.value.workspace.sidebarViews.projects,
-  // 只在列表已就绪时给读数;加载中不先报一个假的 0。
-  count: projectsStatus.value === 'ready' ? projects.value.length : undefined,
-}, {
-  id: 'plugins', label: t.value.workspace.plugins.pluginsTitle, count: agentPluginCount.value,
-}, {
-  id: 'mcp', label: t.value.workspace.sidebarViews.mcp, count: agentMcpCount.value,
-}])
-function openPluginFromMcp(pluginId: string, marketplaceId: string, pluginName: string): void {
-  requestedPluginKey.value = `${pluginId}@${marketplaceId}`
-  sidebarView.value = 'plugins'
-  announcePlacement(t.value.workspace.mcp.openedPlugin.replace('{name}', pluginName))
+// 当前 Agent 的 MCP 健康只凝成设置入口的一枚「需处理」点,不在侧栏另设入口或计数。
+const agentMcpNeedsAttention = ref(false)
+let agentMcpAttentionVersion = 0
+async function refreshAgentMcpAttention(): Promise<void> {
+  const agentId = selectedAgent.value
+  const version = ++agentMcpAttentionVersion
+  if (agentId === '') { agentMcpNeedsAttention.value = false; return }
+  const [manual, contributed] = await Promise.all([listAgentMcpServers(agentId), listAgentPluginMcpServers(agentId)])
+  if (version !== agentMcpAttentionVersion || selectedAgent.value !== agentId) return
+  agentMcpNeedsAttention.value = manual.ok && contributed.ok && [...manual.value, ...contributed.value]
+    .some((server) => server.status === 'needsAuth' || server.status === 'failed')
 }
+watch(selectedAgent, () => { void refreshAgentMcpAttention() }, { immediate: true })
 // Agent 设置与添加流程分离,配对只在身份已解锁后进入。
 const isAgentEditorOpen = ref(false)
 const agentEditorFocusIdentity = ref(false)
@@ -148,6 +138,9 @@ const agentEditorError = ref('')
 const agentEditorErrorTab = ref<'model' | 'permissions' | undefined>(undefined)
 // 编辑保存成功后递增:对话框据此重置脏状态基线并显示「已保存」。新建成功后仍关闭。
 const agentEditorSavedToken = ref(0)
+watch(isAgentEditorOpen, (isOpen, wasOpen) => {
+  if (!isOpen && wasOpen) void refreshAgentMcpAttention()
+})
 // 展开集是**真正的集合**:点一行只 toggle 它自己,不动别人(不再是「单值覆盖」)。
 const expandedProjects = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
@@ -2216,9 +2209,6 @@ async function onSelectAgent(agent: ChatSession['agent'], targetSessionId = ''):
   projectSkills.value = {}
   skillStatus.value = {}
   selectedAgent.value = agent
-  // 顶层插件面板按 Agent 重建,加载完成前不沿用上一位的计数。
-  agentPluginCount.value = undefined
-  requestedPluginKey.value = ''
   if (targetSessionId !== '') landingSessionId.value = targetSessionId
   await reloadWorkspace(targetSessionId === '', true, true)
 }
@@ -2564,6 +2554,7 @@ onBeforeUnmount(() => {
           <AgentContextSwitcher
             v-if="agents.length > 0"
             :value="selectedAgent" :agents="agents" variant="sidebar"
+            :settings-needs-attention="agentMcpNeedsAttention"
             @select="onSelectAgent" @create="openAgentCreate" @settings="openAgentSettings"
           />
           <div v-else class="sidebar-agent-state">
@@ -2573,15 +2564,7 @@ onBeforeUnmount(() => {
           </div>
           <button v-if="isNarrow" class="workspace-button icon-button sidebar-close" :aria-label="t.workspace.closeSidebar" @click="closeDrawer">×</button>
         </div>
-        <section class="workspace-projects">
-          <SidebarViewTabs
-            id-prefix="sidebar-view" v-model="sidebarView"
-            :options="sidebarViewOptions" :label="t.workspace.sidebarViews.label"
-          />
-          <div
-            v-show="sidebarView === 'projects'" id="sidebar-view-panel-projects"
-            role="tabpanel" aria-labelledby="sidebar-view-tab-projects" class="sidebar-view-panel"
-          >
+        <section class="workspace-projects" :aria-label="t.workspace.sidebarViews.projects">
           <div class="project-scroll">
             <div v-if="projectsStatus === 'loading'" class="sidebar-loading" :aria-label="t.workspace.loading"><NSkeleton text :repeat="3" :animated="false" /></div>
             <div v-else-if="projectsStatus === 'error'" class="sidebar-loading"><p>{{ t.workspace.projectsError }}</p><button class="workspace-button" @click="retryProjects">{{ t.workspace.retry }}</button></div>
@@ -2600,10 +2583,19 @@ onBeforeUnmount(() => {
                          多项目同时展开时不再有「被选中」的项目,故不再有 aria-current。 -->
                     <span class="project-dot" aria-hidden="true" />
                     <span class="project-row__name">{{ project.name }}</span>
-                    <span class="project-row__slot" aria-hidden="true" />
+                  </button>
+                  <!-- 行尾动作簇:⋯ 在左、caret 在最右。两者都是独立按钮;
+                       caret 右缘与 Agent 行 chevron 共用同一右侧内距,箭头垂直对齐。 -->
+                  <ProjectMenu :project-name="project.name" @configure="openProjectSettings(project.path)" @close="onCloseProject(project)" />
+                  <button
+                    type="button" class="project-row__toggle"
+                    :aria-expanded="expandedProjects.has(project.id)"
+                    :aria-controls="`project-tree-${project.id}`"
+                    :aria-label="(expandedProjects.has(project.id) ? t.workspace.collapseProject : t.workspace.expandProject).replace('{project}', project.name)"
+                    @click="toggleProjectRow(project)"
+                  >
                     <svg class="tree-caret project-row__caret" :class="{ 'is-open': expandedProjects.has(project.id) }" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
-                  <ProjectMenu :project-name="project.name" @configure="openProjectSettings(project.path)" @close="onCloseProject(project)" />
                 </div>
                 <div v-show="expandedProjects.has(project.id)" :id="`project-tree-${project.id}`" class="project-tree">
                   <span class="project-ridge" aria-hidden="true" />
@@ -2654,35 +2646,6 @@ onBeforeUnmount(() => {
           <button class="workspace-button open-project" @click="isPickerOpen = true">
             <span aria-hidden="true">＋</span><span>{{ t.workspace.openProject }}</span>
           </button>
-          </div>
-          <div
-            v-show="sidebarView === 'plugins'" id="sidebar-view-panel-plugins"
-            role="tabpanel" aria-labelledby="sidebar-view-tab-plugins" class="sidebar-view-panel plugins-pane"
-          >
-            <div class="plugins-pane__scroll">
-              <AgentPlugins
-                v-if="selectedAgent !== ''" :key="selectedAgent"
-                :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
-                :requested-plugin-key="requestedPluginKey"
-                @count="agentPluginCount = $event" @announce="announcePlacement"
-                @open-request-consumed="requestedPluginKey = ''"
-              />
-            </div>
-          </div>
-          <div
-            v-show="sidebarView === 'mcp'" id="sidebar-view-panel-mcp"
-            role="tabpanel" aria-labelledby="sidebar-view-tab-mcp" class="sidebar-view-panel"
-          >
-            <div class="sidebar-pane__scroll">
-              <AgentMcp
-                v-if="selectedAgent !== ''" :key="selectedAgent"
-                :agent-id="selectedAgent" :agent-name="currentAgent?.name ?? ''"
-                :active="sidebarView === 'mcp'"
-                @count="agentMcpCount = $event" @announce="announcePlacement"
-                @manage-plugin="openPluginFromMcp"
-              />
-            </div>
-          </div>
         </section>
       </aside>
       <!-- 区域层:区域树在这里递归落成 DOM —— 每块区域一个 pane,区域之间是可拖 / 可键盘操作的
@@ -2979,6 +2942,7 @@ onBeforeUnmount(() => {
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :error-tab="agentEditorErrorTab" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"
       @identity-updated="onAgentIdentityUpdated" @re-pair="openAgentRePair"
+      @announce="announcePlacement"
     />
     <!-- 项目选择浮层(两种用途共用):新建对话时选归属(该 Agent 打开了多个项目才弹),
          以及空对话时改归属。它挂在页面级、position: fixed,锚点是触发元素交上来的视口矩形
@@ -3073,9 +3037,7 @@ onBeforeUnmount(() => {
 /* 侧栏头部:Agent 选择器占满,窄屏抽屉里右侧并排一枚关闭钮。 */
 .sidebar-head { display: flex; align-items: center; gap: var(--dl-space-2); flex: none; }
 .sidebar-close { flex: none; inline-size: var(--dl-target-size); block-size: var(--dl-target-size); padding: 0; font-size: var(--dl-font-size-lg); }
-/* 侧栏视图面板:项目 / 插件 / MCP 共用一块可伸缩的区域。 */
-.plugins-pane__scroll, .sidebar-pane__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--dl-space-1); margin: calc(-1 * var(--dl-space-1)); }
-.sidebar-view-panel { display: flex; flex-direction: column; gap: var(--dl-space-2); min-height: 0; flex: 1; }
+/* 项目区独占侧栏,滚动与展开行为保持不变。 */
 /* Agent 列表加载中 / 失败时占据身份区的位置。 */
 .sidebar-agent-state { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--dl-space-2); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-snug); }
 .sidebar-hint { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); }
@@ -3089,7 +3051,7 @@ onBeforeUnmount(() => {
    sticky 需要不透明的底,否则下方的文件行会从背后透出来;层序走 --dl-z-sticky(不就地写数值)。
    祖先 .project-scroll 有 overflow-y:auto;.workspace-sidebar 现为 overflow:visible(让侧栏头部的
    Agent 浮层不被裁切)—— sticky 相对滚动容器定位,注意别被裁:行本身不超出滚动容器,故不受影响。 */
-.project-row { position: sticky; inset-block-start: 0; z-index: var(--dl-z-sticky); display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: var(--dl-space-2); background: var(--dl-bg-elevated); border-radius: var(--dl-radius-sm); }
+.project-row { position: sticky; inset-block-start: 0; z-index: var(--dl-z-sticky); display: flex; align-items: center; min-height: var(--dl-target-size); padding-inline-end: calc(var(--dl-space-2) + var(--dl-border-width)); background: var(--dl-bg-elevated); border-radius: var(--dl-radius-sm); }
 /* 菜单打开的项目行必须压在其它 sticky 项目行之上:每个 .project-row 都因 sticky + z-index
    形成自己的层叠上下文,菜单的 --dl-z-overlay 只在行内有效,越不过 DOM 更靠后的同级行。
    类由 ProjectMenu 在开合时挂到所在行;只抬高这一行,其余行仍按 --dl-z-sticky 叠放。 */
@@ -3099,16 +3061,28 @@ onBeforeUnmount(() => {
    var(--dl-identity) 由所在元素的 .dl-identity-N 绑定类给出(见 style.css 与 design-language ④)。 */
 .project-dot { flex-shrink: 0; inline-size: var(--dl-identity-dot-size); block-size: var(--dl-identity-dot-size); border-radius: var(--dl-radius-pill); background: var(--dl-identity); }
 .project-row__name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--dl-font-size-sm); font-weight: 600; color: var(--dl-text-primary); }
-.project-row__slot { flex-shrink: 0; width: var(--dl-target-size); height: var(--dl-target-size); }
 .project-row__caret { flex-shrink: 0; color: var(--dl-text-secondary); }
 .project-row__button:focus-visible, .entry-row__button:focus-visible { box-shadow: var(--dl-focus-ring); }
+/* 行尾动作簇:⋯ → caret,两者都取纵向密集行的 28px 档并紧邻排布。
+   caret 图标贴命中区右缘 —— 它的右缘与 Agent 行 chevron 的右缘落在同一条垂直线上
+   (两者都吃同一档右侧内距)。悬停只提亮字形,不铺色块,避免小行里出现过重的方块。 */
+.project-row__toggle {
+  display: inline-flex; flex: none; align-items: center; justify-content: flex-end;
+  inline-size: calc(var(--dl-space-6) + var(--dl-space-1));
+  block-size: calc(var(--dl-space-6) + var(--dl-space-1));
+  border-radius: var(--dl-radius-sm); color: var(--dl-text-secondary);
+}
+.project-row__toggle:hover { color: var(--dl-text-primary); }
+.project-row__toggle:active { color: var(--dl-accent); }
+.project-row__toggle:focus-visible { outline: none; box-shadow: var(--dl-focus-ring); }
+/* 抽屉头部在 Agent chevron 右侧多一枚关闭钮;项目行预留同一列宽,让两个箭头仍垂直对齐。 */
+@media (max-width: 1023px) {
+  .project-row { padding-inline-end: calc(var(--dl-space-2) + var(--dl-target-size) + var(--dl-space-2) + var(--dl-border-width)); }
+}
 .tree-caret { width: var(--dl-icon-sm); height: var(--dl-icon-sm); transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .tree-caret path { stroke: currentColor; stroke-width: var(--dl-icon-stroke); vector-effect: non-scaling-stroke; }
 .tree-caret.is-open { transform: rotate(90deg); }
-/* ⋯ 触发钮:行内绝对定位,用「撑满行高 + flex 居中」而不是 transform 居中。
-   transform 会成为后代的包含块,把项目菜单里 position: fixed 的子菜单重新锁进滚动容器
-   并被裁切;这里刻意不用 transform(见 project-menu.vue 的定位说明)。 */
-.project-row .project-menu { position: absolute; inset-block: 0; inset-inline-end: calc(var(--dl-space-2) + var(--dl-icon-sm) + var(--dl-space-1)); display: flex; align-items: center; z-index: var(--dl-z-overlay); }
+/* ⋯ 触发钮现在是行尾动作簇里的流内兄弟,不再绝对定位;显隐仍由 project-menu 自己控制。 */
 .project-row:hover .project-menu, .project-row:focus-within .project-menu { opacity: 1; }
 .project-tree { position: relative; display: flex; flex-direction: column; padding-block: var(--dl-space-1); }
 .project-ridge { position: absolute; inset-block: 0; inset-inline-start: var(--workspace-tree-step); width: var(--dl-border-width); background: var(--workspace-tree-guide); pointer-events: none; }

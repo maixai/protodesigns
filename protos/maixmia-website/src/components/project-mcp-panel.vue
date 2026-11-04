@@ -23,6 +23,8 @@ const saveError = ref('')
 const saveFeedback = ref<'idle' | 'saved' | 'error'>('idle')
 const actionError = ref('')
 const connectingId = ref('')
+const agentServerNames = ref<ReadonlySet<string>>(new Set())
+function isShadowed(server: McpServer): boolean { return agentServerNames.value.has(server.name) }
 const isAddOpen = ref(false)
 const addName = ref('')
 const addDisplayName = ref('')
@@ -162,7 +164,14 @@ async function connect(server: McpServer): Promise<void> {
   const result = await request(props.project.path, server.id)
   connectingId.value = ''
   if (!result.ok) { actionError.value = result.error.message; return }
-  savedServers.value = cloneServers(result.value.servers)
+  // 连接只推进运行时状态;保留其它字段与未保存草稿,避免整组响应覆盖编辑基线。
+  savedServers.value = savedServers.value.map((saved) => {
+    const connected = result.value.servers.find((item) => item.id === saved.id)
+    return connected === undefined ? saved : {
+      ...saved, status: connected.status, enabled: connected.enabled,
+      errorMessage: connected.errorMessage, tools: structuredClone(connected.tools),
+    }
+  })
   const connected = result.value.servers.find((item) => item.id === server.id)
   if (connected !== undefined) {
     draftServers.value = draftServers.value.map((item) => item.id === server.id ? {
@@ -180,17 +189,16 @@ defineExpose({ save })
 <template>
   <div class="project-mcp">
     <p class="project-config__scope">{{ t.workspace.projectSettings.mcpScopeHint }}</p>
-    <AgentReadonlyContext kind="mcp" :agent="agent" :project-servers="savedServers" />
+    <AgentReadonlyContext kind="mcp" :agent="agent" :project-servers="savedServers" @servers="agentServerNames = new Set($event.map((server) => server.name))" />
     <div v-if="status === 'loading'" class="project-config__load-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
     <div v-else-if="status === 'error'" class="project-config__load-state" role="alert"><p>{{ t.workspace.projectSettings.loadError }}</p><button type="button" class="dl-btn dl-btn--ghost" @click="load">{{ t.workspace.projectSettings.retry }}</button></div>
     <template v-else>
       <section class="project-mcp__configuration">
         <div class="project-mcp__section-head"><div><h3>{{ t.workspace.projectSettings.mcpProjectServers }}</h3><p>{{ t.workspace.mcp.sameNamePrecedence }}</p></div><button type="button" class="dl-btn dl-btn--ghost" :disabled="isSaving" @click="openAdd">＋ {{ t.workspace.mcp.add }}</button></div>
-        <p class="project-mcp__fallback">{{ t.workspace.mcp.sameNameFallbackHint }}</p>
         <p v-if="draftServers.length === 0" class="project-mcp__empty">{{ t.workspace.mcp.emptyProject }}</p>
         <ul v-else class="project-mcp__list">
           <li v-for="server in draftServers" :key="server.id" class="project-mcp__server" :data-server-id="server.id">
-            <div class="project-mcp__server-head"><strong>{{ server.displayName }}</strong><span>{{ statusLabel(server) }}</span><span v-if="hasEnablementDraft(server)" class="project-mcp__pending">{{ t.workspace.mcp.pendingSave }}</span><span v-if="server.status === 'connected'">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span></div>
+            <div class="project-mcp__server-head"><strong>{{ server.displayName }}</strong><span>{{ statusLabel(server) }}</span><span v-if="hasEnablementDraft(server)" class="project-mcp__pending">{{ t.workspace.mcp.pendingSave }}</span><span v-if="server.status === 'connected'">{{ t.workspace.mcp.tools.replace('{count}', String(server.tools.length)) }}</span><span v-if="isShadowed(server)" class="project-mcp__shadow">{{ t.workspace.mcp.projectShadowsAgent }}</span></div>
             <div class="project-mcp__fields">
               <label>{{ t.workspace.mcp.name }}<input class="field__input" :value="server.name" :disabled="isSaving" @input="updateText(server, 'name', $event)"></label>
               <label>{{ t.workspace.mcp.displayName }}<input class="field__input" :value="server.displayName" :disabled="isSaving" @input="updateText(server, 'displayName', $event)"></label>
@@ -235,6 +243,7 @@ defineExpose({ save })
 .project-mcp__server-head { display: flex; flex-wrap: wrap; gap: var(--dl-space-2) var(--dl-space-3); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .project-mcp__server-head strong { color: var(--dl-text-primary); font-size: var(--dl-font-size-sm); font-weight: 500; }
 .project-mcp__pending { color: var(--dl-text-tertiary); }
+.project-mcp__shadow { color: var(--dl-warning); }
 .project-mcp__fields, .project-mcp__add { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--dl-space-3); }
 .project-mcp__fields label, .project-mcp__add label { display: grid; gap: var(--dl-space-1); min-width: 0; color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); }
 .project-mcp__fields input { font-family: var(--dl-font-mono); }

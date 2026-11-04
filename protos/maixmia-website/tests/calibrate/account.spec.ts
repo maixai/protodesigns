@@ -276,9 +276,12 @@ test('账户窗体:读取中、失败重试、空态与遮罩关闭', async ({ p
   const dialog = page.locator('#workspace-account-security-dialog')
   await expect(dialog.getByRole('status')).toHaveText('Loading identity information…')
   await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveCount(0)
+  // 无标签栏的读取中 / 失败态不补分界线:头部始终无底边线。
+  await expect(dialog.locator('.account-security__header')).toHaveCSS('border-bottom-width', '0px')
   await page.screenshot({ path: testInfo.outputPath('settings-loading.png') })
   await expect(dialog.getByRole('alert')).toContainText('Unable to load identity information')
   await expect(dialog.locator('.account-security__tabs').getByRole('tab')).toHaveCount(0)
+  await expect(dialog.locator('.account-security__header')).toHaveCSS('border-bottom-width', '0px')
   await page.screenshot({ path: testInfo.outputPath('settings-error.png') })
   await dialog.getByRole('button', { name: 'Retry', exact: true }).click()
   await expect(dialog.getByRole('status')).toBeVisible()

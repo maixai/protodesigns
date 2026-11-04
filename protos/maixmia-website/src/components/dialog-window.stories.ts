@@ -2,8 +2,8 @@ import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import DialogWindow from './dialog-window.vue'
 
 // 共享模态外壳:标题栏 / 导航 / 正文 / 动作区四个槽,stacked 与 sidebar 两种排布。
-// 头部内容自带内距与发丝线(与三个业务窗体一致)。
-const headStyle = 'display:flex;flex:1;align-items:center;gap:var(--dl-space-2);box-sizing:border-box;block-size:100%;padding:var(--dl-space-2) var(--workspace-settings-dialog-padding);border-block-end:var(--dl-border-width) solid var(--dl-border-base)'
+// 头部与标签栏同属 chrome:头部自带内距但不画线,分界只由标签栏底边线承担(与三个业务窗体一致)。
+const headStyle = 'display:flex;flex:1;align-items:center;gap:var(--dl-space-2);box-sizing:border-box;block-size:100%;padding:var(--dl-space-2) var(--workspace-settings-dialog-padding)'
 
 const meta = {
   title: '组件/DialogWindow',

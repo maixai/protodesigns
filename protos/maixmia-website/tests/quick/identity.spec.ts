@@ -25,6 +25,9 @@ test('@area:identity 文件选择器取消不会关闭账户设置', async ({ pa
   await page.locator('[data-settings-section="accountSecurity"]').click()
   const dialog = page.locator('#workspace-account-security-dialog')
   await expect(dialog.locator('[data-account-profile]')).toBeVisible()
+  // 头部与标签栏同属 chrome:有标签栏时头部无分界线,标签栏底边线是唯一分界。
+  await expect(dialog.locator('.account-security__header')).toHaveCSS('border-bottom-width', '0px')
+  await expect(dialog.locator('.account-security__tabs')).toHaveCSS('border-bottom-width', '1px')
   // 原生 cancel 会冒泡到框体；它只应被文件输入拦住，不能关掉整个账户设置。
   await dialog.locator('[data-avatar-input]').evaluate((input) => input.dispatchEvent(new Event('cancel', { bubbles: true })))
   await expect(dialog).toBeVisible()

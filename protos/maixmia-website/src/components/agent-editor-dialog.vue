@@ -2222,12 +2222,12 @@ onBeforeUnmount(() => {
 }
 
 /* 对象上下文不是导航；名称可以收缩，徽标、分隔符和可访问标题保持完整。
-   头部自带内距与发丝线。 */
+   头部与标签栏同属 chrome，这里不再画线 —— 分界由标签栏底边线一条承担，
+   避免两条发丝线夹着 44px 标签带形成拥挤的双线。 */
 .agent-editor__head {
   display: flex; flex: 1; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; white-space: nowrap;
   box-sizing: border-box; block-size: 100%;
   padding: var(--dl-space-2) var(--workspace-settings-dialog-padding);
-  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
 .agent-editor__title { flex: none; font-size: var(--dl-font-size-xl); font-weight: 600; line-height: var(--dl-line-body); }
 .agent-editor__badge { flex: none; padding-inline: var(--dl-space-2); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-pill); color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }

@@ -48,6 +48,23 @@ test('@area:agent-settings 打开设置、切换页签并保存脏状态', async
   await expect(state).toContainText('已保存')
 })
 
+test('@area:agent-settings Header 与标签栏同属 chrome，只保留标签栏底边线', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const dialog = await openAgentSettings(page)
+  await expect(dialog.locator('.agent-editor__head')).toHaveCSS('border-bottom-width', '0px')
+  await expect(dialog.locator('.agent-editor__tabbar')).toHaveCSS('border-bottom-width', '1px')
+  // 标签栏上缘紧接 Header 下缘,中间不留多余留白。
+  const gap = await dialog.evaluate((element) => {
+    const head = element.querySelector('.agent-editor__head')
+    const tabbar = element.querySelector('.agent-editor__tabbar')
+    if (!(head instanceof HTMLElement) || !(tabbar instanceof HTMLElement)) throw new Error('chrome missing')
+    return tabbar.getBoundingClientRect().top - head.getBoundingClientRect().bottom
+  })
+  expect(Math.abs(gap)).toBeLessThanOrEqual(1)
+})
+
 test('@area:agent-settings 头像草稿只在基本页预览，保存和移除同时更新头部及侧栏', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   const issues = collectRuntimeIssues(page)

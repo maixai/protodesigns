@@ -463,11 +463,12 @@ onBeforeUnmount(() => {
   color-scheme: dark;
   line-height: var(--dl-line-body);
 }
+/* 头部与标签栏同属 chrome,这里不再画线 —— 分界由标签栏底边线一条承担。
+   读取中 / 失败态没有标签栏,同样不为头部临时补线:标题与状态区靠留白和字号层级区分。 */
 .account-security__header {
   display: flex; flex: 1; align-items: center; min-inline-size: 0;
   box-sizing: border-box; block-size: 100%;
   padding: var(--dl-space-2) var(--workspace-settings-dialog-padding);
-  border-block-end: var(--dl-border-width) solid var(--dl-border-base);
 }
 /* 头部右端让出常驻的关闭钮。 */
 .account-security__header {

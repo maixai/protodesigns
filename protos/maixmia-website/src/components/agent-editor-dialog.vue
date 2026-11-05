@@ -33,6 +33,8 @@ import { agentInitial } from './agent-avatar'
 const props = defineProps<{
   open: boolean
   focusIdentity: boolean
+  initialTab?: 'plugins' | 'mcp' | undefined
+  initialPluginKey?: string | undefined
   // 当前编辑的 Agent。
   agent?: AgentSummary | undefined
   canDelete: boolean
@@ -43,6 +45,7 @@ const props = defineProps<{
   savedToken: number
 }>()
 const emit = defineEmits<{
+  initialRequestConsumed: []
   submit: [config: AgentConfig, permissions: AgentPermissions | null]
   delete: []
   identityUpdated: [agent: AgentSummary]
@@ -153,6 +156,8 @@ const permissionsTabRef = ref<HTMLButtonElement | null>(null)
 const pluginsTabRef = ref<HTMLButtonElement | null>(null)
 const mcpTabRef = ref<HTMLButtonElement | null>(null)
 const requestedPluginKey = ref('')
+const isPluginDirty = ref(false)
+const isPluginBusy = ref(false)
 const pluginView = ref<'list' | 'detail' | 'install' | 'addMarketplace'>('list')
 const dialogId = `agent-editor-${Math.random().toString(36).slice(2)}`
 const confirmTitleId = `${dialogId}-discard-title`
@@ -239,7 +244,7 @@ const seenSavedToken = ref(props.savedToken)
 const saveScanKey = ref(0)
 const isBasicDirty = computed(() => isAvatarDirty.value || name.value.trim() !== baselineName.value || note.value.trim() !== baselineNote.value)
 const isModelDirty = computed(() => gatewayDraftDirty.value || JSON.stringify(modelConfig.value) !== baselineModelSerialized.value)
-const isDirty = computed(() => isBasicDirty.value || isModelDirty.value || isPermissionDirty.value)
+const isDirty = computed(() => isBasicDirty.value || isModelDirty.value || isPermissionDirty.value || isPluginDirty.value)
 const usesDraftSave = computed(() => activeTab.value === 'basic' || activeTab.value === 'model' || activeTab.value === 'permissions')
 const dirtyDomains = computed(() => {
   const copy = t.value.workspace.agentAdmin
@@ -247,6 +252,7 @@ const dirtyDomains = computed(() => {
     ...(isBasicDirty.value ? [copy.domainBasic] : []),
     ...(isModelDirty.value ? [copy.tabModel] : []),
     ...(isPermissionDirty.value ? [copy.tabPermissions] : []),
+    ...(isPluginDirty.value ? [copy.tabPlugins] : []),
   ]
 })
 const isValid = computed(() => name.value.trim() !== '' && modelConfig.value.defaultModelId.trim() !== '' && !hasUnavailableSourceModels.value && gatewayDraftValid.value)
@@ -566,7 +572,7 @@ function sourceRowReady(row: SourceRow): boolean {
 }
 const sourceReady = computed(() => activeSource.value !== undefined && sourceRowReady(activeSource.value))
 // 保存还要求来源可用:没有可用来源时不允许把模型配置写回。
-const canSubmit = computed(() => isValid.value && permissionsReady.value && !props.busy && !isAvatarReading.value && isDirty.value && sourceReady.value && authorizationFlow.value === null)
+const canSubmit = computed(() => isValid.value && permissionsReady.value && !props.busy && !isAvatarReading.value && (isBasicDirty.value || isModelDirty.value || isPermissionDirty.value) && sourceReady.value && authorizationFlow.value === null)
 
 function sourceName(row: SourceRow): string {
   if (row.type === 'subscription') {
@@ -1399,6 +1405,8 @@ function openPluginFromMcp(pluginId: string, marketplaceId: string, pluginName: 
 }
 
 function reset(): void {
+  isPluginDirty.value = false
+  isPluginBusy.value = false
   abortAuthorization(false)
   name.value = props.agent?.name ?? ''
   note.value = props.agent?.note ?? ''
@@ -1418,7 +1426,7 @@ function reset(): void {
   // 旧数据或外部写入可能把默认模型放进回退链;打开时就地修正,保证「保存」永远可提交。
   modelConfig.value = { ...model, fallbackModelIds: model.fallbackModelIds.filter((id) => id !== model.defaultModelId) }
   // 编辑设置默认落在「模型 → 模型来源」:来源是后续默认模型 / 档位 / 高级配置的前提。
-  activeTab.value = props.focusIdentity ? 'basic' : 'model'
+  activeTab.value = props.focusIdentity ? 'basic' : props.initialTab ?? 'model'
   activeModelSection.value = 'source'
   sourceNotice.value = ''
   sourceQuery.value = ''
@@ -1434,7 +1442,8 @@ function reset(): void {
   subscriptionCheckOk.value = true
   gatewayReturnFocusId.value = ''
   closeSourceMenu()
-  requestedPluginKey.value = ''
+  requestedPluginKey.value = props.initialPluginKey ?? ''
+  emit('initialRequestConsumed')
   if (bodyRef.value !== null) bodyRef.value.scrollTop = 0
   // 打开时冻结基线:之后父组件刷新 Agent 也不会在用户编辑中静默改回表单。
   baselineName.value = name.value.trim()
@@ -1478,7 +1487,7 @@ function finish(action: 'submit' | 'cancel' | 'delete'): void {
 
 // Esc / 背板由共享外壳转成 request-close:保存中不可关闭;三个草稿域有改动时先确认。
 function requestClose(): void {
-  if (props.busy || confirmOpen.value) return
+  if (props.busy || isPluginBusy.value || confirmOpen.value) return
   if (!isDirty.value) { finish('cancel'); return }
   confirmReturnFocusRef.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
   confirmOpen.value = true
@@ -1547,6 +1556,10 @@ watch(() => props.open, (isOpen) => {
 // 外壳 showModal 之后设置初始焦点:身份入口或模型页签。
 async function onDialogOpened(): Promise<void> {
   await nextTick()
+  if (activeTab.value === 'plugins' || activeTab.value === 'mcp') {
+    ;(activeTab.value === 'plugins' ? pluginsTabRef.value : mcpTabRef.value)?.focus()
+    return
+  }
   if (props.focusIdentity) {
     document.querySelector('.agent-editor .security-identity')?.scrollIntoView({ block: 'start' })
     document.getElementById('agent-identity-status')?.focus({ preventScroll: true })
@@ -2247,7 +2260,7 @@ onBeforeUnmount(() => {
         <AgentPlugins
           :key="`plugins-${agent.id}`" :agent-id="agent.id" :agent-name="agent.name"
           :requested-plugin-key="requestedPluginKey" @announce="emit('announce', $event)"
-          @open-request-consumed="requestedPluginKey = ''" @view-change="pluginView = $event"
+          @state="isPluginDirty = $event.dirty; isPluginBusy = $event.saving" @open-request-consumed="requestedPluginKey = ''" @view-change="pluginView = $event"
         />
       </div>
       <div

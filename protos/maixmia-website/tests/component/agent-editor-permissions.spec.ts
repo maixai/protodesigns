@@ -6,11 +6,27 @@ import { mockAgentSummaries } from '../../src/mocks/workspace'
 import { mockGetAgentPermissions } from '../../src/mocks/agent-permissions'
 import { useI18n } from '../../src/i18n'
 
+vi.mock('../../src/mocks/delay', () => ({ delay: async () => {} }))
 vi.mock('../../src/api/agent-permissions', () => ({ getAgentPermissions: vi.fn() }))
 const agent = mockAgentSummaries()[0]
 if (agent === undefined) throw new Error('Missing Agent editor fixture')
 
 describe('agent editor permissions tab', () => {
+  it('consumes a project navigation destination once and opens the requested plugin detail', async () => {
+    useI18n().setLocale('zh-CN')
+    vi.mocked(api.getAgentPermissions).mockImplementation(async (agentId) => ({ ok: true, value: mockGetAgentPermissions(agentId) }))
+    const wrapper = mount(AgentEditorDialog, { props: { open: true, focusIdentity: false, agent, canDelete: false, busy: false, error: '', savedToken: 0, initialTab: 'plugins', initialPluginKey: 'browser-tools@community' }, attachTo: document.body })
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.get('[id$="tab-plugins"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('.plugin-detail').text()).toContain('Browser Tools')
+    expect(wrapper.emitted('initialRequestConsumed')).toHaveLength(1)
+    await wrapper.setProps({ initialTab: undefined, initialPluginKey: undefined, open: false })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    expect(wrapper.get('[id$="tab-model"]').attributes('aria-selected')).toBe('true')
+    wrapper.unmount()
+  })
   afterEach(() => { vi.clearAllMocks(); document.body.innerHTML = '' })
 
   it('shows five tabs for an existing Agent and blocks saving when permissions fail to load', async () => {

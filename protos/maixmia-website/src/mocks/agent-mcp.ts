@@ -234,6 +234,10 @@ export function mockListAgentMcpServers(agentId: string): McpServer[] {
   return (agentStore.get(agentId) ?? []).map((entry) => cloneServer(entry.server))
 }
 
+export function mockProjectAgentMcpServers(agentId: string): McpServer[] {
+  return (agentStore.get(agentId) ?? []).map((entry) => ({ ...cloneServer(entry.server), status: entry.baseStatus }))
+}
+
 export function mockAddAgentMcpServer(agentId: string, input: McpServerInput): Result<McpServer[]> {
   const invalid = validateMcpInput(input, mockListAgentMcpServers(agentId))
   if (invalid) return { ok: false, error: invalid }
@@ -287,27 +291,21 @@ export function mockListProjectMcpServers(path: string): McpProjectGroup {
   return { path, servers: ensureProject(path).map((entry) => cloneServer(entry.server)) }
 }
 
-export function mockSaveProjectMcpGroup(path: string, servers: readonly McpServer[]): McpProjectGroup {
-  const existingEntries = ensureProject(path)
-  projectStore.set(path, servers.map((server) => {
-    const existing = existingEntries.find((entry) => entry.server.id === server.id)
-    const baseStatus = existing?.baseStatus ?? (server.status === 'disabled' ? 'connected' : server.status)
-    const status = server.enabled ? baseStatus : 'disabled'
-    return {
-      baseStatus,
-      server: cloneServer({
-        ...server, scope: 'project', ownerId: path, status,
-        errorMessage: server.enabled && baseStatus === 'failed' ? catalog[server.name]?.errorMessage ?? '' : '',
-      }),
-    }
-  }))
-  return mockListProjectMcpServers(path)
-}
-
 export function mockAddProjectMcpServer(path: string, input: McpServerInput): Result<McpProjectGroup> {
   const invalid = validateMcpInput(input, mockListProjectMcpServers(path).servers)
   if (invalid) return { ok: false, error: invalid }
   ensureProject(path).push(customServer(input, 'project', path))
+  return { ok: true, value: mockListProjectMcpServers(path) }
+}
+
+export function mockUpdateProjectMcpServer(path: string, serverId: string, input: McpServerInput): Result<McpProjectGroup> {
+  const entry = ensureProject(path).find((item) => item.server.id === serverId)
+  if (!entry) return { ok: false, error: new Error('MCP server not found') }
+  const invalid = validateMcpInput(input, mockListProjectMcpServers(path).servers, entry.server.name)
+  if (invalid) return { ok: false, error: invalid }
+  const updated = customServer(input, 'project', path)
+  entry.baseStatus = updated.baseStatus
+  entry.server = { ...updated.server, id: serverId, enabled: entry.server.enabled, status: entry.server.enabled ? updated.baseStatus : 'disabled', tools: entry.server.enabled ? updated.server.tools : [] }
   return { ok: true, value: mockListProjectMcpServers(path) }
 }
 

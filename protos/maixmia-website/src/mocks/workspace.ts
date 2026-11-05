@@ -29,6 +29,8 @@ import type { ConversationSearchHit } from '../contracts/generated/conversation-
 import type { AppRoute } from '../contracts/generated/app-route'
 import type { Messages } from '../i18n'
 import { useI18n } from '../i18n'
+import { resolveProjectPlugins } from '../data/project-tools'
+import { mockProjectToolOverrides } from './project-tools'
 import { DEFAULT_MODEL, defaultModelSource, modelById, subscriptionIsReady } from '../data/models'
 
 const { t } = useI18n()
@@ -277,7 +279,7 @@ export function mockDeleteAgent(agentId: AgentId): boolean {
 // ---- 插件与插件市场 ----
 //
 // 市场目录是共享缓存;注册与安装态按作用域隔离:
-//   agent:<agentId>   该 Agent 的会话配置(程序化选项;优先级高于项目)
+//   agent:<agentId>   该 Agent 的默认配置;项目可覆盖启停,Agent 记录不被修改
 //   project:<path>    打开该项目的所有 Agent 生效(.claude/settings.json)
 // 绑定记录各作用域注册了哪些市场、是否自动更新。插件身份是 plugin@marketplace ——
 // 不同市场可以有同名插件。
@@ -850,7 +852,7 @@ function bindingMap(scope: InstallScope, ownerId: string): Map<string, Marketpla
   return created
 }
 
-// 预置安装:演示 Agent 级与项目级并存,以及同一插件在两层都出现(Agent 优先)。
+// 预置安装:演示 Agent 与项目副本并存;项目配置优先,启用状态由独立项目覆盖推导。
 const INSTALL_SEEDS: { scope: InstallScope; ownerId: string; plugins: { marketplaceId: string; pluginId: string; enabled: boolean; installedVersion?: string }[] }[] = [
   { scope: 'agent', ownerId: 'planning', plugins: [
     { marketplaceId: 'anthropic', pluginId: 'code-review', enabled: true },
@@ -1123,6 +1125,20 @@ export function mockAgentPluginMcpServers(agentId: string): PluginMcpServer[] | 
       errorMessage: status === 'failed' ? runtime.errorMessage : '',
       tools: structuredClone(server.tools),
     }
+  }))
+}
+
+// 项目插件贡献与插件页共用生效推导;项目副本配置优先,停用覆盖始终先于连接健康。
+export function mockProjectPluginMcpServers(path: string, agentId: string): PluginMcpServer[] {
+  const entries = resolveProjectPlugins(mockInstalledPlugins('agent', agentId) ?? [], mockInstalledPlugins('project', path) ?? [], mockProjectToolOverrides(path))
+  return entries.flatMap((entry) => entry.installed.plugin.mcpServers.map((server): PluginMcpServer => {
+    const item = entry.installed
+    const runtime = pluginMcpRuntimeOf(item.scope === 'project' ? path : agentId, item.plugin.marketplaceId, item.plugin.id, server.name)
+    const status = !entry.effectiveEnabled ? 'pluginDisabled' : item.config.some((field) => field.required && !field.isSet) ? 'needsConfiguration' : runtime.status
+    return { id: `plugin:${item.plugin.marketplaceId}:${item.plugin.id}:${server.name}`, sdkName: `plugin:${item.plugin.id}:${server.name}`,
+      pluginId: item.plugin.id, marketplaceId: item.plugin.marketplaceId, pluginName: item.plugin.name, name: server.name,
+      displayName: server.displayName, description: server.description, status, errorMessage: status === 'failed' ? runtime.errorMessage : '',
+      tools: status === 'connected' ? structuredClone(server.tools) : [] }
   }))
 }
 

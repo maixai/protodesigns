@@ -6,6 +6,11 @@ import type { InstalledPlugin } from '../contracts/generated/installed-plugin'
 import type { Plugin, PluginConfigSchema } from '../contracts/generated/plugin'
 import type { MarketplaceBinding } from '../contracts/generated/marketplace-binding'
 import type { PluginConfigValue } from '../contracts/generated/plugin-config-value'
+import type { ProjectPluginEntry } from '../contracts/generated/project-plugin-entry'
+import type { ProjectToolOverrides } from '../contracts/generated/project-tool-overrides'
+import { getProjectToolOverrides, setProjectToolOverride } from '../api/project-tools'
+import { resolveProjectPlugins, resolveProjectMarkets, projectToolsRevision } from '../data/project-tools'
+import type { ProjectPanelState } from './project-settings-state'
 import type { Result } from '../api/result'
 import {
   addMarketplace, installPlugin, listInstalledPlugins, listMarketplaceBindings,
@@ -22,8 +27,10 @@ import DliIcon from './dl-icon.vue'
 
 type PluginView = 'list' | 'detail' | 'install' | 'addMarketplace'
 
-const props = withDefaults(defineProps<{ agentId: string; agentName: string; requestedPluginKey?: string }>(), { requestedPluginKey: '' })
+const props = withDefaults(defineProps<{ agentId: string; agentName: string; requestedPluginKey?: string; projectPath?: string; projectName?: string; embedded?: boolean }>(), { embedded: false, requestedPluginKey: '', projectPath: '', projectName: '' })
 const emit = defineEmits<{
+  state: [state: ProjectPanelState]
+  manageAgent: [pluginKey: string]
   count: [count: number | undefined]
   announce: [message: string]
   openRequestConsumed: []
@@ -31,7 +38,23 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const installed = ref<InstalledPlugin[]>([])
-const bindings = ref<MarketplaceBinding[]>([])
+const ownBindings = ref<MarketplaceBinding[]>([])
+const inherited = ref<InstalledPlugin[]>([])
+const inheritedBindings = ref<MarketplaceBinding[]>([])
+const inheritedStatus = ref<'loading' | 'ready' | 'error'>('loading')
+const overrides = ref<ProjectToolOverrides>({ path: props.projectPath, plugins: [], mcp: [] })
+const isProject = computed(() => props.projectPath !== '')
+const scope = computed(() => isProject.value ? 'project' : 'agent')
+const ownerId = computed(() => isProject.value ? props.projectPath : props.agentId)
+const entries = computed(() => resolveProjectPlugins(inherited.value, installed.value, overrides.value))
+const installedView = computed(() => isProject.value ? entries.value.map((entry) => ({ ...entry.installed, enabled: entry.effectiveEnabled })) : installed.value)
+const marketEntries = computed(() => resolveProjectMarkets(inheritedBindings.value, ownBindings.value))
+const bindings = computed(() => isProject.value ? marketEntries.value.map((entry) => entry.binding) : ownBindings.value)
+const installedQuery = ref('')
+const visibleInstalled = computed(() => installedView.value.filter((item) => [item.plugin.name, item.marketplaceName, pluginKey(item.plugin)].some((value) => value.toLowerCase().includes(installedQuery.value.toLowerCase().trim()))))
+const configBaseline = ref('')
+const isConfirmingDiscard = ref(false)
+const pendingPluginKey = ref('')
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const view = ref<PluginView>('list')
 const isPluginsExpanded = ref(true)
@@ -65,7 +88,7 @@ const loadVersion = ref(0)
 function pluginKey(plugin: Plugin): string {
   return `${plugin.id}@${plugin.marketplaceId}`
 }
-const selected = computed(() => installed.value.find((item) => pluginKey(item.plugin) === selectedPluginKey.value))
+const selected = computed(() => installedView.value.find((item) => pluginKey(item.plugin) === selectedPluginKey.value))
 const available = computed(() => {
   const installedKeys = new Set(installed.value.map((item) => pluginKey(item.plugin)))
   return bindings.value.flatMap((binding) => binding.marketplace.plugins
@@ -85,11 +108,15 @@ const paginated = computed(() => {
   return filtered.value.slice(start, start + pageSize.value)
 })
 // 列表高度不足一条以上时改为一整条可滚列表:窄屏分页会把每页压到 1 条、页数暴涨。
-const isPaged = computed(() => pageSize.value > 1)
+const isPaged = computed(() => !props.embedded && pageSize.value > 1)
 const installRows = computed(() => isPaged.value ? paginated.value : filtered.value)
 const pageStatus = computed(() => t.value.workspace.plugins.installPageStatus
   .replace('{page}', String(currentPage.value))
   .replace('{pages}', String(Math.max(1, pageCount.value))))
+const selectedEntry = computed(() => entries.value.find((entry) => entry.key === selectedPluginKey.value))
+const isReadonly = computed(() => isProject.value && selectedEntry.value?.source === 'agent')
+const isConfigDirty = computed(() => view.value === 'detail' && !isReadonly.value && configBaseline.value !== JSON.stringify(configDrafts.value))
+const scopeCopy = computed(() => t.value.workspace.projectTools.agentScope.replace('{agent}', props.agentName))
 const formPrefix = computed(() => `agent-plugin-${props.agentId}-${selectedPluginKey.value}`)
 const installCandidateMarket = computed(() => {
   const candidate = installCandidate.value
@@ -98,33 +125,58 @@ const installCandidateMarket = computed(() => {
 const detailSecretSet = computed(() => Object.fromEntries((selected.value?.config ?? []).map((field) => [field.key, field.isSet])))
 const installedFeedback = computed(() => installed.value.find((item) => pluginKey(item.plugin) === installedFeedbackKey.value))
 
-async function load(): Promise<void> {
+function projectCopy(text: string, name = ''): string { return text.replaceAll('{project}', props.projectName).replaceAll('{agent}', props.agentName).replaceAll('{name}', name) }
+function entryFor(item: InstalledPlugin): ProjectPluginEntry | undefined { return entries.value.find((entry) => entry.key === pluginKey(item.plugin)) }
+function sourceLabel(item: InstalledPlugin): string {
+  const source = entryFor(item)?.source
+  return !isProject.value ? t.value.workspace.mcp.sourceAgent : projectCopy(source === 'both' ? t.value.workspace.projectTools.both : source === 'project' ? t.value.workspace.projectTools.own : t.value.workspace.projectTools.inherited)
+}
+function effectiveLabel(item: InstalledPlugin): string {
+  const copy = t.value.workspace.projectTools
+  if (isProject.value && status.value !== 'ready') return copy.loadProjectError
+  if (isProject.value && inheritedStatus.value !== 'ready') return copy.loadAgentError
+  return isProject.value ? (item.enabled ? copy.enabled : copy.disabled) : (item.enabled ? copy.defaultEnabled : copy.defaultDisabled)
+}
+function marketReadonly(binding: MarketplaceBinding): boolean { return isProject.value && !ownBindings.value.some((item) => item.marketplace.id === binding.marketplace.id) }
+async function loadInherited(): Promise<void> {
+  if (!isProject.value) { inheritedStatus.value = 'ready'; return }
+  inheritedStatus.value = 'loading'
+  const [pluginsResult, marketsResult] = await Promise.all([listInstalledPlugins('agent', props.agentId), listMarketplaceBindings('agent', props.agentId)])
+  if (!isAlive.value) return
+  if (!pluginsResult.ok || !marketsResult.ok) { inheritedStatus.value = 'error'; return }
+  inherited.value = pluginsResult.value
+  inheritedBindings.value = marketsResult.value
+  inheritedStatus.value = 'ready'
+}
+async function loadOwn(): Promise<void> {
   loadVersion.value += 1
   const version = loadVersion.value
   status.value = 'loading'
   error.value = ''
-  const [pluginsResult, bindingsResult] = await Promise.all([
-    listInstalledPlugins('agent', props.agentId),
-    listMarketplaceBindings('agent', props.agentId),
+  const [pluginsResult, bindingsResult, overridesResult] = await Promise.all([
+    listInstalledPlugins(scope.value, ownerId.value), listMarketplaceBindings(scope.value, ownerId.value),
+    isProject.value ? getProjectToolOverrides(props.projectPath) : Promise.resolve(null),
   ])
   if (!isAlive.value || loadVersion.value !== version) return
-  if (!pluginsResult.ok || !bindingsResult.ok) {
+  if (!pluginsResult.ok || !bindingsResult.ok || (overridesResult !== null && !overridesResult.ok)) {
     status.value = 'error'
-    error.value = !pluginsResult.ok ? pluginsResult.error.message : !bindingsResult.ok ? bindingsResult.error.message : ''
+    error.value = !pluginsResult.ok ? pluginsResult.error.message : !bindingsResult.ok ? bindingsResult.error.message : overridesResult !== null && !overridesResult.ok ? overridesResult.error.message : ''
     return
   }
   installed.value = pluginsResult.value
-  bindings.value = bindingsResult.value
+  ownBindings.value = bindingsResult.value
+  if (overridesResult?.ok) overrides.value = overridesResult.value
   status.value = 'ready'
 }
+async function load(): Promise<void> { await Promise.all([loadOwn(), loadInherited()]) }
 function replaceInstalled(item: InstalledPlugin): void {
   const next = installed.value.filter((existing) => pluginKey(existing.plugin) !== pluginKey(item.plugin))
   installed.value = [...next, item].sort((a, b) => a.plugin.name.localeCompare(b.plugin.name))
 }
 function replaceBinding(item: MarketplaceBinding): void {
-  bindings.value = bindings.value.some((existing) => existing.marketplace.id === item.marketplace.id)
-    ? bindings.value.map((existing) => existing.marketplace.id === item.marketplace.id ? item : existing)
-    : [...bindings.value, item]
+  ownBindings.value = ownBindings.value.some((existing) => existing.marketplace.id === item.marketplace.id)
+    ? ownBindings.value.map((existing) => existing.marketplace.id === item.marketplace.id ? item : existing)
+    : [...ownBindings.value, item]
 }
 
 // 请求期间锁定导航,业务错误保留在面板内。
@@ -138,8 +190,9 @@ async function mutate<T>(request: () => Promise<Result<T>>, success: (value: T) 
   try {
     const result = await request()
     if (!isAlive.value) return
-    if (!result.ok) { error.value = result.error.message; return }
+    if (!result.ok) { error.value = isProject.value ? projectCopy(t.value.workspace.projectTools.feedback).replace('{message}', result.error.message) : result.error.message; return }
     await success(result.value)
+    if (isProject.value) projectToolsRevision.value += 1
   } finally {
     busy.value = false
     // 禁用的按钮会失焦;原控件仍在则恢复,安装按钮已移除则聚焦流程返回钮。
@@ -155,7 +208,8 @@ async function mutate<T>(request: () => Promise<Result<T>>, success: (value: T) 
   }
 }
 function announce(template: string, name: string): void {
-  emit('announce', template.replace('{name}', name))
+  const message = template.replace('{name}', name)
+  emit('announce', isProject.value ? projectCopy(t.value.workspace.projectTools.feedback).replace('{message}', message) : message)
 }
 async function navigate(next: PluginView): Promise<void> {
   error.value = ''
@@ -186,6 +240,7 @@ function focusView(next: PluginView): void {
 }
 function back(): void {
   if (busy.value) return
+  if (isConfigDirty.value) { isConfirmingDiscard.value = true; void nextTick(() => rootRef.value?.querySelector<HTMLElement>('.plugin-keep-editing')?.focus()); return }
   isPluginsExpanded.value = true
   if (view.value === 'addMarketplace') {
     resetAddMarketDraft()
@@ -202,7 +257,17 @@ function onEscape(event: KeyboardEvent): void {
 }
 function resetConfigDrafts(): void {
   configDrafts.value = Object.fromEntries((selected.value?.config ?? []).map((field) => [field.key, field.type === 'secret' ? '' : field.value]))
+  configBaseline.value = JSON.stringify(configDrafts.value)
+  isConfirmingDiscard.value = false
 }
+function discardConfig(): void {
+  const requested = installedView.value.find((item) => pluginKey(item.plugin) === pendingPluginKey.value)
+  pendingPluginKey.value = ''
+  resetConfigDrafts()
+  if (requested) openDetail(requested)
+  else back()
+}
+function keepConfigEditing(): void { isConfirmingDiscard.value = false; pendingPluginKey.value = ''; void nextTick(() => rootRef.value?.querySelector<HTMLElement>('.plugin-back')?.focus()) }
 function openDetail(item: InstalledPlugin): void {
   selectedPluginKey.value = pluginKey(item.plugin)
   listFocusKey.value = selectedPluginKey.value
@@ -236,7 +301,7 @@ function measureInstallPageSize(): void {
   pageSize.value = pageSizeForHeight(list.clientHeight, rowHeight)
 }
 watch(installListRef, (list, _previous, onCleanup) => {
-  if (list === null) return
+  if (list === null || props.embedded) return
   const observer = new ResizeObserver(measureInstallPageSize)
   observer.observe(list)
   measureInstallPageSize()
@@ -269,6 +334,7 @@ async function openAddMarket(): Promise<void> {
   returnFocus.value = marketAddRef.value
 }
 function switchLabel(item: InstalledPlugin): string {
+  if (isProject.value) return projectCopy(item.enabled ? t.value.workspace.projectTools.disableLabel : t.value.workspace.projectTools.enableLabel, item.plugin.name)
   return (item.enabled ? t.value.workspace.plugins.disableLabel : t.value.workspace.plugins.enableLabel).replace('{name}', item.plugin.name)
 }
 function needsConfig(item: InstalledPlugin): boolean {
@@ -309,14 +375,27 @@ function configIsValid(fields: readonly PluginConfigSchema[], mode: PluginConfig
 function hasUpdate(item: InstalledPlugin): boolean {
   return item.installedVersion !== item.plugin.version
 }
+async function restore(item: InstalledPlugin): Promise<void> {
+  await mutate(() => setProjectToolOverride(props.projectPath, props.agentId, 'plugins', pluginKey(item.plugin), null), (value) => {
+    overrides.value = value
+    emit('announce', projectCopy(t.value.workspace.projectTools.restoredAnnounce, item.plugin.name))
+  })
+}
 async function toggle(item: InstalledPlugin, enabled: boolean): Promise<void> {
-  await mutate(() => setPluginEnabled('agent', props.agentId, item.plugin.marketplaceId, item.plugin.id, enabled), (updated) => {
+  if (isProject.value && item.scope === 'agent') {
+    await mutate(() => setProjectToolOverride(props.projectPath, props.agentId, 'plugins', pluginKey(item.plugin), enabled), (value) => {
+      overrides.value = value
+      emit('announce', projectCopy(enabled ? t.value.workspace.projectTools.enabledAnnounce : t.value.workspace.projectTools.disabledAnnounce, item.plugin.name))
+    })
+    return
+  }
+  await mutate(() => setPluginEnabled(scope.value, ownerId.value, item.plugin.marketplaceId, item.plugin.id, enabled), (updated) => {
     replaceInstalled(updated)
     announce(enabled ? t.value.workspace.plugins.enabledAnnounce : t.value.workspace.plugins.disabledAnnounce, item.plugin.name)
   })
 }
 async function performInstall(plugin: Plugin, values: readonly PluginConfigValue[]): Promise<void> {
-  await mutate(() => installPlugin('agent', props.agentId, plugin.marketplaceId, plugin.id, values), async (item) => {
+  await mutate(() => installPlugin(scope.value, ownerId.value, plugin.marketplaceId, plugin.id, values), async (item) => {
     replaceInstalled(item)
     listFocusKey.value = pluginKey(item.plugin)
     isPluginsExpanded.value = true
@@ -351,8 +430,8 @@ async function setUninstallConfirmation(isConfirming: boolean): Promise<void> {
 }
 async function uninstall(): Promise<void> {
   const item = selected.value
-  if (item === undefined) return
-  await mutate(() => uninstallPlugin('agent', props.agentId, item.plugin.marketplaceId, item.plugin.id), async () => {
+  if (item === undefined || isReadonly.value) return
+  await mutate(() => uninstallPlugin(scope.value, ownerId.value, item.plugin.marketplaceId, item.plugin.id), async () => {
     installed.value = installed.value.filter((entry) => pluginKey(entry.plugin) !== pluginKey(item.plugin))
     announce(t.value.workspace.plugins.uninstalledAnnounce, item.plugin.name)
     await navigate('list')
@@ -360,49 +439,50 @@ async function uninstall(): Promise<void> {
 }
 async function updatePlugin(): Promise<void> {
   const item = selected.value
-  if (item === undefined) return
-  await mutate(() => updateInstalledPlugin('agent', props.agentId, item.plugin.marketplaceId, item.plugin.id), (updated) => {
+  if (item === undefined || isReadonly.value) return
+  await mutate(() => updateInstalledPlugin(scope.value, ownerId.value, item.plugin.marketplaceId, item.plugin.id), (updated) => {
     replaceInstalled(updated)
     announce(t.value.workspace.plugins.updatedPlugin.replace('{version}', updated.installedVersion), updated.plugin.name)
   })
 }
 async function saveConfig(): Promise<void> {
   const item = selected.value
-  if (item === undefined || busy.value || !configIsValid(item.config, 'detail')) return
+  if (item === undefined || isReadonly.value || busy.value || !configIsValid(item.config, 'detail')) return
   const values = pluginConfigValues(item.config, configDrafts.value, 'detail')
-  await mutate(() => savePluginConfig('agent', props.agentId, item.plugin.marketplaceId, item.plugin.id, values), (updated) => {
+  await mutate(() => savePluginConfig(scope.value, ownerId.value, item.plugin.marketplaceId, item.plugin.id, values), (updated) => {
     replaceInstalled(updated)
     resetConfigDrafts()
     announce(t.value.workspace.plugins.configureSaved, updated.plugin.name)
   })
 }
 async function refreshInstalled(): Promise<void> {
-  const result = await listInstalledPlugins('agent', props.agentId)
+  const result = await listInstalledPlugins(scope.value, ownerId.value)
   if (!isAlive.value) return
   if (!result.ok) { error.value = result.error.message; return }
   installed.value = result.value
 }
 async function setAutoUpdate(binding: MarketplaceBinding, enabled: boolean): Promise<void> {
-  await mutate(() => setMarketplaceAutoUpdate('agent', props.agentId, binding.marketplace.id, enabled), async (updated) => {
+  await mutate(() => setMarketplaceAutoUpdate(scope.value, ownerId.value, binding.marketplace.id, enabled), async (updated) => {
     replaceBinding(updated)
     if (enabled) await refreshInstalled()
     announce(enabled ? t.value.workspace.plugins.autoUpdateOn : t.value.workspace.plugins.autoUpdateOff, binding.marketplace.name)
   })
 }
 async function updateMarket(binding: MarketplaceBinding): Promise<void> {
-  await mutate(() => updateMarketplace('agent', props.agentId, binding.marketplace.id), async (updated) => {
+  await mutate(() => updateMarketplace(scope.value, ownerId.value, binding.marketplace.id), async (updated) => {
     replaceBinding(updated)
     await refreshInstalled()
     announce(t.value.workspace.plugins.updatedMarketplace, binding.marketplace.name)
   })
 }
 function removeBody(binding: MarketplaceBinding): string {
+  if (isProject.value) return projectCopy(t.value.workspace.projectTools.removeMarket).replace('{count}', String(installed.value.filter((item) => item.plugin.marketplaceId === binding.marketplace.id).length))
   return t.value.workspace.plugins.removeBodyAgent.replace('{name}', props.agentName)
     .replace('{count}', String(installed.value.filter((item) => item.plugin.marketplaceId === binding.marketplace.id).length))
 }
 async function removeMarket(binding: MarketplaceBinding): Promise<void> {
-  await mutate(() => removeMarketplace('agent', props.agentId, binding.marketplace.id), async () => {
-    bindings.value = bindings.value.filter((item) => item.marketplace.id !== binding.marketplace.id)
+  await mutate(() => removeMarketplace(scope.value, ownerId.value, binding.marketplace.id), async () => {
+    ownBindings.value = ownBindings.value.filter((item) => item.marketplace.id !== binding.marketplace.id)
     installed.value = installed.value.filter((item) => item.plugin.marketplaceId !== binding.marketplace.id)
     removeMarketId.value = ''
     if (view.value === 'detail' && selected.value === undefined) await navigate('list')
@@ -415,7 +495,7 @@ async function addMarket(): Promise<void> {
     error.value = t.value.workspace.plugins.marketplaceRequired
     return
   }
-  await mutate(() => addMarketplace('agent', props.agentId, { name: addName.value.trim(), source: addSource.value.trim(), autoUpdate: addAutoUpdate.value }), async (binding) => {
+  await mutate(() => addMarketplace(scope.value, ownerId.value, { name: addName.value.trim(), source: addSource.value.trim(), autoUpdate: addAutoUpdate.value }), async (binding) => {
     replaceBinding(binding)
     resetAddMarketDraft()
     isMarketsExpanded.value = true
@@ -424,19 +504,21 @@ async function addMarket(): Promise<void> {
     await navigate('list')
   })
 }
-watch([status, () => installed.value.length], () => emit('count', status.value === 'ready' ? installed.value.length : undefined), { immediate: true })
+watch([status, () => installedView.value.length], () => emit('count', status.value === 'ready' ? installedView.value.length : undefined), { immediate: true })
 watch(view, (next) => emit('viewChange', next), { immediate: true })
-watch([status, () => props.requestedPluginKey], ([nextStatus, requestedKey]) => {
-  if (nextStatus !== 'ready' || requestedKey === '') return
-  const item = installed.value.find((entry) => pluginKey(entry.plugin) === requestedKey)
-  if (item !== undefined) openDetail(item)
+watch([status, inheritedStatus, () => props.requestedPluginKey], ([nextStatus, nextInheritedStatus, requestedKey]) => {
+  if (nextStatus !== 'ready' || (isProject.value && nextInheritedStatus !== 'ready') || requestedKey === '') return
+  const item = installedView.value.find((entry) => pluginKey(entry.plugin) === requestedKey)
+  if (item !== undefined && isConfigDirty.value) {
+    if (requestedKey !== selectedPluginKey.value) { pendingPluginKey.value = requestedKey; isConfirmingDiscard.value = true }
+  } else if (item !== undefined) openDetail(item)
   // 请求只消费一次;之后用户从详情返回列表不会被残留 key 再次推回详情。
   emit('openRequestConsumed')
 })
-watch(() => props.agentId, () => {
+watch(() => [props.agentId, props.projectPath], () => {
   view.value = 'list'
   installed.value = []
-  bindings.value = []
+  ownBindings.value = []
   selectedPluginKey.value = ''
   selectedMarketId.value = ''
   currentPage.value = 1
@@ -457,18 +539,24 @@ watch(() => props.agentId, () => {
   addAutoUpdate.value = false
   void load()
 }, { immediate: true })
+const panelState = computed<ProjectPanelState>(() => ({ status: status.value, dirty: isConfigDirty.value, saving: busy.value,
+  saveState: isConfigDirty.value ? 'dirty' : 'clean', saveStateLabel: isConfigDirty.value ? t.value.workspace.projectTools.dirty : t.value.workspace.projectTools.immediate, canSave: false }))
+watch(panelState, (state) => emit('state', state), { immediate: true })
 onBeforeUnmount(() => { isAlive.value = false })
 </script>
 
 <template>
-  <section ref="rootRef" class="agent-plugins" :data-view="view" :aria-busy="busy || status === 'loading'" @keydown.esc="onEscape">
+  <section ref="rootRef" class="agent-plugins" :class="{ 'agent-plugins--embedded': embedded }" :data-view="view" :aria-busy="busy || status === 'loading'" @keydown.esc="onEscape">
     <div v-if="status === 'loading'" class="plugin-state" :aria-label="t.workspace.plugins.loading"><NSkeleton text :repeat="4" :animated="false" /></div>
-    <div v-else-if="status === 'error'" class="plugin-state">
-      <p>{{ t.workspace.plugins.error }}</p><p v-if="error" class="plugin-error" role="alert">{{ error }}</p>
-      <button type="button" class="plugin-action" @click="load">{{ t.workspace.plugins.retry }}</button>
+    <div v-else-if="status === 'error'" class="plugin-state plugin-source-error" data-source="project" role="alert">
+      <p>{{ isProject ? t.workspace.projectTools.loadProjectError : t.workspace.plugins.error }}</p><p v-if="error">{{ error }}</p>
+      <button type="button" class="plugin-action" @click="loadOwn">{{ t.workspace.plugins.retry }}</button>
     </div>
-    <template v-else>
-      <p v-if="error && installCandidate === null" class="plugin-error" role="alert">{{ error }}</p>
+    <template v-if="status === 'ready' || (isProject && inheritedStatus === 'ready')">
+      <p v-if="!isProject" class="plugin-scope-summary">{{ scopeCopy }}</p>
+      <div v-if="isProject && inheritedStatus === 'loading'" class="plugin-state" role="status">{{ t.workspace.projectSettings.loading }}</div>
+      <div v-if="isProject && inheritedStatus === 'error'" class="plugin-error" role="alert"><p>{{ t.workspace.projectTools.loadAgentError }}</p><button type="button" class="plugin-action" @click="loadInherited">{{ t.workspace.plugins.retry }}</button></div>
+      <p v-if="error && status === 'ready' && installCandidate === null" class="plugin-error" role="alert">{{ error }}</p>
       <!-- 子页面只隐藏分组,保留折叠状态与详情草稿。 -->
       <div v-show="view === 'list'" class="plugin-groups">
         <div v-if="view === 'list' && installedFeedback" class="plugin-install-feedback" role="status">
@@ -478,25 +566,32 @@ onBeforeUnmount(() => { isAlive.value = false })
         <section class="plugin-group" data-group="plugins">
           <div class="plugin-group-head">
             <button type="button" class="plugin-disclosure" :disabled="busy" :aria-expanded="isPluginsExpanded" :aria-controls="`${sectionPrefix}-installed`" @click="isPluginsExpanded = !isPluginsExpanded">
-              <DliIcon class="group-chevron" :class="{ 'is-expanded': isPluginsExpanded }" name="chevronRight" size="sm" /><span>{{ t.workspace.plugins.pluginsTitle }}</span><span class="plugin-count">{{ installed.length }}</span>
+              <DliIcon class="group-chevron" :class="{ 'is-expanded': isPluginsExpanded }" name="chevronRight" size="sm" /><span>{{ isProject ? t.workspace.projectTools.projectPlugins : t.workspace.plugins.pluginsTitle }}</span><span class="plugin-count">{{ installedView.length }}</span>
             </button>
             <button type="button" class="plugin-add" :disabled="busy" :aria-label="t.workspace.plugins.installPlugin" :title="t.workspace.plugins.installPlugin" @click="openInstall"><span aria-hidden="true">＋</span></button>
           </div>
           <div :id="`${sectionPrefix}-installed`" v-show="isPluginsExpanded" class="plugin-group-content">
             <div v-if="view === 'list'" class="plugin-list">
-              <div v-if="installed.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.empty }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openInstall">{{ t.workspace.plugins.installPlugin }}</button></div>
+              <NInput v-model:value="installedQuery" class="installed-search" :placeholder="t.workspace.projectTools.search" :input-props="{ 'aria-label': t.workspace.projectTools.search, type: 'search' }" />
+              <p v-if="isProject && inheritedStatus === 'ready' && inherited.length === 0" class="plugin-empty">{{ t.workspace.projectTools.noInherited }}</p>
+              <p v-if="isProject && installed.length === 0" class="plugin-empty">{{ t.workspace.projectTools.noOwn }}</p>
+              <div v-if="installedView.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.empty }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openInstall">{{ t.workspace.plugins.installPlugin }}</button></div>
               <ul v-else>
-                <li v-for="item in installed" :key="pluginKey(item.plugin)" class="compact-plugin" :data-enabled="item.enabled">
+                <li v-for="item in visibleInstalled" :key="pluginKey(item.plugin)" class="compact-plugin" :data-enabled="item.enabled">
                   <button type="button" class="plugin-main" :data-plugin-key="pluginKey(item.plugin)" :disabled="busy" @click="openDetail(item)">
                     <span class="plugin-title"><span class="plugin-name">{{ item.plugin.name }}</span><span class="plugin-mono">v{{ item.installedVersion }}</span></span>
                     <span class="plugin-source">{{ item.marketplaceName }}</span>
+                    <span class="plugin-provenance">{{ t.workspace.projectTools.source }} · {{ sourceLabel(item) }}</span>
+                    <span class="plugin-effective">{{ t.workspace.projectTools.effective }} · {{ effectiveLabel(item) }}<template v-if="isProject && entryFor(item)?.overrideEnabled !== null"> · {{ t.workspace.projectTools.override }}</template></span>
                     <span v-if="hasUpdate(item) || needsConfig(item)" class="plugin-badges"><span v-if="hasUpdate(item)" class="plugin-badge">{{ t.workspace.plugins.update }}</span><span v-if="needsConfig(item)" class="plugin-badge plugin-badge--warning">{{ t.workspace.plugins.configureRequired }}</span></span>
                     <DliIcon class="plugin-chevron" name="chevronRight" size="sm" />
                   </button>
                   <!-- 开关与整行详情按钮是兄弟,不产生嵌套交互元素。 -->
-                  <NSwitch class="plugin-switch" size="small" :value="item.enabled" :disabled="busy" :aria-label="switchLabel(item)" @update:value="(value: boolean) => toggle(item, value)" />
+                  <NSwitch class="plugin-switch" size="small" :value="item.enabled" :disabled="busy || (isProject && (inheritedStatus !== 'ready' || status !== 'ready'))" :aria-label="switchLabel(item)" @update:value="(value: boolean) => toggle(item, value)" />
+                  <button v-if="isProject && entryFor(item)?.overrideEnabled !== null && entryFor(item)?.agentEnabled !== null" type="button" class="plugin-action plugin-restore" :disabled="busy" :aria-label="projectCopy(t.workspace.projectTools.restoreLabel, item.plugin.name)" @click="restore(item)">{{ t.workspace.projectTools.restore }}</button>
                 </li>
               </ul>
+              <p v-if="installedView.length > 0 && visibleInstalled.length === 0" class="plugin-empty">{{ t.workspace.plugins.installNoMatch }}</p>
             </div>
           </div>
         </section>
@@ -511,8 +606,9 @@ onBeforeUnmount(() => { isAlive.value = false })
             <div v-if="bindings.length === 0" class="plugin-state"><p>{{ t.workspace.plugins.installNoMarketplaces }}</p><button type="button" class="plugin-action" :disabled="busy" @click="openAddMarket">{{ t.workspace.plugins.addMarketplace }}</button></div>
             <ul v-else class="market-list"><li v-for="binding in bindings" :key="binding.marketplace.id" class="market-row" :data-marketplace="binding.marketplace.id">
               <p class="plugin-title"><span class="plugin-name">{{ binding.marketplace.name }}</span><span class="market-trust">{{ t.workspace.plugins.trustLabel[binding.marketplace.trust] }}</span></p>
+              <p v-if="isProject" class="plugin-provenance">{{ marketReadonly(binding) ? t.workspace.projectTools.agentMarket : t.workspace.projectTools.ownMarket }}</p>
               <p class="market-source plugin-mono">{{ binding.marketplace.source }}</p>
-              <div class="market-controls">
+              <div v-if="!marketReadonly(binding)" class="market-controls">
                 <div class="market-auto"><span>{{ t.workspace.plugins.autoUpdate }}</span><NSwitch class="plugin-switch" size="small" :value="binding.autoUpdate" :disabled="busy" :aria-label="t.workspace.plugins.autoUpdateLabel.replace('{name}', binding.marketplace.name)" @update:value="(value: boolean) => setAutoUpdate(binding, value)" /></div>
                 <div class="plugin-actions"><button type="button" class="plugin-action" :disabled="busy" :aria-label="t.workspace.plugins.updateLabel.replace('{name}', binding.marketplace.name)" @click="updateMarket(binding)">{{ t.workspace.plugins.update }}</button><button type="button" class="plugin-action plugin-danger" :disabled="busy" :aria-label="t.workspace.plugins.removeMarketplace" @click="removeMarketId = binding.marketplace.id">{{ t.workspace.plugins.remove }}</button></div>
               </div>
@@ -537,11 +633,15 @@ onBeforeUnmount(() => { isAlive.value = false })
           </div>
         </div>
         <p class="plugin-description">{{ selected.plugin.description }}</p>
-        <button v-if="hasUpdate(selected)" type="button" class="plugin-action plugin-update" :disabled="busy" @click="updatePlugin">{{ busy ? t.workspace.plugins.updating : t.workspace.plugins.updateAvailable.replace('{version}', selected.plugin.version) }}</button>
-        <form v-if="selected.config.length > 0" class="plugin-config" @submit.prevent="saveConfig">
+        <p class="plugin-provenance">{{ t.workspace.projectTools.source }} · {{ sourceLabel(selected) }}</p>
+        <p v-if="isProject && selectedEntry?.source === 'both'" class="plugin-description">{{ t.workspace.projectTools.projectConfig }}</p>
+        <section v-if="isConfirmingDiscard" class="plugin-confirm"><p>{{ t.workspace.mcp.discardTitle }}</p><div class="plugin-actions"><button type="button" class="plugin-action plugin-keep-editing" @click="keepConfigEditing">{{ t.workspace.mcp.keepEditing }}</button><button type="button" class="plugin-action" @click="discardConfig">{{ t.workspace.mcp.discard }}</button></div></section>
+        <section v-if="isReadonly" class="plugin-readonly"><p>{{ t.workspace.projectTools.managed }}</p><dl><div v-for="field in selected.config" :key="field.key"><dt>{{ field.label }}</dt><dd>{{ field.type === 'secret' ? (field.isSet ? t.workspace.mcp.secretSet : t.workspace.mcp.secretUnset) : field.value }}</dd></div></dl><button type="button" class="plugin-action" @click="emit('manageAgent', selectedPluginKey)">{{ t.workspace.projectTools.manageAgent }}</button></section>
+        <button v-if="!isReadonly && hasUpdate(selected)" type="button" class="plugin-action plugin-update" :disabled="busy" @click="updatePlugin">{{ busy ? t.workspace.plugins.updating : t.workspace.plugins.updateAvailable.replace('{version}', selected.plugin.version) }}</button>
+        <form v-if="!isReadonly && selected.config.length > 0" class="plugin-config" @submit.prevent="saveConfig">
           <div class="plugin-config-head">
             <h4 class="plugin-section-label">{{ t.workspace.plugins.configure }}</h4>
-            <span class="plugin-scope">{{ t.workspace.plugins.agentOnly }}</span>
+            <span class="plugin-scope">{{ isProject ? t.workspace.projectTools.own : t.workspace.mcp.sourceAgent }}</span>
           </div>
           <PluginConfigFields
             :fields="selected.config" :values="configDrafts" :errors="configErrors" :secret-set="detailSecretSet"
@@ -552,11 +652,11 @@ onBeforeUnmount(() => { isAlive.value = false })
             <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
           </div>
         </form>
-        <div v-else-if="!isConfirmingUninstall" class="plugin-actions plugin-actions--end">
+        <div v-else-if="!isReadonly && !isConfirmingUninstall" class="plugin-actions plugin-actions--end">
           <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="setUninstallConfirmation(true)">{{ t.workspace.plugins.uninstall }}</button>
         </div>
         <div v-if="isConfirmingUninstall" class="plugin-confirm">
-          <p>{{ t.workspace.plugins.uninstallConfirm.replace('{name}', selected.plugin.name) }}</p>
+          <p>{{ isProject ? projectCopy(t.workspace.projectTools.uninstall, selected.plugin.name) : t.workspace.plugins.uninstallConfirm.replace('{name}', selected.plugin.name) }}</p>
           <div class="plugin-actions">
             <button type="button" class="plugin-action" :disabled="busy" @click="setUninstallConfirmation(false)">{{ t.workspace.plugins.cancel }}</button>
             <button type="button" class="plugin-action plugin-danger" :disabled="busy" @click="uninstall">{{ t.workspace.plugins.confirmUninstall }}</button>
@@ -572,7 +672,7 @@ onBeforeUnmount(() => { isAlive.value = false })
             <h3 class="plugin-page-title">{{ t.workspace.plugins.installTitle }}</h3>
           </div>
         </div>
-        <p class="plugin-description">{{ t.workspace.plugins.installHintAgent.replace('{name}', agentName) }}</p>
+        <p class="plugin-description">{{ isProject ? projectCopy(t.workspace.projectTools.installHint) : t.workspace.plugins.installHintAgent.replace('{name}', agentName) }}</p>
         <div class="install-toolbar">
           <NInput v-model:value="query" :placeholder="t.workspace.plugins.installSearch" :input-props="{ 'aria-label': t.workspace.plugins.installSearch, type: 'search' }" />
           <div class="install-market-wrap">
@@ -620,13 +720,21 @@ onBeforeUnmount(() => { isAlive.value = false })
     </template>
     <PluginConfigDialog
       v-if="installCandidate" :plugin="installCandidate" :marketplace-name="installCandidateMarket"
-      :agent-name="agentName" :busy="busy" :error="error" @cancel="cancelInstallConfig" @submit="installFromDialog"
+      :agent-name="agentName" :scope-text="isProject ? projectCopy(t.workspace.projectTools.installHint) : ''" :busy="busy" :error="error" @cancel="cancelInstallConfig" @submit="installFromDialog"
     />
   </section>
 </template>
 
 <style scoped>
 .agent-plugins { min-inline-size: 0; padding: var(--dl-space-1); color: var(--dl-text-primary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.plugin-scope-summary { color: var(--dl-text-secondary); font-size: var(--dl-font-size-sm); line-height: var(--dl-line-body); margin-block-end: var(--dl-space-4); max-inline-size: var(--dl-measure); }
+.plugin-provenance, .plugin-effective { color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
+.plugin-effective { color: var(--dl-accent); }
+.installed-search { margin-block: var(--dl-space-2); }
+.plugin-restore { margin-inline-start: var(--dl-space-1); }
+.plugin-readonly, .plugin-readonly dl { display: grid; gap: var(--dl-space-3); min-inline-size: 0; }
+.plugin-readonly dl > div { padding: var(--dl-space-2); background: var(--dl-bg-raised); border: var(--dl-border-width) solid var(--dl-border-base); border-radius: var(--dl-radius-sm); }
+.plugin-readonly dd { margin: 0; overflow-wrap: anywhere; font-family: var(--dl-font-mono); }
 .plugin-groups { display: grid; gap: var(--dl-space-3); }
 .plugin-install-feedback { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dl-space-2); padding: var(--dl-space-2); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); font-size: var(--dl-font-size-xs); line-height: var(--dl-line-body); }
 .plugin-install-feedback p { min-inline-size: 0; overflow-wrap: anywhere; }
@@ -670,6 +778,10 @@ onBeforeUnmount(() => { isAlive.value = false })
 .install-market:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled); cursor: not-allowed; }
 .install-market:disabled + .install-market-chevron { color: var(--dl-text-disabled); }
 .install-list { min-inline-size: 0; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--dl-border-strong) transparent; border-radius: var(--dl-radius-sm); }
+/* 嵌入项目设置时只由窗体正文滚动,不再测量固定高度或创建内层滚动视口。 */
+.agent-plugins--embedded[data-view='install'] { display: block; block-size: auto; }
+.agent-plugins--embedded[data-view='install'] > .plugin-install { flex: none; block-size: auto; grid-template-rows: none; padding-block-end: var(--dl-space-4); }
+.agent-plugins--embedded .install-list { overflow-y: visible; max-block-size: none; }
 .install-list:focus-visible { outline: none; box-shadow: inset var(--dl-focus-ring); }
 .install-pagination { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--dl-space-2); min-inline-size: 0; padding-block-start: var(--dl-space-2); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
 .install-pagination .plugin-action { justify-self: start; white-space: nowrap; }

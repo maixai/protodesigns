@@ -150,7 +150,7 @@ const projectSkills = ref<Record<string, Skill[]>>({})
 const skillStatus = ref<Record<string, 'loading' | 'ready' | 'error'>>({})
 const skillVersions = new Map<string, number>()
 const isPickerOpen = ref(false)
-// 项目设置是**一个**窗体:模型 / 权限 / MCP 在窗体内用 Tab 切换。
+// 项目设置是**一个**窗体:模型 / 权限 / 插件 / MCP 在窗体内用 Tab 切换。
 const projectSettingsTarget = ref<Project | null>(null)
 function openProjectSettings(projectPath: string): void {
   const project = projects.value.find((item) => item.path === projectPath)
@@ -1639,7 +1639,18 @@ function retryAgents(): void {
   void loadAgents().then(() => { if (selectedAgent.value !== '') void reloadWorkspace(false, true) })
 }
 
+const agentToolsInitialTab = ref<'plugins' | 'mcp' | undefined>(undefined)
+const agentToolsPluginKey = ref('')
+async function openProjectAgentTools(tab: 'plugins' | 'mcp', key: string): Promise<void> {
+  projectSettingsTarget.value = null
+  await nextTick()
+  openAgentSettings()
+  agentToolsInitialTab.value = tab
+  agentToolsPluginKey.value = key
+}
 function openAgentSettings(): void {
+  agentToolsInitialTab.value = undefined
+  agentToolsPluginKey.value = ''
   agentEditorFocusIdentity.value = false
   agentEditorError.value = ''
   agentEditorErrorTab.value = undefined
@@ -2934,10 +2945,10 @@ onBeforeUnmount(() => {
     <ProjectSettingsDialog
       v-if="projectSettingsTarget !== null && currentAgent !== undefined"
       :key="projectSettingsTarget.path" :open="true" :project="projectSettingsTarget" :agent="currentAgent"
-      @close="projectSettingsTarget = null" @announce="announcePlacement"
+      @close="projectSettingsTarget = null" @announce="announcePlacement" @manage-agent="openProjectAgentTools"
     />
     <AgentEditorDialog
-      :open="isAgentEditorOpen" :focus-identity="agentEditorFocusIdentity"
+      :open="isAgentEditorOpen" :focus-identity="agentEditorFocusIdentity" :initial-tab="agentToolsInitialTab" :initial-plugin-key="agentToolsPluginKey" @initial-request-consumed="agentToolsInitialTab = undefined; agentToolsPluginKey = ''"
       :agent="currentAgent"
       :can-delete="agents.length > 1" :busy="agentEditorBusy" :error="agentEditorError" :error-tab="agentEditorErrorTab" :saved-token="agentEditorSavedToken"
       @submit="onSubmitAgent" @delete="onDeleteAgent" @cancel="isAgentEditorOpen = false"

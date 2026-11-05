@@ -1,15 +1,13 @@
-import type { Meta, StoryObj } from '@storybook/vue3-vite'
+import { definePreview } from '@storybook/vue3-vite'
 import { nextTick, onMounted, ref } from 'vue'
 import AgentPlugins from './agent-plugins.vue'
 
-const meta = {
+const meta = definePreview({ addons: [] }).meta({
   title: '组件/AgentPlugins',
   component: AgentPlugins,
   args: { agentId: 'planning', agentName: '规划助手' },
-} satisfies Meta<typeof AgentPlugins>
+})
 
-export default meta
-type Story = StoryObj<typeof meta>
 
 // 列表按可用高度分页,目标插件不一定落在第 1 页;先搜索再点行,故事才稳定。
 async function openInstallDialog(root: HTMLElement | null, name: string): Promise<void> {
@@ -29,8 +27,8 @@ async function openInstallDialog(root: HTMLElement | null, name: string): Promis
   row?.querySelector<HTMLButtonElement>('.install-row__action')?.click()
 }
 
-export const 插件与市场列表: Story = {}
-export const 添加市场子页面: Story = {
+export const 插件与市场列表 = meta.story({})
+export const 添加市场子页面 = meta.story({
   render: (args) => ({
     components: { AgentPlugins },
     setup() {
@@ -45,9 +43,9 @@ export const 添加市场子页面: Story = {
     },
     template: '<div ref="root"><AgentPlugins v-bind="args" /></div>',
   }),
-}
+})
 
-export const 安装页筛选与分页: Story = {
+export const 安装页筛选与分页 = meta.story({
   render: (args) => ({
     components: { AgentPlugins },
     setup() {
@@ -61,9 +59,9 @@ export const 安装页筛选与分页: Story = {
     },
     template: '<div ref="root" style="block-size: calc(var(--dl-space-12) * 12)"><AgentPlugins v-bind="args" /></div>',
   }),
-}
+})
 
-export const 统一安装窗体无配置: Story = {
+export const 统一安装窗体无配置 = meta.story({
   render: (args) => ({
     components: { AgentPlugins },
     setup() {
@@ -73,9 +71,9 @@ export const 统一安装窗体无配置: Story = {
     },
     template: '<div ref="root" style="block-size: calc(var(--dl-space-12) * 12)"><AgentPlugins v-bind="args" /></div>',
   }),
-}
+})
 
-export const 统一安装窗体可选配置: Story = {
+export const 统一安装窗体可选配置 = meta.story({
   render: (args) => ({
     components: { AgentPlugins },
     setup() {
@@ -85,9 +83,9 @@ export const 统一安装窗体可选配置: Story = {
     },
     template: '<div ref="root" style="block-size: calc(var(--dl-space-12) * 12)"><AgentPlugins v-bind="args" /></div>',
   }),
-}
+})
 
-export const 统一安装窗体必填配置: Story = {
+export const 统一安装窗体必填配置 = meta.story({
   render: (args) => ({
     components: { AgentPlugins },
     setup() {
@@ -97,4 +95,6 @@ export const 统一安装窗体必填配置: Story = {
     },
     template: '<div ref="root" style="block-size: calc(var(--dl-space-12) * 12)"><AgentPlugins v-bind="args" /></div>',
   }),
-}
+})
+
+export const 项目同款搜索与来源 = meta.story({ args: { projectPath: '~/work/weekly-report', projectName: 'weekly-report', embedded: true } })

@@ -765,13 +765,11 @@ model AgentConfig {
 // ---- 插件与插件市场 ----
 //
 // 归属分两层(与 Claude Agent SDK 的设置来源对应):
-//   agent   程序化选项:该 Agent 的所有项目生效;优先级高于项目设置
-//   project .claude/settings.json:打开该项目的所有 Agent 生效(共享)
-// 同一 plugin@marketplace 在两层都存在时,Agent 层的启用状态优先。
-//
-// 市场是**全局来源**(对应 known_marketplaces.json,一台机器一份),不属于某个 Agent / 项目;
-// 自动更新是市场级策略(extraKnownMarketplaces.<name>.autoUpdate)。因此市场管理放在全局设置,
-// 插件安装 / 启停 / 卸载 / 配置放在 Agent 设置或项目设置里。
+//   agent   当前 Agent 的默认定义,在其所有项目中默认生效。
+//   project 项目自有副本与启用覆盖,只作用于对应项目路径。
+// 同一 plugin@marketplace 合并为一行,项目副本的配置优先。
+// 启用层统一为「项目覆盖 > Agent 默认」,可双向覆盖并恢复,不修改 Agent 记录。
+// 市场目录共享,注册与自动更新策略分别属于 Agent / 本项目。
 enum PluginTrustId {
   trusted,
   community,
@@ -921,6 +919,46 @@ model MarketplaceConfig {
   name: string;
   source: string;
   autoUpdate: boolean;
+}
+
+// 项目启用覆盖独立于安装与定义;清除覆盖后跟随 Agent 的当前默认。
+model ProjectEnablementOverride { key: string; enabled: boolean; }
+@summary("ProjectToolOverrides")
+@jsonSchema
+model ProjectToolOverrides {
+  path: string;
+  plugins: ProjectEnablementOverride[]; // key = pluginId@marketplaceId,仅 Agent 安装的继承项生效
+  mcp: ProjectEnablementOverride[];     // key = Agent 服务器名,仅无项目同名定义时生效
+}
+
+@summary("ProjectPluginEntry")
+@jsonSchema
+model ProjectPluginEntry {
+  key: string;
+  source: "agent" | "project" | "both";
+  agentEnabled: boolean | null;
+  overrideEnabled: boolean | null;
+  effectiveEnabled: boolean;
+  installed: InstalledPlugin; // 项目副本的配置和启用状态均优先;自有副本不使用继承覆盖,secret 永远为掩码
+}
+
+@summary("ProjectMarketplaceEntry")
+@jsonSchema
+model ProjectMarketplaceEntry {
+  source: "agent" | "project" | "both";
+  binding: MarketplaceBinding; // 项目注册优先;仅 agent 时只读
+}
+
+@summary("ProjectMcpEntry")
+@jsonSchema
+model ProjectMcpEntry {
+  source: "agent" | "project";
+  server: McpServer; // Agent 配置经脱敏后投影,不返回 headers / env 原始值
+  agentEnabled: boolean | null;
+  overrideEnabled: boolean | null;
+  effectiveEnabled: boolean;
+  shadowed: boolean; // 项目同名定义存在即遮蔽,即使项目定义已停用
+  replacesAgent: boolean;
 }
 
 // ---- 运行遥测与「等待交互」确认 ----

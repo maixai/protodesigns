@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 统一项目设置窗体:项目身份固定在头部,Header 下方的横向标签栏在模型 / 权限 / MCP 之间切换,
-// 底部动作区只作用于当前域。三个域在打开时并行预取并保持挂载,切换不重置草稿。
+// 统一项目设置窗体:横向标签栏在模型 / 权限 / 插件 / MCP 之间切换,各域并行预取并保持挂载。
+// 模型与权限由底部保存;工具的行级操作即时生效,配置表单在各自详情内保存。
 // 关闭路径:任一域保存中 → 不可关闭;任一域有草稿 → 先确认并点名具体域。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AgentSummary } from '../contracts/generated/agent-summary'
@@ -10,17 +10,18 @@ import DialogWindow from './dialog-window.vue'
 import ProjectModelPanel from './project-model-panel.vue'
 import ProjectPermissionPanel from './project-permission-panel.vue'
 import ProjectMcpPanel from './project-mcp-panel.vue'
+import ProjectPluginsPanel from './project-plugins-panel.vue'
 import { EMPTY_PANEL_STATE } from './project-settings-state'
 import type { ProjectPanelState, ProjectSettingsTab } from './project-settings-state'
 
 const props = defineProps<{ open: boolean; project: Project; agent: AgentSummary }>()
-const emit = defineEmits<{ close: []; announce: [message: string] }>()
+const emit = defineEmits<{ close: []; announce: [message: string]; manageAgent: [tab: 'plugins' | 'mcp', pluginKey: string] }>()
 const { t } = useI18n()
 
 // 窗体宽度由视口推导:内宽 = min(960, 视口 - 32) - 48。一级导航始终是 Header 下方的
 // 横向标签栏,不再按宽度切换纵向 / 横向 —— 视觉排版与键盘方向因此恒定一致。
 // 视口 ≤ 839px 时只有头部身份区回到两行(标题 + 路径),标签栏本身不改变方向。
-const TAB_ORDER: readonly ProjectSettingsTab[] = ['model', 'permissions', 'mcp']
+const TAB_ORDER: readonly ProjectSettingsTab[] = ['model', 'permissions', 'plugins', 'mcp']
 
 type TabBadgeTone = 'saving' | 'error' | 'dirty'
 
@@ -49,18 +50,21 @@ const pendingDomains = ref<string[]>([])
 const states = ref<Record<ProjectSettingsTab, ProjectPanelState>>({
   model: { ...EMPTY_PANEL_STATE },
   permissions: { ...EMPTY_PANEL_STATE },
+  plugins: { ...EMPTY_PANEL_STATE },
   mcp: { ...EMPTY_PANEL_STATE },
 })
 const modelPanel = ref<InstanceType<typeof ProjectModelPanel> | null>(null)
 const permissionPanel = ref<InstanceType<typeof ProjectPermissionPanel> | null>(null)
-const mcpPanel = ref<InstanceType<typeof ProjectMcpPanel> | null>(null)
+const requestedPluginKey = ref('')
+const pendingAgentTab = ref<'plugins' | 'mcp' | null>(null)
+const pendingAgentPluginKey = ref('')
 
 function tabElementId(tab: ProjectSettingsTab): string { return `${dialogId}-tab-${tab}` }
 function panelElementId(tab: ProjectSettingsTab): string { return `${dialogId}-panel-${tab}` }
 function tabLabel(tab: ProjectSettingsTab): string {
   const copy = t.value.workspace.projectSettings
   if (tab === 'model') return copy.tabModel
-  return tab === 'permissions' ? copy.tabPermissions : copy.tabMcp
+  return tab === 'permissions' ? copy.tabPermissions : tab === 'plugins' ? copy.tabPlugins : copy.tabMcp
 }
 function tabBadge(tab: ProjectSettingsTab): { text: string; tone: TabBadgeTone } | null {
   const copy = t.value.workspace.projectSettings
@@ -96,7 +100,7 @@ const isAnySaving = computed(() => TAB_ORDER.some((tab) => states.value[tab].sav
 const activePanel = computed(() => {
   if (activeTab.value === 'model') return modelPanel.value
   if (activeTab.value === 'permissions') return permissionPanel.value
-  return mcpPanel.value
+  return null
 })
 
 function setPanelState(tab: ProjectSettingsTab, state: ProjectPanelState): void {
@@ -141,6 +145,7 @@ function finishClose(): void {
   if (isAnySaving.value) return
   dialogWindow.value?.closeDialog?.()
   emit('close')
+  if (pendingAgentTab.value !== null) emit('manageAgent', pendingAgentTab.value, pendingAgentPluginKey.value)
 }
 
 async function openConfirm(domains: string[]): Promise<void> {
@@ -158,6 +163,8 @@ async function openConfirm(domains: string[]): Promise<void> {
 function closeConfirm(): void {
   if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
   confirmOpen.value = false
+  pendingAgentTab.value = null
+  pendingAgentPluginKey.value = ''
   const target = confirmReturnFocusRef.value
   if (target?.isConnected === true) target.focus()
 }
@@ -170,6 +177,15 @@ function requestClose(): void {
   void openConfirm(dirty.map(tabLabel))
 }
 
+function requestAgent(tab: 'plugins' | 'mcp', key = ''): void {
+  pendingAgentTab.value = tab
+  pendingAgentPluginKey.value = key
+  requestClose()
+}
+function openPlugin(key: string): void {
+  requestedPluginKey.value = key
+  activateTab('plugins', false)
+}
 function discardAndClose(): void {
   if (confirmDialogRef.value?.open === true) confirmDialogRef.value.close()
   confirmOpen.value = false
@@ -238,8 +254,11 @@ onBeforeUnmount(() => {
       <div v-show="activeTab === 'permissions'" :id="panelElementId('permissions')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('permissions')">
         <ProjectPermissionPanel ref="permissionPanel" :project="project" :agent="agent" @state="setPanelState('permissions', $event)" />
       </div>
+      <div v-show="activeTab === 'plugins'" :id="panelElementId('plugins')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('plugins')">
+        <ProjectPluginsPanel :project="project" :agent="agent" :requested-plugin-key="requestedPluginKey" @open-request-consumed="requestedPluginKey = ''" @state="setPanelState('plugins', $event)" @announce="emit('announce', $event)" @manage-agent="requestAgent('plugins', $event)" />
+      </div>
       <div v-show="activeTab === 'mcp'" :id="panelElementId('mcp')" class="project-settings__panel" role="tabpanel" :aria-labelledby="tabElementId('mcp')">
-        <ProjectMcpPanel ref="mcpPanel" :project="project" :agent="agent" @state="setPanelState('mcp', $event)" @announce="emit('announce', $event)" />
+        <ProjectMcpPanel :project="project" :agent="agent" @state="setPanelState('mcp', $event)" @announce="emit('announce', $event)" @manage-agent="requestAgent('mcp')" @manage-plugin="openPlugin" />
       </div>
     </div>
 
@@ -250,7 +269,7 @@ onBeforeUnmount(() => {
         <p ref="saveStateRef" class="project-config__save-state" :data-state="activeState.saveState" tabindex="-1">{{ activeStateLabel }}</p>
         <div class="project-config__buttons">
           <button type="button" class="dl-btn dl-btn--ghost" :disabled="isAnySaving" @click="requestClose">{{ t.workspace.projectSettings.close }}</button>
-          <button type="button" class="dl-btn dl-btn--primary" :disabled="!activeState.canSave || isAnySaving" @click="saveActive">{{ activeState.saving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button>
+          <button v-if="activeTab === 'model' || activeTab === 'permissions'" type="button" class="dl-btn dl-btn--primary" :disabled="!activeState.canSave || isAnySaving" @click="saveActive">{{ activeState.saving ? t.workspace.projectSettings.saving : t.workspace.projectSettings.save }}</button>
         </div>
       </div>
     </template>

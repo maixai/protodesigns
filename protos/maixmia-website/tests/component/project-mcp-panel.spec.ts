@@ -1,100 +1,144 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import type { VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectMcpPanel from '../../src/components/project-mcp-panel.vue'
 import * as mcpApi from '../../src/api/agent-mcp'
-import { mockListAgentMcpServers, mockListProjectMcpServers } from '../../src/mocks/agent-mcp'
+import * as toolsApi from '../../src/api/project-tools'
+import { mockListAgentMcpServers } from '../../src/mocks/agent-mcp'
 import { mockAgentSummaries, mockProjects } from '../../src/mocks/workspace'
 import { useI18n } from '../../src/i18n'
-
-vi.mock('../../src/api/agent-mcp', () => ({
-  listProjectMcpServers: vi.fn(),
-  saveProjectMcpGroup: vi.fn(),
-  authenticateProjectMcpServer: vi.fn(),
-  reconnectProjectMcpServer: vi.fn(),
-  listAgentMcpServers: vi.fn(),
-}))
-
+vi.mock('../../src/mocks/delay', () => ({ delay: async () => {} }))
+vi.mock('../../src/composables/use-code-editor', () => ({ useCodeEditor: () => ({ focus: () => {} }) }))
 const agent = mockAgentSummaries()[0]
-const project = agent === undefined ? undefined : mockProjects(agent.id)[0]
-if (agent === undefined || project === undefined) throw new Error('Missing project MCP fixture')
+const project = agent ? mockProjects(agent.id)[0] : undefined
+if (!agent || !project) throw new Error('Missing project MCP fixture')
+function panel() { return mount(ProjectMcpPanel, { props: { agent, project }, attachTo: document.body }) }
+beforeEach(() => { useI18n().setLocale('zh-CN') })
+afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
 
-function mountPanel(): VueWrapper {
-  return mount(ProjectMcpPanel, { props: { agent, project }, attachTo: document.body })
-}
-
-async function settle(): Promise<void> {
-  await flushPromises()
-  await flushPromises()
-}
-
-describe('project-mcp-panel', () => {
-  beforeEach(() => {
-    useI18n().setLocale('zh-CN')
-    vi.mocked(mcpApi.listProjectMcpServers).mockImplementation(async (path) => ({ ok: true, value: mockListProjectMcpServers(path) }))
-    vi.mocked(mcpApi.listAgentMcpServers).mockImplementation(async (id) => ({ ok: true, value: mockListAgentMcpServers(id) }))
-    vi.mocked(mcpApi.saveProjectMcpGroup).mockImplementation(async (path, servers) => ({ ok: true, value: { path, servers: structuredClone(servers) } }))
-    vi.mocked(mcpApi.authenticateProjectMcpServer).mockImplementation(async (path, serverId) => {
-      const group = mockListProjectMcpServers(path)
-      const next = group.servers.map((server) => server.id === serverId ? { ...server, status: 'connected' as const } : server)
-      return { ok: true, value: { path, servers: next } }
-    })
-  })
-  afterEach(() => {
-    vi.clearAllMocks()
-    document.body.innerHTML = ''
-  })
-
-  it('reports draft state, keeps Agent context read-only and marks same-name overrides', async () => {
-    const wrapper = mountPanel()
-    await settle()
-    expect(wrapper.findAll('.project-mcp__server')).toHaveLength(3)
-    expect(wrapper.find('.agent-context[data-kind="mcp"]').exists()).toBe(true)
-    expect(wrapper.get('[data-server-id="project:~/work/weekly-report:github"]').text()).toContain('覆盖 Agent 同名')
+describe('project MCP compact lists and definition editors', () => {
+  it('keeps both namesakes visible, hides the shadowed switch and never falls back on project disable', async () => {
+    const wrapper = panel()
+    expect(wrapper.findAll('[role="status"]')).toHaveLength(3)
+    await flushPromises()
+    expect(wrapper.findAll('.project-mcp__server[data-source="project"]')).toHaveLength(3)
+    expect(wrapper.findAll('.project-mcp__server[data-source="agent"]')).toHaveLength(4)
+    expect(wrapper.find('[data-source="plugin"]').exists()).toBe(true)
+    expect(wrapper.find('.project-mcp__summary').exists()).toBe(false)
+    const inherited = wrapper.get('.project-mcp__server[data-server-id="agent:planning:github"]')
+    expect(inherited.text()).toContain('被遮蔽 · 不生效')
+    expect(inherited.find('[role="switch"]').exists()).toBe(false)
+    expect(inherited.findAll('.mcp-row-controls button')).toHaveLength(1)
+    expect(inherited.get('.mcp-namesake').text()).toBe('查看项目定义')
+    const own = wrapper.get('.project-mcp__server[data-server-id="project:~/work/weekly-report:github"]')
+    expect(own.text()).toContain('替代 Agent 同名')
+    expect(own.text()).not.toContain('停用不会回退')
+    await own.get('[role="switch"]').trigger('click')
+    await flushPromises()
+    expect(own.text()).toContain('本项目已停用')
+    expect(inherited.attributes('data-effective')).toBe('false')
     expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: false, canSave: false })
-
-    const github = wrapper.get('[data-server-id="project:~/work/weekly-report:github"]')
-    await github.findAll('input')[1]?.setValue('GitHub Project')
-    expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: true, canSave: true })
-    await wrapper.vm.save()
-    await settle()
-    expect(mcpApi.saveProjectMcpGroup).toHaveBeenCalledTimes(1)
-    expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: false, saveState: 'saved' })
+    await own.get('.project-mcp__main').trigger('click')
+    expect(wrapper.get('.mcp-nofallback').text()).toContain('停用不会回退到 Agent 版本')
+    await wrapper.get('.project-mcp__back').trigger('click')
+    await wrapper.get('.project-mcp__server[data-server-id="project:~/work/weekly-report:github"] [role="switch"]').trigger('click')
+    await flushPromises()
     wrapper.unmount()
   })
-
-  it('requires a clean saved server before authenticating and keeps connection immediate', async () => {
-    const wrapper = mountPanel()
-    await settle()
-    const github = wrapper.get('[data-server-id="project:~/work/weekly-report:github"]')
-    const connect = github.get('.project-mcp__connection button')
-    expect(connect.attributes('disabled')).toBeUndefined()
-    await github.findAll('input')[1]?.setValue('GitHub Project')
-    expect(connect.attributes('disabled')).toBeDefined()
-    expect(github.get('.project-mcp__connection').text()).toContain('先保存配置')
-
-    await wrapper.vm.save()
-    await settle()
-    expect(connect.attributes('disabled')).toBeUndefined()
-    await connect.trigger('click')
-    await settle()
-    expect(mcpApi.authenticateProjectMcpServer).toHaveBeenCalledWith(project.path, 'project:~/work/weekly-report:github')
-    expect(github.text()).toContain('已连接')
+  it('moves override recovery into Agent details and leaves Agent records unchanged', async () => {
+    const before = mockListAgentMcpServers(agent.id)
+    const wrapper = panel()
+    await flushPromises()
+    const sentry = wrapper.get('.project-mcp__server[data-server-id="agent:planning:sentry"]')
+    await sentry.get('[role="switch"]').trigger('click')
+    await flushPromises()
+    expect(sentry.text()).toContain('本项目已停用')
+    expect(sentry.find('.mcp-restore').exists()).toBe(false)
+    expect(sentry.find('.mcp-manage-agent').exists()).toBe(false)
+    expect(mockListAgentMcpServers(agent.id)).toEqual(before)
+    await sentry.get('.project-mcp__main').trigger('click')
+    expect(wrapper.get('.mcp-detail-status').text()).toContain('覆盖')
+    await wrapper.get('.mcp-restore').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.mcp-detail-status').text()).toContain('本项目已启用')
+    expect(wrapper.find('.mcp-restore').exists()).toBe(false)
+    expect(wrapper.emitted('announce')?.at(-1)?.[0]).toContain('本项目「weekly-report」')
+    expect(mockListAgentMcpServers(agent.id)).toEqual(before)
+    wrapper.unmount()
+  })
+  it('opens inherited details read-only, hides secrets and routes lifecycle management to Agent', async () => {
+    const wrapper = panel()
+    await flushPromises()
+    await wrapper.get('.project-mcp__main[data-server-id="agent:planning:sentry"]').trigger('click')
+    expect(wrapper.find('.mcp-server-editor').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已设置密钥')
+    expect(wrapper.text()).not.toContain('demo-sentry-secret')
+    await wrapper.get('.mcp-manage-agent').trigger('click')
+    expect(wrapper.emitted('manageAgent')).toHaveLength(1)
+    await wrapper.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.attributes('data-view')).toBe('list')
+    wrapper.unmount()
+  })
+  it('keeps plugin rows collapsible and routes read-only plugin details to the project plugin page', async () => {
+    const wrapper = panel()
+    await flushPromises()
+    const disclosure = wrapper.get('.mcp-plugin-disclosure')
+    await disclosure.trigger('click')
+    expect(disclosure.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('.mcp-plugin-content').isVisible()).toBe(false)
+    await disclosure.trigger('click')
+    expect(wrapper.get('.mcp-plugin-content').isVisible()).toBe(true)
+    expect(wrapper.find('.project-mcp__plugin [role="switch"]').exists()).toBe(false)
+    await wrapper.get('.project-mcp__plugin[data-plugin-id="browser-tools"] button').trigger('click')
+    expect(wrapper.attributes('data-view')).toBe('pluginDetail')
+    expect(wrapper.find('.mcp-server-editor').exists()).toBe(false)
+    expect(wrapper.text()).toContain('由插件提供 · 只读')
+    await wrapper.get('.mcp-manage-plugin').trigger('click')
+    expect(wrapper.emitted('managePlugin')?.[0]).toEqual(['browser-tools@community'])
+    await wrapper.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.attributes('data-view')).toBe('list')
+    wrapper.unmount()
+  })
+  it('reuses the shared form and saves only inside the detail while guarding Escape drafts', async () => {
+    const spy = vi.spyOn(mcpApi, 'updateProjectMcpServer')
+    const wrapper = panel()
+    await flushPromises()
+    await wrapper.get('.project-mcp__main[data-server-id="project:~/work/weekly-report:github"]').trigger('click')
+    await wrapper.get('#project-mcp-weekly-report-display-name').setValue('GitHub Project')
+    expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: true, canSave: false })
+    await wrapper.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.attributes('data-view')).toBe('detail')
+    expect(wrapper.find('.project-mcp__confirm').exists()).toBe(true)
+    await wrapper.get('.project-mcp__keep').trigger('click')
+    await wrapper.get('.mcp-server-editor').trigger('submit')
+    await flushPromises()
+    expect(spy).toHaveBeenCalledWith(project.path, 'project:~/work/weekly-report:github', expect.objectContaining({ displayName: 'GitHub Project' }))
+    expect(wrapper.attributes('data-view')).toBe('list')
     expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: false })
     wrapper.unmount()
   })
-
-  it('adds to the draft and lets the shared footer own persistence', async () => {
-    const wrapper = mountPanel()
-    await settle()
-    await wrapper.get('.project-mcp__section-head button').trigger('click')
-    const form = wrapper.get('.project-mcp__add')
-    await form.findAll('input')[0]?.setValue('linear')
-    await form.findAll('input')[2]?.setValue('npx -y @example/linear')
-    await form.trigger('submit')
-    expect(wrapper.findAll('.project-mcp__server')).toHaveLength(4)
-    expect(mcpApi.saveProjectMcpGroup).not.toHaveBeenCalled()
-    expect(wrapper.emitted('state')?.at(-1)?.[0]).toMatchObject({ dirty: true, canSave: true })
+  it('keeps all three empty-source explanations when no definitions are installed', async () => {
+    const wrapper = mount(ProjectMcpPanel, { props: { agent: { ...agent, id: 'empty-mcp-agent' }, project: { ...project, path: '~/work/empty-mcp-test' } } })
+    await flushPromises()
+    expect(wrapper.findAll('.project-mcp__group')).toHaveLength(3)
+    expect(wrapper.text()).toContain('这个项目还没有自有 MCP 服务器')
+    expect(wrapper.text()).toContain('还没有手动添加的服务器')
+    expect(wrapper.text()).toContain('当前没有插件贡献的 MCP')
+    expect(wrapper.findAll('.mcp-row')).toHaveLength(0)
+    wrapper.unmount()
+  })
+  it.each(['project', 'agent', 'plugin'])('retries only the failing %s source and preserves other sections', async (origin) => {
+    const request = origin === 'project' ? vi.spyOn(mcpApi, 'listProjectMcpServers') : origin === 'agent' ? vi.spyOn(mcpApi, 'listProjectAgentMcpServers') : vi.spyOn(toolsApi, 'listProjectPluginMcpServers')
+    request.mockResolvedValueOnce({ ok: false, error: new Error('Source unavailable') })
+    const wrapper = panel()
+    await flushPromises()
+    const section = wrapper.get(`.project-mcp__group[data-source="${origin}"]`)
+    expect(section.find('[role="alert"]').exists()).toBe(true)
+    if (origin !== 'project') expect(wrapper.findAll('.project-mcp__server[data-source="project"]')).toHaveLength(3)
+    if (origin !== 'plugin') expect(wrapper.findAll('.project-mcp__plugin').length).toBeGreaterThan(0)
+    await section.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(section.find('[role="alert"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

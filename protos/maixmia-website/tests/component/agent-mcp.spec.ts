@@ -81,6 +81,8 @@ describe('agent-mcp', () => {
 
   it('separates manual and read-only plugin servers with inline health metadata', async () => {
     const wrapper = await mountPanel()
+    expect(wrapper.text()).toContain('所有项目的默认 MCP')
+    expect(wrapper.text()).toContain('项目可覆盖启停')
     expect(wrapper.findAll('[data-group="manual"] .mcp-row')).toHaveLength(4)
     expect(wrapper.findAll('.mcp-plugin-row')).toHaveLength(2)
     expect(wrapper.get('[data-group="manual"] h3').text()).toBe('已安装')

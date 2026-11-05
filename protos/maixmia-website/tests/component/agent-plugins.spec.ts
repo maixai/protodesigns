@@ -165,11 +165,11 @@ describe('agent-plugins', () => {
     await wrapper.get('.install-pagination .plugin-action:last-child').trigger('click')
     expect(wrapper.get('.install-page-status').text()).toBe('第 2 / 3 页')
 
-    await wrapper.get('input[type="search"]').setValue('community plugin-6')
+    await wrapper.get('.install-toolbar input[type="search"]').setValue('community plugin-6')
     expect(wrapper.findAll('.install-row')).toHaveLength(1)
     expect(wrapper.get('.install-page-status').text()).toBe('第 1 / 1 页')
     expect(wrapper.get('.install-pagination .plugin-action:last-child').attributes('disabled')).toBeDefined()
-    await wrapper.get('input[type="search"]').setValue('missing-plugin')
+    await wrapper.get('.install-toolbar input[type="search"]').setValue('missing-plugin')
     expect(wrapper.find('.install-list').exists()).toBe(false)
     expect(wrapper.find('.install-pagination').exists()).toBe(false)
     expect(wrapper.text()).toContain('没有匹配的插件')

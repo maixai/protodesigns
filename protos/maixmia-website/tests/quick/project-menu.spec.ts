@@ -28,7 +28,7 @@ test('@area:project-menu ⋯ 菜单只有两个一级项,「设置」直接打�
   await expect(dialog).toBeVisible()
   const tablist = dialog.locator('.project-settings__tablist')
   await expect(tablist).toHaveCount(1)
-  await expect(tablist.getByRole('tab')).toHaveText(['模型', '权限', 'MCP'])
+  await expect(tablist.getByRole('tab')).toHaveText(['模型', '权限', '插件', 'MCP'])
   await expect(tablist).toHaveAttribute('aria-orientation', 'horizontal')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

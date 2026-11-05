@@ -3,7 +3,7 @@ import type { Locator, Page } from '@playwright/test'
 import { collectRuntimeIssues, expectDialogButtonHitPriority, expectDialogOutsideCornerResize, expectDialogResizeCue, login, waitForWorkspace } from './helpers'
 import { unlockDemoIdentity } from '../calibrate/identity-helpers'
 
-// 统一项目设置窗体:一个 dialog、一个 Tab 控件(模型 / 权限 / MCP)、一个底部动作区;
+// 统一项目设置窗体:一个 dialog、一个 Tab 控件(模型 / 权限 / 插件 / MCP)、一个底部动作区;
 // 保存只作用于当前域,关闭前对未保存的域先确认。
 test.use({ locale: 'zh-CN', reducedMotion: 'reduce' })
 
@@ -17,7 +17,7 @@ async function openSettings(page: Page) {
 }
 
 // Tab 的可访问名会带「有未保存的更改」等状态后缀,故按固定顺序取,不按名字精确匹配。
-const TAB_INDEX: Record<string, number> = { 模型: 0, 权限: 1, MCP: 2 }
+const TAB_INDEX: Record<string, number> = { 模型: 0, 权限: 1, 插件: 2, MCP: 3 }
 
 async function selectTab(page: Page, dialog: Locator, name: string) {
   await dialog.locator('.project-settings__tablist [role="tab"]').nth(TAB_INDEX[name] ?? 0).click()
@@ -533,7 +533,7 @@ test.describe('English project settings', () => {
     await page.getByRole('menuitem', { name: 'Project settings：weekly-report', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Project settings · weekly-report', exact: true })
     await expect(dialog).toBeVisible()
-    await expect(dialog.locator('.project-settings__tablist [role="tab"]')).toHaveText(['Model', 'Permissions', 'MCP'])
+    await expect(dialog.locator('.project-settings__tablist [role="tab"]')).toHaveText(['Model', 'Permissions', 'Plugins', 'MCP'])
     await dialog.locator('.project-settings__tablist [role="tab"]').nth(1).click()
     await expect(dialog.locator('.permission-editor')).toBeVisible()
     await dialog.getByRole('radio', { name: 'Follow Agent', exact: true }).click()

@@ -9,9 +9,9 @@ import { delay } from '../mocks/delay'
 import {
   mockAddAgentMcpServer, mockAddProjectMcpServer, mockConnectAgentMcpServer,
   mockConnectProjectMcpServer, mockListAgentMcpServers, mockListProjectMcpServers,
-  mockRemoveAgentMcpServer, mockRemoveProjectMcpServer, mockSaveProjectMcpGroup,
+  mockRemoveAgentMcpServer, mockRemoveProjectMcpServer,
   mockSetAgentMcpServerEnabled, mockUpdateAgentMcpServer,
-  mockSetProjectMcpServerEnabled,
+  mockSetProjectMcpServerEnabled, mockUpdateProjectMcpServer, mockProjectAgentMcpServers,
 } from '../mocks/agent-mcp'
 import { currentRoute } from '../router'
 import { mockAgentPluginMcpServers, mockReconnectAgentPluginMcpServer } from '../mocks/workspace'
@@ -118,28 +118,25 @@ export async function reconnectAgentMcpServer(agentId: string, serverId: string)
   return { ok: true, value: mockConnectAgentMcpServer(agentId, serverId) }
 }
 
+// 项目继承投影在数据边界脱敏;Agent 自身编辑仍走完整配置 API。
+export async function listProjectAgentMcpServers(agentId: string): Promise<Result<McpServer[]>> {
+  const result = await listAgentMcpServers(agentId)
+  if (!result.ok) return result
+  return { ok: true, value: mockProjectAgentMcpServers(agentId).map((server) => {
+    const config = server.config
+    const remote = config.type === 'http' || config.type === 'sse'
+    const hasValues = remote ? Object.keys(config.headers ?? {}).length > 0 : Object.keys(config.env ?? {}).length > 0
+    const endpoint = remote ? config.url.split(/[?#]/)[0]?.replace(/\/\/[^/@]+@/, '//') ?? '' : config.command
+    return { ...server, endpoint, clientSecretSet: server.clientSecretSet || hasValues,
+      config: remote ? { type: server.transport === 'sse' ? 'sse' : 'http', url: endpoint } : { type: 'stdio', command: endpoint } }
+  }) }
+}
+
 export async function listProjectMcpServers(path: string): Promise<Result<McpProjectGroup>> {
   await delay()
   const error = unavailableError()
   if (error !== null) return { ok: false, error }
   return { ok: true, value: mockListProjectMcpServers(path) }
-}
-
-export async function saveProjectMcpGroup(path: string, servers: readonly McpServer[]): Promise<Result<McpProjectGroup>> {
-  await delay()
-  const unavailable = unavailableError()
-  if (unavailable !== null) return { ok: false, error: unavailable }
-  const names = new Set<string>()
-  for (const server of servers) {
-    const input: McpServerInput = { name: server.name, displayName: server.displayName, config: server.config }
-    const invalid = validateInput(input, [], t.value.workspace.mcp.duplicateProjectName)
-    if (invalid !== null) return { ok: false, error: invalid }
-    if (names.has(server.name.trim()) || server.scope !== 'project' || server.ownerId !== path) {
-      return { ok: false, error: new Error(t.value.workspace.mcp.duplicateProjectName) }
-    }
-    names.add(server.name.trim())
-  }
-  return { ok: true, value: mockSaveProjectMcpGroup(path, servers) }
 }
 
 export async function addProjectMcpServer(path: string, input: McpServerInput): Promise<Result<McpProjectGroup>> {
@@ -149,6 +146,13 @@ export async function addProjectMcpServer(path: string, input: McpServerInput): 
   const invalid = validateInput(input, mockListProjectMcpServers(path).servers, t.value.workspace.mcp.duplicateProjectName)
   if (invalid !== null) return { ok: false, error: invalid }
   return mockAddProjectMcpServer(path, normalizedInput(input))
+}
+
+export async function updateProjectMcpServer(path: string, serverId: string, input: McpServerInput): Promise<Result<McpProjectGroup>> {
+  await delay()
+  const error = unavailableError()
+  if (error) return { ok: false, error }
+  return mockUpdateProjectMcpServer(path, serverId, normalizedInput(input))
 }
 
 export async function removeProjectMcpServer(path: string, serverId: string): Promise<Result<McpProjectGroup>> {

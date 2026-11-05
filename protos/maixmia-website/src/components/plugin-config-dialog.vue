@@ -8,7 +8,7 @@ import type { PluginConfigIssue } from './agent-plugin-config'
 import PluginConfigFields from './plugin-config-fields.vue'
 import { useI18n } from '../i18n'
 
-const props = defineProps<{ plugin: Plugin; marketplaceName: string; agentName: string; busy: boolean; error: string }>()
+const props = defineProps<{ plugin: Plugin; marketplaceName: string; agentName: string; scopeText?: string; busy: boolean; error: string }>()
 const emit = defineEmits<{ cancel: []; submit: [values: readonly PluginConfigValue[]] }>()
 const { t } = useI18n()
 const dialogRef = ref<HTMLDialogElement | null>(null)
@@ -90,7 +90,7 @@ onBeforeUnmount(() => {
       <form class="plugin-config-dialog__form" @submit.prevent="submit">
         <div class="plugin-config-dialog__body">
           <p class="plugin-config-dialog__description">{{ plugin.description }}</p>
-          <p :id="scopeId" class="plugin-config-dialog__scope">{{ t.workspace.plugins.confirmInstallScope.replace('{name}', agentName) }}</p>
+          <p :id="scopeId" class="plugin-config-dialog__scope">{{ scopeText || t.workspace.plugins.confirmInstallScope.replace('{name}', agentName) }}</p>
           <section v-if="hasConfig" class="plugin-config-dialog__section" :aria-labelledby="`${dialogId}-fields`">
             <h4 :id="`${dialogId}-fields`" class="plugin-config-dialog__section-title">{{ t.workspace.plugins.installFieldsTitle }}</h4>
             <PluginConfigFields

@@ -11,6 +11,7 @@ import { mockProjectModelSettings } from '../../src/mocks/project-settings'
 import { mockGetAgentPermissions, mockListProjectPermissionGroup } from '../../src/mocks/agent-permissions'
 import { mockAgentSummaries, mockProjects } from '../../src/mocks/workspace'
 import { mockListAgentMcpServers, mockListProjectMcpServers } from '../../src/mocks/agent-mcp'
+vi.mock('../../src/mocks/delay', () => ({ delay: async () => {} }))
 import { useI18n } from '../../src/i18n'
 
 vi.mock('../../src/api/project-settings', () => ({ getProjectModelSettings: vi.fn(), saveProjectModelSettings: vi.fn() }))
@@ -19,7 +20,7 @@ vi.mock('../../src/api/agent-permissions', () => ({
 }))
 
 vi.mock('../../src/api/agent-mcp', () => ({
-  listProjectMcpServers: vi.fn(), saveProjectMcpGroup: vi.fn(), authenticateProjectMcpServer: vi.fn(), reconnectProjectMcpServer: vi.fn(), listAgentMcpServers: vi.fn(),
+  listProjectMcpServers: vi.fn(), authenticateProjectMcpServer: vi.fn(), reconnectProjectMcpServer: vi.fn(), listAgentMcpServers: vi.fn(), listProjectAgentMcpServers: vi.fn(),
 }))
 
 const agent = mockAgentSummaries()[0]
@@ -63,11 +64,27 @@ describe('project-settings-dialog', () => {
     vi.mocked(permissionApi.saveProjectPermissionGroup).mockImplementation(async (_path, value) => ({ ok: true, value }))
     vi.mocked(permissionApi.getAgentPermissions).mockImplementation(async (id) => ({ ok: true, value: mockGetAgentPermissions(id) }))
     vi.mocked(mcpApi.listProjectMcpServers).mockImplementation(async (path) => ({ ok: true, value: mockListProjectMcpServers(path) }))
-    vi.mocked(mcpApi.listAgentMcpServers).mockImplementation(async (id) => ({ ok: true, value: mockListAgentMcpServers(id) }))
+    vi.mocked(mcpApi.listProjectAgentMcpServers).mockImplementation(async (id) => ({ ok: true, value: mockListAgentMcpServers(id) }))
   })
   afterEach(() => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
+  })
+
+  it('插件详情草稿进入统一关闭确认,即时标签不出现底部保存按钮', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+    await flushPromises()
+    await selectTab(wrapper, 2)
+    await wrapper.get('.plugin-main[data-plugin-key="test-runner@anthropic"]').trigger('click')
+    await wrapper.get('.plugin-detail [data-config-key="command"]').setValue('pnpm test:unsaved')
+    expect(tabs(wrapper)[2]?.attributes('aria-label')).toContain('有未保存的更改')
+    expect(wrapper.find('.project-config__buttons .dl-btn--primary').exists()).toBe(false)
+    await wrapper.get('.project-config__buttons .dl-btn--ghost').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.project-settings__confirm').text()).toContain('插件')
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
   })
 
   it('只有一个窗体与一个 Tab 控件,打开时并行预取模型与权限', async () => {
@@ -81,12 +98,12 @@ describe('project-settings-dialog', () => {
     const tablist = wrapper.get('.project-settings__tablist')
     expect(tablist.attributes('aria-orientation')).toBe('horizontal')
     expect(wrapper.get('.dl-dialog__main').classes()).toContain('dl-dialog__main--stacked')
-    expect(tabs(wrapper).map((tab) => tab.find('.project-settings__tab-label').text())).toEqual(['模型', '权限', 'MCP'])
+    expect(tabs(wrapper).map((tab) => tab.find('.project-settings__tab-label').text())).toEqual(['模型', '权限', '插件', 'MCP'])
     expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')
-    expect(tabs(wrapper).map((tab) => tab.attributes('tabindex'))).toEqual(['0', '-1', '-1'])
+    expect(tabs(wrapper).map((tab) => tab.attributes('tabindex'))).toEqual(['0', '-1', '-1', '-1'])
 
     // 三个面板同时挂载,切换时零加载延迟。
-    expect(wrapper.findAll('.project-settings__panel[role="tabpanel"]')).toHaveLength(3)
+    expect(wrapper.findAll('.project-settings__panel[role="tabpanel"]')).toHaveLength(4)
     expect(modelApi.getProjectModelSettings).toHaveBeenCalledTimes(1)
     expect(permissionApi.listProjectPermissionGroup).toHaveBeenCalledTimes(1)
 
@@ -329,8 +346,8 @@ describe('project-settings-dialog', () => {
     // 首项向左回绕到最后一项。
     await tablist.trigger('keydown', { key: 'ArrowLeft' })
     await flushPromises()
-    expect(tabs(wrapper)[2]?.attributes('aria-selected')).toBe('true')
-    expect(document.activeElement).toBe(tabs(wrapper)[2]?.element)
+    expect(tabs(wrapper)[3]?.attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs(wrapper)[3]?.element)
 
     await tablist.trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
@@ -343,7 +360,7 @@ describe('project-settings-dialog', () => {
 
     await tablist.trigger('keydown', { key: 'End' })
     await flushPromises()
-    expect(tabs(wrapper)[2]?.attributes('aria-selected')).toBe('true')
+    expect(tabs(wrapper)[3]?.attributes('aria-selected')).toBe('true')
     await tablist.trigger('keydown', { key: 'Home' })
     await flushPromises()
     expect(tabs(wrapper)[0]?.attributes('aria-selected')).toBe('true')

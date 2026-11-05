@@ -407,6 +407,7 @@ onBeforeUnmount(() => { isAlive.value = false })
     <p v-if="actionError" class="mcp-error mcp-action-error" tabindex="-1" :role="actionErrorRole">{{ actionError }}</p>
     <!-- 失败只经页面既有 announce 通道播报一次;这里保留可见错误,不再叠加 role="alert"。 -->
     <p v-if="pluginActionError" class="mcp-error">{{ pluginActionError }}</p>
+    <p class="mcp-description">{{ t.workspace.projectTools.agentMcpScope.replace('{agent}', agentName) }}</p>
     <div v-show="view === 'list'" class="mcp-list-view">
       <section class="mcp-manual-section" data-group="manual">
         <div class="mcp-toolbar">

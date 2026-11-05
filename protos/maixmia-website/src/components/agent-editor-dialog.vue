@@ -2754,6 +2754,8 @@ button:disabled { background: var(--dl-bg-sunken); color: var(--dl-text-disabled
 /* 窄屏间距由全局设置窗体 token 统一收紧,当前 Agent 仍保留在标题行。 */
 @media (max-width: 560px) {
   .agent-editor__head, .agent-editor__subject { gap: var(--dl-space-1); }
+  /* 英文 / 长名称在窄屏允许换行,避免只显示成「Planning a…」。 */
+  .agent-editor__agent-name { white-space: normal; overflow: visible; text-overflow: clip; }
   .agent-editor__title { font-size: var(--dl-font-size-lg); }
   .agent-editor__badge { padding-inline: var(--dl-space-1); }
   .agent-editor__connection:not([data-state='authenticationFailed']) .agent-editor__connection-label { display: none; }

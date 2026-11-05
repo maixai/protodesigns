@@ -2,6 +2,8 @@
 import type { McpProjectGroup } from '../contracts/generated/mcp-project-group'
 import type { McpServer, McpServerStatusId, McpTool } from '../contracts/generated/mcp-server'
 import type { McpServerInput } from '../contracts/generated/mcp-server-input'
+import type { Result } from '../api/result'
+import { legacyMcpConfig, mcpEndpoint, validateMcpInput } from '../data/mcp-config'
 
 interface StoredServer {
   server: McpServer
@@ -78,24 +80,28 @@ const catalog: Record<string, McpServer> = {
     id: 'catalog:github', name: 'github', displayName: 'GitHub',
     description: 'Issues, pull requests, repository files, and code search.',
     scope: 'agent', ownerId: '', transport: 'http', endpoint: 'https://api.githubcopilot.com/mcp/',
+    config: legacyMcpConfig('http', 'https://api.githubcopilot.com/mcp/'), clientSecretSet: false,
     enabled: true, status: 'connected', errorMessage: '', tools: githubTools,
   },
   filesystem: {
     id: 'catalog:filesystem', name: 'filesystem', displayName: 'Filesystem',
     description: 'Read, search, and edit files inside approved directories.',
     scope: 'agent', ownerId: '', transport: 'stdio', endpoint: 'npx -y @modelcontextprotocol/server-filesystem ~/work',
+    config: legacyMcpConfig('stdio', 'npx -y @modelcontextprotocol/server-filesystem ~/work'), clientSecretSet: false,
     enabled: true, status: 'connected', errorMessage: '', tools: filesystemTools,
   },
   sentry: {
     id: 'catalog:sentry', name: 'sentry', displayName: 'Sentry',
     description: 'Investigate production issues, events, stack traces, and releases.',
     scope: 'agent', ownerId: '', transport: 'http', endpoint: 'https://mcp.sentry.dev/mcp',
+    config: { type: 'http', url: 'https://mcp.sentry.dev/mcp', oauth: { clientId: 'mia-demo', callbackPort: 8765, scopes: 'org:read project:read' } }, clientSecretSet: true,
     enabled: true, status: 'needsAuth', errorMessage: '', tools: sentryTools,
   },
   postgres: {
     id: 'catalog:postgres', name: 'postgres', displayName: 'PostgreSQL',
     description: 'Inspect schemas and run read-only queries against a database.',
     scope: 'agent', ownerId: '', transport: 'stdio', endpoint: 'npx -y @modelcontextprotocol/server-postgres postgresql://localhost:5432/weekly',
+    config: legacyMcpConfig('stdio', 'npx -y @modelcontextprotocol/server-postgres postgresql://localhost:5432/weekly'), clientSecretSet: false,
     enabled: true, status: 'failed',
     errorMessage: 'Connection refused. Start PostgreSQL, then reconnect.',
     tools: postgresTools,
@@ -104,18 +110,21 @@ const catalog: Record<string, McpServer> = {
     id: 'catalog:notion', name: 'notion', displayName: 'Notion',
     description: 'Search, read, and update Notion pages and databases.',
     scope: 'agent', ownerId: '', transport: 'http', endpoint: 'https://mcp.notion.com/mcp',
+    config: { type: 'http', url: 'https://mcp.notion.com/mcp', oauth: {} }, clientSecretSet: false,
     enabled: true, status: 'needsAuth', errorMessage: '', tools: notionTools,
   },
   'brave-search': {
     id: 'catalog:brave-search', name: 'brave-search', displayName: 'Brave Search',
     description: 'Web and local search with fresh, cited results.',
     scope: 'agent', ownerId: '', transport: 'stdio', endpoint: 'npx -y @modelcontextprotocol/server-brave-search',
+    config: legacyMcpConfig('stdio', 'npx -y @modelcontextprotocol/server-brave-search'), clientSecretSet: false,
     enabled: true, status: 'connected', errorMessage: '', tools: braveTools,
   },
   playwright: {
     id: 'catalog:playwright', name: 'playwright', displayName: 'Playwright',
     description: 'Drive a browser for navigation, inspection, and screenshots.',
     scope: 'agent', ownerId: '', transport: 'stdio', endpoint: 'npx -y @playwright/mcp@latest',
+    config: legacyMcpConfig('stdio', 'npx -y @playwright/mcp@latest'), clientSecretSet: false,
     enabled: true, status: 'connected', errorMessage: '', tools: playwrightTools,
   },
 }
@@ -149,6 +158,9 @@ function projectServer(name: string, path: string, baseStatus?: McpServerStatusI
     },
   }
 }
+
+// 凭据只在此私有内存 Map 中存在,读取模型只有 clientSecretSet。
+const clientSecrets = new Map<string, string>([['agent:planning:sentry', 'demo-sentry-secret']])
 
 const agentStore = new Map<string, StoredServer[]>([
   ['planning', [
@@ -197,16 +209,20 @@ function ensureProject(path: string): StoredServer[] {
 }
 
 function customServer(input: McpServerInput, scope: 'agent' | 'project', ownerId: string): StoredServer {
+  const id = `${scope}:${ownerId}:${input.name}`
+  if (input.clientSecret) clientSecrets.set(id, input.clientSecret)
+  const needsAuth = (input.config.type === 'http' || input.config.type === 'sse') && input.config.oauth !== undefined
   return {
-    baseStatus: 'connected',
+    baseStatus: needsAuth ? 'needsAuth' : 'connected',
     server: {
       id: `${scope}:${ownerId}:${input.name}`,
       name: input.name,
       displayName: input.displayName || input.name,
       description: scope === 'agent' ? 'Custom MCP server configured for this Agent.' : 'Custom MCP server configured for this project.',
-      scope, ownerId, transport: input.transport, endpoint: input.endpoint,
-      enabled: true, status: 'connected', errorMessage: '',
-      tools: tools(input.name, [
+      scope, ownerId, transport: input.config.type ?? 'stdio', endpoint: mcpEndpoint(input.config),
+      config: structuredClone(input.config), clientSecretSet: clientSecrets.has(id),
+      enabled: true, status: needsAuth ? 'needsAuth' : 'connected', errorMessage: '',
+      tools: needsAuth ? [] : tools(input.name, [
         ['ping', 'Check whether the MCP server responds.'],
         ['list_resources', 'List resources exposed by this server.'],
       ]),
@@ -218,14 +234,29 @@ export function mockListAgentMcpServers(agentId: string): McpServer[] {
   return (agentStore.get(agentId) ?? []).map((entry) => cloneServer(entry.server))
 }
 
-export function mockAddAgentMcpServer(agentId: string, input: McpServerInput): McpServer[] {
+export function mockAddAgentMcpServer(agentId: string, input: McpServerInput): Result<McpServer[]> {
+  const invalid = validateMcpInput(input, mockListAgentMcpServers(agentId))
+  if (invalid) return { ok: false, error: invalid }
   const entries = agentStore.get(agentId) ?? []
   entries.push(customServer(input, 'agent', agentId))
   agentStore.set(agentId, entries)
-  return mockListAgentMcpServers(agentId)
+  return { ok: true, value: mockListAgentMcpServers(agentId) }
+}
+
+export function mockUpdateAgentMcpServer(agentId: string, serverId: string, input: McpServerInput): Result<McpServer[]> {
+  const entry = (agentStore.get(agentId) ?? []).find((item) => item.server.id === serverId)
+  if (!entry) return { ok: false, error: new Error('MCP server not found') }
+  const invalid = validateMcpInput(input, mockListAgentMcpServers(agentId), entry.server.name)
+  if (invalid) return { ok: false, error: invalid }
+  const updated = customServer(input, 'agent', agentId)
+  // 新配置独立生成状态与工具,不保留旧错误、旧工具或旧认证态。
+  entry.baseStatus = updated.baseStatus
+  entry.server = { ...updated.server, id: serverId, description: entry.server.description, enabled: entry.server.enabled, status: entry.server.enabled ? updated.baseStatus : 'disabled', tools: entry.server.enabled ? updated.server.tools : [] }
+  return { ok: true, value: mockListAgentMcpServers(agentId) }
 }
 
 export function mockRemoveAgentMcpServer(agentId: string, serverId: string): McpServer[] {
+  clientSecrets.delete(serverId)
   const entries = agentStore.get(agentId) ?? []
   agentStore.set(agentId, entries.filter((entry) => entry.server.id !== serverId))
   return mockListAgentMcpServers(agentId)
@@ -273,9 +304,11 @@ export function mockSaveProjectMcpGroup(path: string, servers: readonly McpServe
   return mockListProjectMcpServers(path)
 }
 
-export function mockAddProjectMcpServer(path: string, input: McpServerInput): McpProjectGroup {
+export function mockAddProjectMcpServer(path: string, input: McpServerInput): Result<McpProjectGroup> {
+  const invalid = validateMcpInput(input, mockListProjectMcpServers(path).servers)
+  if (invalid) return { ok: false, error: invalid }
   ensureProject(path).push(customServer(input, 'project', path))
-  return mockListProjectMcpServers(path)
+  return { ok: true, value: mockListProjectMcpServers(path) }
 }
 
 export function mockRemoveProjectMcpServer(path: string, serverId: string): McpProjectGroup {

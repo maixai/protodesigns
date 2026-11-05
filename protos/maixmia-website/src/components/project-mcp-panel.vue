@@ -8,6 +8,7 @@ import type { McpServer, McpTransportId } from '../contracts/generated/mcp-serve
 import {
   authenticateProjectMcpServer, listProjectMcpServers, reconnectProjectMcpServer, saveProjectMcpGroup,
 } from '../api/agent-mcp'
+import { legacyMcpConfig, validateMcpConfig } from '../data/mcp-config'
 import { useI18n } from '../i18n'
 import AgentReadonlyContext from './agent-readonly-context.vue'
 import type { ProjectPanelState } from './project-settings-state'
@@ -53,7 +54,12 @@ const panelState = computed<ProjectPanelState>(() => ({
   canSave: isDirty.value && status.value === 'ready' && !isSaving.value,
 }))
 watch(panelState, (state) => emit('state', state), { immediate: true })
-function cloneServers(servers: readonly McpServer[]): McpServer[] { return servers.map((server) => ({ ...server, tools: server.tools.map((tool) => ({ ...tool })) })) }
+function cloneServers(servers: readonly McpServer[]): McpServer[] {
+  return servers.map((server) => {
+    const config = validateMcpConfig(server.config, true)
+    return { ...server, config: config.ok ? config.value : legacyMcpConfig(server.transport, server.endpoint), tools: server.tools.map((tool) => ({ ...tool })) }
+  })
+}
 function statusLabel(server: McpServer): string { return t.value.workspace.mcp.status[server.status] }
 function hasEnablementDraft(server: McpServer): boolean {
   const saved = savedServers.value.find((item) => item.id === server.id)
@@ -71,12 +77,12 @@ function updateServer(server: McpServer, patch: Partial<McpServer>): void {
 }
 function updateText(server: McpServer, key: 'name' | 'displayName' | 'endpoint', event: Event): void {
   if (!(event.target instanceof HTMLInputElement)) return
-  updateServer(server, { [key]: event.target.value })
+  updateServer(server, { [key]: event.target.value, ...(key === 'endpoint' ? { config: legacyMcpConfig(server.transport, event.target.value) } : {}) })
 }
 function updateTransport(server: McpServer, event: Event): void {
   if (!(event.target instanceof HTMLSelectElement)) return
   const value = event.target.value
-  if (value === 'stdio' || value === 'http' || value === 'sse') updateServer(server, { transport: value })
+  if (value === 'stdio' || value === 'http' || value === 'sse') updateServer(server, { transport: value, config: legacyMcpConfig(value, server.endpoint) })
 }
 function updateEnabled(server: McpServer, event: Event): void {
   if (!(event.target instanceof HTMLInputElement)) return
@@ -106,7 +112,7 @@ function addServer(): void {
     id: `project:${props.project.path}:${name}:draft-${generatedServerId}`,
     name, displayName: addDisplayName.value.trim() || name,
     description: 'Custom MCP server configured for this project.', scope: 'project', ownerId: props.project.path,
-    transport: addTransport.value, endpoint, enabled: true, status: 'connected', errorMessage: '', tools: [],
+    transport: addTransport.value, endpoint, config: legacyMcpConfig(addTransport.value, endpoint), clientSecretSet: false, enabled: true, status: 'connected', errorMessage: '', tools: [],
   }
   draftServers.value = [...draftServers.value, server]
   isAddOpen.value = false

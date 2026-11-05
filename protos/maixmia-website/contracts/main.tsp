@@ -541,6 +541,58 @@ model McpTool {
   qualifiedName: string;     // SDK 完整工具名,供权限规则 / allowedTools / hook 使用
 }
 
+// json2ts 尚不读取 unevaluatedProperties,同时声明等价的字典约束。
+@extension("additionalProperties", #{ type: "string" })
+model McpStringMap is Record<string>;
+
+// 可序列化的官方服务器条目;密钥不属于配置对象。
+model McpOAuthConfig {
+  clientId?: string;
+  callbackPort?: int32;
+  authServerMetadataUrl?: string;
+  scopes?: string;
+}
+model McpStdioConfig {
+  type?: "stdio";
+  command: string;
+  args?: string[];
+  env?: McpStringMap;
+  timeout?: int32;
+}
+model McpHttpConfig {
+  type: "http";
+  url: string;
+  headers?: McpStringMap;
+  oauth?: McpOAuthConfig;
+  timeout?: int32;
+}
+model McpSseConfig {
+  type: "sse";
+  url: string;
+  headers?: McpStringMap;
+  oauth?: McpOAuthConfig;
+  timeout?: int32;
+}
+union McpConfig { McpStdioConfig, McpHttpConfig, McpSseConfig }
+
+// 表单输入缓冲允许暂时无效的文本,只经统一校验提交为 McpConfig。
+@summary("McpFormDraft")
+@jsonSchema
+model McpFormDraft {
+  transport: McpTransportId;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  timeout: string;
+  clientId: string;
+  callbackPort: string;
+  authServerMetadataUrl: string;
+  scopes: string;
+  oauthEnabled: boolean;
+}
+
 @summary("McpServer")
 @jsonSchema
 model McpServer {
@@ -551,7 +603,9 @@ model McpServer {
   scope: McpServerScopeId;
   ownerId: string;            // agentId 或项目 path
   transport: McpTransportId;
-  endpoint: string;           // stdio: 完整命令行;http/sse: URL
+  endpoint: string;           // 从 config 派生的展示文本
+  config: McpConfig;
+  clientSecretSet: boolean;   // 只返回是否已设置,永不返回密钥
   enabled: boolean;
   status: McpServerStatusId;
   errorMessage: string;       // status=failed 时的完整错误;其余为空串
@@ -563,8 +617,8 @@ model McpServer {
 model McpServerInput {
   name: string;
   displayName: string;
-  transport: McpTransportId;
-  endpoint: string;
+  config: McpConfig;
+  clientSecret?: string;      // 只写;缺省或空串表示保持原值
 }
 
 @summary("McpProjectGroup")

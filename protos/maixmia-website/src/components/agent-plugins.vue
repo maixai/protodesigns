@@ -84,6 +84,9 @@ const paginated = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filtered.value.slice(start, start + pageSize.value)
 })
+// 列表高度不足一条以上时改为一整条可滚列表:窄屏分页会把每页压到 1 条、页数暴涨。
+const isPaged = computed(() => pageSize.value > 1)
+const installRows = computed(() => isPaged.value ? paginated.value : filtered.value)
 const pageStatus = computed(() => t.value.workspace.plugins.installPageStatus
   .replace('{page}', String(currentPage.value))
   .replace('{pages}', String(Math.max(1, pageCount.value))))
@@ -584,14 +587,14 @@ onBeforeUnmount(() => { isAlive.value = false })
         <p v-else-if="available.length === 0" class="plugin-empty">{{ t.workspace.plugins.installEmpty }}</p>
         <p v-else-if="filtered.length === 0" class="plugin-empty">{{ t.workspace.plugins.installNoMatch }}</p>
         <ul v-else ref="installListRef" class="install-list" tabindex="0" :aria-label="t.workspace.plugins.installListLabel">
-          <li v-for="entry in paginated" :key="pluginKey(entry.plugin)" class="install-row" :data-marketplace="entry.plugin.marketplaceId">
+          <li v-for="entry in installRows" :key="pluginKey(entry.plugin)" class="install-row" :data-marketplace="entry.plugin.marketplaceId">
             <div class="install-row__info">
               <p class="plugin-title"><span class="plugin-name">{{ entry.plugin.name }}</span><span class="plugin-mono">v{{ entry.plugin.version }}</span><span v-if="requiresInstallConfig(entry.plugin)" class="plugin-badge plugin-badge--warning">{{ t.workspace.plugins.configureRequired }}</span></p><p class="plugin-source">{{ entry.market }}</p><p class="plugin-description dl-clamp-2">{{ entry.plugin.description }}</p>
             </div>
             <button type="button" class="plugin-action install-row__action" :data-plugin-key="pluginKey(entry.plugin)" :disabled="busy" :aria-label="t.workspace.plugins.installLabel.replace('{name}', entry.plugin.name)" @click="startInstall(entry.plugin)">{{ busy ? t.workspace.plugins.installing : t.workspace.plugins.install }}</button>
           </li>
         </ul>
-        <nav v-if="filtered.length > 0" class="install-pagination" :aria-label="t.workspace.plugins.installPagination">
+        <nav v-if="isPaged && filtered.length > 0" class="install-pagination" :aria-label="t.workspace.plugins.installPagination">
           <button type="button" class="plugin-action" :disabled="busy || currentPage <= 1" @click="goToPage(currentPage - 1)">{{ t.workspace.plugins.installPreviousPage }}</button>
           <span class="install-page-status" aria-live="polite" aria-atomic="true">{{ pageStatus }}</span>
           <button type="button" class="plugin-action" :disabled="busy || currentPage >= pageCount" @click="goToPage(currentPage + 1)">{{ t.workspace.plugins.installNextPage }}</button>
@@ -635,7 +638,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 .group-chevron { flex: none; transition: transform var(--dl-duration-fast) var(--dl-ease-standard); }
 .group-chevron.is-expanded { transform: rotate(90deg); }
 .plugin-count { font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; color: var(--dl-text-tertiary); font-weight: 400; margin-inline-start: var(--dl-space-1); }
-.plugin-add { flex: none; display: inline-grid; place-items: center; inline-size: var(--workspace-nav-control-size); min-block-size: var(--workspace-nav-control-size); color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
+.plugin-add { flex: none; display: inline-grid; place-items: center; inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
 .plugin-state { padding: var(--dl-space-2) var(--dl-space-1); color: var(--dl-text-secondary); }
 .plugin-empty, .plugin-source { color: var(--dl-text-tertiary); font-size: var(--dl-font-size-xs); }
 .plugin-empty { padding-block: var(--dl-space-2); }
@@ -733,5 +736,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 }
 @media (max-width: 560px) {
   .install-toolbar { grid-template-columns: minmax(0, 1fr); }
+  /* 窄屏行高必须小于列表视口,否则单条也会被视口截断;描述压成单行省略。 */
+  .install-row .plugin-description { display: block; min-block-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 </style>

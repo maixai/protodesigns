@@ -553,6 +553,9 @@ async function removeRule(rule: PermissionRule): Promise<void> {
 .permissions-rules-head { position: sticky; inset-block-start: calc(var(--permissions-subtabs-height, 54px) - var(--dl-space-1)); z-index: calc(var(--dl-z-sticky) - 1); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--dl-space-2); min-block-size: var(--dl-target-size); padding-block-end: var(--dl-space-2); border-block-end: var(--dl-border-width) solid var(--dl-border-subtle); background: var(--dl-bg-raised); }
 .permissions-rules-head p { flex: 1 1 12em; min-inline-size: 0; color: var(--dl-text-tertiary); line-height: var(--dl-line-snug); overflow-wrap: anywhere; }
 .permissions-count { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); font-variant-numeric: tabular-nums; font-weight: 400; }
+/* 选中标签的底色是 accent-soft,三级文字在其上只有 3.93:1;计数改用二级文字色。
+   计数位于共用分段控件的 track button 内,不是模式下拉的 .permissions-option。 */
+.model-subtabs__track button[aria-selected='true'] .permissions-count { color: var(--dl-text-secondary); }
 .permissions-rule-list { display: grid; }
 .permissions-rule-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--dl-space-3); min-block-size: var(--dl-space-12); padding-block: 0; }
 .permissions-rule-list li.is-editing { grid-template-columns: minmax(0, 1fr); }

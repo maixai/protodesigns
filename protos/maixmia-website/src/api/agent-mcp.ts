@@ -3,13 +3,14 @@ import type { McpProjectGroup } from '../contracts/generated/mcp-project-group'
 import type { McpServer } from '../contracts/generated/mcp-server'
 import type { McpServerInput } from '../contracts/generated/mcp-server-input'
 import type { PluginMcpServer } from '../contracts/generated/plugin-mcp-server'
+import { validateMcpInput } from '../data/mcp-config'
 import { useI18n } from '../i18n'
 import { delay } from '../mocks/delay'
 import {
   mockAddAgentMcpServer, mockAddProjectMcpServer, mockConnectAgentMcpServer,
   mockConnectProjectMcpServer, mockListAgentMcpServers, mockListProjectMcpServers,
   mockRemoveAgentMcpServer, mockRemoveProjectMcpServer, mockSaveProjectMcpGroup,
-  mockSetAgentMcpServerEnabled,
+  mockSetAgentMcpServerEnabled, mockUpdateAgentMcpServer,
   mockSetProjectMcpServerEnabled,
 } from '../mocks/agent-mcp'
 import { currentRoute } from '../router'
@@ -17,7 +18,7 @@ import { mockAgentPluginMcpServers, mockReconnectAgentPluginMcpServer } from '..
 import type { Result } from './result'
 
 const { t } = useI18n()
-const SERVER_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
+
 
 function unavailableError(): Error | null {
   return currentRoute.value.demoState === 'error' ? new Error(t.value.workspace.mcp.loadError) : null
@@ -28,16 +29,11 @@ function pluginMutationError(serverId: string): Error | null {
 }
 
 function validateInput(input: McpServerInput, existing: readonly McpServer[], duplicateMessage: string): Error | null {
-  const copy = t.value.workspace.mcp
-  const name = input.name.trim()
-  if (name === '' || input.endpoint.trim() === '') return new Error(copy.requiredFields)
-  if (!SERVER_NAME_PATTERN.test(name)) return new Error(copy.invalidName)
-  if (existing.some((server) => server.name === name)) return new Error(duplicateMessage)
-  return null
+  const invalid = validateMcpInput(input, existing)
+  return invalid?.message === t.value.workspace.mcp.duplicateName ? new Error(duplicateMessage) : invalid
 }
-
 function normalizedInput(input: McpServerInput): McpServerInput {
-  return { ...input, name: input.name.trim(), endpoint: input.endpoint.trim(), displayName: input.displayName.trim() }
+  return { ...input, name: input.name.trim(), displayName: input.displayName.trim() }
 }
 
 export async function listAgentMcpServers(agentId: string): Promise<Result<McpServer[]>> {
@@ -76,7 +72,14 @@ export async function addAgentMcpServer(agentId: string, input: McpServerInput):
   if (unavailable !== null) return { ok: false, error: unavailable }
   const invalid = validateInput(input, mockListAgentMcpServers(agentId), t.value.workspace.mcp.duplicateName)
   if (invalid !== null) return { ok: false, error: invalid }
-  return { ok: true, value: mockAddAgentMcpServer(agentId, normalizedInput(input)) }
+  return mockAddAgentMcpServer(agentId, normalizedInput(input))
+}
+
+export async function updateAgentMcpServer(agentId: string, serverId: string, input: McpServerInput): Promise<Result<McpServer[]>> {
+  await delay()
+  const error = pluginMutationError(serverId) ?? unavailableError()
+  if (error) return { ok: false, error }
+  return mockUpdateAgentMcpServer(agentId, serverId, normalizedInput(input))
 }
 
 export async function removeAgentMcpServer(agentId: string, serverId: string): Promise<Result<McpServer[]>> {
@@ -128,7 +131,7 @@ export async function saveProjectMcpGroup(path: string, servers: readonly McpSer
   if (unavailable !== null) return { ok: false, error: unavailable }
   const names = new Set<string>()
   for (const server of servers) {
-    const input: McpServerInput = { name: server.name, displayName: server.displayName, transport: server.transport, endpoint: server.endpoint }
+    const input: McpServerInput = { name: server.name, displayName: server.displayName, config: server.config }
     const invalid = validateInput(input, [], t.value.workspace.mcp.duplicateProjectName)
     if (invalid !== null) return { ok: false, error: invalid }
     if (names.has(server.name.trim()) || server.scope !== 'project' || server.ownerId !== path) {
@@ -145,7 +148,7 @@ export async function addProjectMcpServer(path: string, input: McpServerInput): 
   if (unavailable !== null) return { ok: false, error: unavailable }
   const invalid = validateInput(input, mockListProjectMcpServers(path).servers, t.value.workspace.mcp.duplicateProjectName)
   if (invalid !== null) return { ok: false, error: invalid }
-  return { ok: true, value: mockAddProjectMcpServer(path, normalizedInput(input)) }
+  return mockAddProjectMcpServer(path, normalizedInput(input))
 }
 
 export async function removeProjectMcpServer(path: string, serverId: string): Promise<Result<McpProjectGroup>> {

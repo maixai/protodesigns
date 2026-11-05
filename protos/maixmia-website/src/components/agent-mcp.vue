@@ -1,17 +1,18 @@
 <script setup lang="ts">
 // 手配与插件贡献分区展示;插件 MCP 只有只读投影,写操作仍只作用于手配服务器。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NInput, NSkeleton, NSwitch } from 'naive-ui'
+import { NSkeleton, NSwitch } from 'naive-ui'
 import type { McpServer } from '../contracts/generated/mcp-server'
-import type { McpServerInput, McpTransportId } from '../contracts/generated/mcp-server-input'
+import type { McpServerInput } from '../contracts/generated/mcp-server-input'
 import type { PluginMcpServer } from '../contracts/generated/plugin-mcp-server'
 import {
-  addAgentMcpServer, authenticateAgentMcpServer, listAgentMcpServers, listAgentPluginMcpServers,
+  addAgentMcpServer, updateAgentMcpServer, authenticateAgentMcpServer, listAgentMcpServers, listAgentPluginMcpServers,
   reconnectAgentMcpServer, reconnectAgentPluginMcpServer, removeAgentMcpServer, setAgentMcpServerEnabled,
 } from '../api/agent-mcp'
 import { useI18n } from '../i18n'
 import { useAgentStatusTooltip } from '../data/agent-status'
 import DliIcon from './dl-icon.vue'
+import McpServerEditor from './mcp-server-editor.vue'
 
 const props = withDefaults(defineProps<{ agentId: string; agentName: string; active?: boolean }>(), { active: true })
 const emit = defineEmits<{
@@ -47,10 +48,9 @@ const isAlive = ref(true)
 let loadVersion = 0
 let pluginLoadVersion = 0
 
-const addName = ref('')
-const addDisplayName = ref('')
-const addTransport = ref<McpTransportId>('stdio')
-const addEndpoint = ref('')
+const isEditorDirty = ref(false)
+const isConfirmingDiscard = ref(false)
+const editorRevision = ref(0)
 const sectionPrefix = `agent-mcp-${props.agentId}`
 const selected = ref<McpServer | undefined>(undefined)
 const selectedPlugin = ref<PluginMcpServer | undefined>(undefined)
@@ -159,14 +159,18 @@ async function navigate(next: typeof view.value): Promise<void> {
   dismissTooltip()
   setActionError('')
   isConfirmingRemove.value = false
+  isConfirmingDiscard.value = false
   view.value = next
   await nextTick()
   const target = next === 'list'
     ? sourceRow() ?? rootRef.value?.querySelector<HTMLElement>('.mcp-add')
-    : rootRef.value?.querySelector<HTMLElement>('.mcp-back')
+    : next === 'pluginDetail' ? rootRef.value?.querySelector<HTMLElement>('.mcp-back')
+    : rootRef.value?.querySelector<HTMLElement>(next === 'add' ? `#${sectionPrefix}-name` : `#${sectionPrefix}-display-name`)
   target?.focus({ preventScroll: true })
 }
 function openDetail(server: McpServer): void {
+  isEditorDirty.value = false
+  editorRevision.value += 1
   selectedId.value = server.id
   selected.value = server
   selectedPlugin.value = undefined
@@ -176,6 +180,7 @@ function openDetail(server: McpServer): void {
 function openPluginDetail(server: PluginMcpServer): void {
   selected.value = undefined
   selectedPlugin.value = server
+  copyFeedback.value = ''
   listFocusKey.value = server.id
   void navigate('pluginDetail')
 }
@@ -222,15 +227,44 @@ async function reconnectPlugin(server: PluginMcpServer): Promise<void> {
   focusTarget?.focus({ preventScroll: true })
 }
 function openAdd(): void {
-  addName.value = ''
-  addDisplayName.value = ''
-  addTransport.value = 'stdio'
-  addEndpoint.value = ''
+  selected.value = undefined
+  selectedPlugin.value = undefined
+  isEditorDirty.value = false
+  editorRevision.value += 1
+  listFocusKey.value = ''
   void navigate('add')
 }
-function back(): void {
-  if (!busy.value) void navigate('list')
+async function back(): Promise<void> {
+  if (busy.value) return
+  if (isEditorDirty.value && (view.value === 'add' || view.value === 'detail')) {
+    isConfirmingDiscard.value = true
+    await nextTick()
+    rootRef.value?.querySelector<HTMLElement>('.mcp-keep-editing')?.focus()
+    return
+  }
+  await navigate('list')
 }
+async function keepEditing(): Promise<void> {
+  isConfirmingDiscard.value = false
+  await nextTick()
+  rootRef.value?.querySelector<HTMLElement>('.mcp-back')?.focus()
+}
+async function discard(): Promise<void> {
+  isEditorDirty.value = false
+  await navigate('list')
+}
+async function copyRuntime(): Promise<void> {
+  if (!selectedPlugin.value) return
+  try {
+    await navigator.clipboard.writeText(selectedPlugin.value.sdkName)
+    emit('announce', t.value.workspace.mcp.copiedRuntime)
+    copyFeedback.value = t.value.workspace.mcp.copiedRuntime
+  } catch {
+    copyFeedback.value = t.value.workspace.mcp.copyFailed
+    emit('announce', copyFeedback.value)
+  }
+}
+const copyFeedback = ref('')
 function onEscape(event: KeyboardEvent): void {
   if (isTooltipOpen.value) {
     event.preventDefault()
@@ -295,7 +329,7 @@ async function toggleEnabled(server: McpServer, enabled: boolean): Promise<void>
 async function setRemoveConfirmation(value: boolean): Promise<void> {
   isConfirmingRemove.value = value
   await nextTick()
-  rootRef.value?.querySelector<HTMLElement>(value ? '.mcp-confirm .mcp-danger' : '.mcp-detail-actions .mcp-danger')?.focus({ preventScroll: true })
+  rootRef.value?.querySelector<HTMLElement>(value ? '.mcp-confirm .mcp-danger' : '.mcp-danger-zone .mcp-danger')?.focus({ preventScroll: true })
 }
 async function removeSelected(): Promise<void> {
   const server = selected.value
@@ -313,25 +347,35 @@ async function removeSelected(): Promise<void> {
   listFocusKey.value = ''
   await navigate('list')
 }
-async function submitAdd(): Promise<void> {
+async function submitConfiguration(input: McpServerInput): Promise<void> {
   if (busy.value) return
-  const copy = t.value.workspace.mcp
-  const name = addName.value.trim()
-  const endpoint = addEndpoint.value.trim()
-  if (name === '' || endpoint === '') { setActionError(copy.requiredFields); return }
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) { setActionError(copy.invalidName); return }
-  if (servers.value.some((server) => server.name === name)) { setActionError(copy.duplicateName); return }
-  const input: McpServerInput = { name, displayName: addDisplayName.value.trim(), transport: addTransport.value, endpoint }
+  const editing = view.value === 'detail' && selected.value !== undefined
   busy.value = true
   setActionError('')
-  const result = await addAgentMcpServer(props.agentId, input)
+  const result = editing && selected.value
+    ? await updateAgentMcpServer(props.agentId, selected.value.id, input)
+    : await addAgentMcpServer(props.agentId, input)
   busy.value = false
   if (!isAlive.value) return
-  if (!result.ok) { setActionError(result.error.message); return }
+  if (!result.ok) {
+    setActionError(result.error.message, true)
+    emit('announce', result.error.message)
+    await nextTick()
+    rootRef.value?.querySelector<HTMLElement>('.mcp-action-error')?.focus()
+    return
+  }
   servers.value = result.value
   emitCount()
-  listFocusKey.value = `agent:${props.agentId}:${name}`
-  announce(copy.addedAnnounce, addDisplayName.value.trim() || name)
+  isEditorDirty.value = false
+  announce(editing ? t.value.workspace.mcp.savedAnnounce : t.value.workspace.mcp.addedAnnounce, input.displayName || input.name)
+  if (editing) {
+    updateSelected()
+    editorRevision.value += 1
+    await nextTick()
+    rootRef.value?.querySelector<HTMLElement>('.mcp-detail-status')?.focus()
+    return
+  }
+  listFocusKey.value = `agent:${props.agentId}:${input.name}`
   await navigate('list')
 }
 
@@ -360,7 +404,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 <template>
   <section ref="rootRef" class="agent-mcp" :data-view="view" :aria-busy="busy || status === 'loading' || pluginStatus === 'loading'" @keydown.esc="onEscape">
     <!-- 已 announce 的连接失败不重复播报;其余手配校验与操作错误保留 assertive alert。 -->
-    <p v-if="actionError" class="mcp-error" :role="actionErrorRole">{{ actionError }}</p>
+    <p v-if="actionError" class="mcp-error mcp-action-error" tabindex="-1" :role="actionErrorRole">{{ actionError }}</p>
     <!-- 失败只经页面既有 announce 通道播报一次;这里保留可见错误,不再叠加 role="alert"。 -->
     <p v-if="pluginActionError" class="mcp-error">{{ pluginActionError }}</p>
     <div v-show="view === 'list'" class="mcp-list-view">
@@ -438,16 +482,18 @@ onBeforeUnmount(() => { isAlive.value = false })
       </section>
     </div>
 
-    <div v-if="view === 'detail' && selected" class="mcp-pane mcp-detail">
+    <div v-if="view !== 'list'" class="mcp-pane" :class="{ 'mcp-detail': view === 'detail' || view === 'pluginDetail', 'mcp-plugin-detail': view === 'pluginDetail', 'mcp-add-form': view === 'add' }">
       <div class="mcp-page-nav"><button type="button" class="mcp-back" :disabled="busy" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.mcp.back }}</span></button></div>
-      <div class="mcp-detail-identity"><h3>{{ selected.displayName }}</h3><code>{{ selected.name }}</code></div>
-      <p class="mcp-description">{{ selected.description }}</p>
-      <dl class="mcp-facts">
-        <div><dt>{{ t.workspace.mcp.transport }}</dt><dd><code>{{ selected.transport }}</code></dd></div>
-        <div><dt>{{ t.workspace.mcp.endpoint }}</dt><dd><code>{{ selected.endpoint }}</code></dd></div>
-        <div><dt>{{ t.workspace.mcp.source }}</dt><dd>{{ t.workspace.mcp.sourceAgent }}</dd></div>
-      </dl>
-      <p class="mcp-detail-status" :data-status="selected.status"><span class="mcp-status-dot" aria-hidden="true" />{{ statusLabel(selected) }}<span v-if="selected.status === 'connected'" class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(selected.tools.length)) }}</span></p>
+      <section v-if="isConfirmingDiscard" class="mcp-confirm mcp-discard-confirm" :aria-label="t.workspace.mcp.discardTitle">
+        <p>{{ t.workspace.mcp.discardTitle }}</p><div class="mcp-actions"><button type="button" class="mcp-action mcp-keep-editing" @click="keepEditing">{{ t.workspace.mcp.keepEditing }}</button><button type="button" class="mcp-action mcp-discard" @click="discard">{{ t.workspace.mcp.discard }}</button></div>
+      </section>
+      <template v-if="view === 'add' || view === 'detail'">
+        <h3>{{ view === 'add' ? t.workspace.mcp.addTitle : t.workspace.mcp.editTitle }}</h3>
+        <p class="mcp-description">{{ view === 'add' ? t.workspace.mcp.addHint.replace('{name}', agentName) : t.workspace.mcp.editHint }}</p>
+        <McpServerEditor :key="editorRevision" :server="view === 'detail' ? selected : undefined" :existing="servers" :prefix="sectionPrefix" :busy="busy" @submit="submitConfiguration" @dirty="isEditorDirty = $event" @cancel="back" @announce="emit('announce', $event)" />
+      </template>
+      <template v-if="view === 'detail' && selected">
+      <p class="mcp-detail-status" tabindex="-1" :data-status="selected.status"><span class="mcp-status-dot" aria-hidden="true" />{{ statusLabel(selected) }}<span v-if="selected.status === 'connected'" class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(selected.tools.length)) }}</span></p>
       <p v-if="selected.status === 'failed'" class="mcp-error mcp-error-detail" role="alert">{{ selected.errorMessage }}</p>
       <section class="mcp-tools"><h4>{{ t.workspace.mcp.toolsTitle }}</h4>
         <ul v-if="selected.status === 'connected'"><li v-for="tool in selected.tools" :key="tool.name"><code>{{ tool.name }}</code><p>{{ tool.description }}</p></li></ul>
@@ -456,18 +502,19 @@ onBeforeUnmount(() => { isAlive.value = false })
       <div v-if="!isConfirmingRemove" class="mcp-actions mcp-detail-actions">
         <button v-if="selected.status === 'needsAuth' || selected.status === 'failed'" type="button" class="mcp-action mcp-connect-action" :data-connect-id="selected.id" :disabled="busy" @click="connect(selected)">{{ selected.status === 'needsAuth' ? t.workspace.mcp.authenticate : t.workspace.mcp.reconnect }}</button>
         <button type="button" class="mcp-action" :disabled="busy" @click="toggleEnabled(selected, !selected.enabled)">{{ selected.enabled ? t.workspace.mcp.disable : t.workspace.mcp.enable }}</button>
-        <button type="button" class="mcp-action mcp-danger" :disabled="busy" @click="setRemoveConfirmation(true)">{{ t.workspace.mcp.remove }}</button>
       </div>
+      <section class="mcp-danger-zone"><h4>{{ t.workspace.mcp.dangerZone }}</h4><button v-if="!isConfirmingRemove" type="button" class="mcp-action mcp-danger" :disabled="busy" @click="setRemoveConfirmation(true)">{{ t.workspace.mcp.remove }}</button>
       <div v-if="isConfirmingRemove" class="mcp-confirm"><p>{{ t.workspace.mcp.removeConfirm.replace('{name}', selected.displayName) }}</p><div class="mcp-actions"><button type="button" class="mcp-action" @click="setRemoveConfirmation(false)">{{ t.workspace.mcp.removeCancel }}</button><button type="button" class="mcp-action mcp-danger" :disabled="busy" @click="removeSelected">{{ t.workspace.mcp.confirmRemove }}</button></div></div>
-    </div>
-
-    <div v-if="view === 'pluginDetail' && selectedPlugin" class="mcp-pane mcp-detail mcp-plugin-detail">
-      <div class="mcp-page-nav"><button type="button" class="mcp-back" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.mcp.back }}</span></button></div>
+      </section>
+      </template>
+      <template v-if="view === 'pluginDetail' && selectedPlugin">
       <div class="mcp-detail-identity"><h3>{{ selectedPlugin.displayName }}</h3></div>
+      <p class="mcp-readonly-badge">{{ t.workspace.mcp.managedReadonly }}</p>
+      <p class="mcp-description">{{ t.workspace.mcp.managedSource }}</p>
       <p class="mcp-description">{{ selectedPlugin.description }}</p>
       <dl class="mcp-facts">
         <div><dt>{{ t.workspace.mcp.source }}</dt><dd>{{ pluginSourceLabel(selectedPlugin) }}</dd></div>
-        <div><dt>{{ t.workspace.mcp.runtimeName }}</dt><dd><code>{{ selectedPlugin.sdkName }}</code></dd></div>
+        <div><dt>{{ t.workspace.mcp.runtimeName }}</dt><dd><code>{{ selectedPlugin.sdkName }}</code><button type="button" class="mcp-copy-runtime" @click="copyRuntime">{{ t.workspace.mcp.copyRuntime }}</button><p v-if="copyFeedback" class="mcp-hint">{{ copyFeedback }}</p></dd></div>
       </dl>
       <p class="mcp-detail-status" :data-status="selectedPlugin.status"><span class="mcp-status-dot" aria-hidden="true" />{{ pluginStatusLabel(selectedPlugin) }}<span v-if="selectedPlugin.status === 'connected' && selectedPlugin.tools.length > 0" class="mcp-tools-count">{{ t.workspace.mcp.tools.replace('{count}', String(selectedPlugin.tools.length)) }}</span></p>
       <p v-if="selectedPlugin.status === 'failed'" class="mcp-error mcp-error-detail" role="alert">{{ selectedPlugin.errorMessage }}</p>
@@ -483,18 +530,8 @@ onBeforeUnmount(() => { isAlive.value = false })
         >{{ reconnectingId === selectedPlugin.id ? t.workspace.mcp.reconnecting : t.workspace.mcp.reconnect }}</button>
         <button type="button" class="mcp-action" @click="manageSelectedPlugin">{{ t.workspace.mcp.manageInPlugin }}</button>
       </div>
+      </template>
     </div>
-
-    <form v-if="view === 'add'" class="mcp-pane mcp-add-form" @submit.prevent="submitAdd">
-      <div class="mcp-page-nav"><button type="button" class="mcp-back" :disabled="busy" @click="back"><DliIcon name="chevronLeft" size="sm" /><span>{{ t.workspace.mcp.back }}</span></button></div>
-      <h3>{{ t.workspace.mcp.addTitle }}</h3>
-      <p class="mcp-description">{{ t.workspace.mcp.addHint.replace('{name}', agentName) }}</p>
-      <div class="mcp-field"><label :for="`${sectionPrefix}-name`">{{ t.workspace.mcp.name }}</label><NInput v-model:value="addName" :disabled="busy" :placeholder="t.workspace.mcp.namePlaceholder" :input-props="{ id: `${sectionPrefix}-name`, spellcheck: false, autocomplete: 'off' }" /><p class="mcp-hint">{{ t.workspace.mcp.nameHint }}</p></div>
-      <div class="mcp-field"><label :for="`${sectionPrefix}-display-name`">{{ t.workspace.mcp.displayName }}</label><NInput v-model:value="addDisplayName" :disabled="busy" :placeholder="t.workspace.mcp.displayNamePlaceholder" :input-props="{ id: `${sectionPrefix}-display-name` }" /></div>
-      <div class="mcp-field"><label :for="`${sectionPrefix}-transport`">{{ t.workspace.mcp.transportLabel }}</label><div class="mcp-select-wrap"><select :id="`${sectionPrefix}-transport`" v-model="addTransport" class="mcp-select" :disabled="busy"><option value="stdio">stdio</option><option value="http">http</option><option value="sse">sse</option></select><DliIcon class="mcp-select-chevron" name="chevronDown" size="sm" /></div></div>
-      <div class="mcp-field"><label :for="`${sectionPrefix}-endpoint`">{{ t.workspace.mcp.endpointLabel }}</label><NInput v-model:value="addEndpoint" :disabled="busy" :placeholder="t.workspace.mcp.endpointPlaceholder" :input-props="{ id: `${sectionPrefix}-endpoint`, spellcheck: false, autocomplete: 'off' }" /></div>
-      <div class="mcp-actions"><button type="submit" class="mcp-action" :disabled="busy">{{ busy ? t.workspace.mcp.adding : t.workspace.mcp.submitAdd }}</button><button type="button" class="mcp-action" :disabled="busy" @click="back">{{ t.workspace.mcp.cancel }}</button></div>
-    </form>
     <div :id="tooltipId" :ref="setTooltipRef" class="mcp-status-tooltip" popover="manual" role="tooltip" :data-visible="isTooltipVisible" @transitionend="onTooltipTransitionEnd" @pointerenter="clearTooltipTimer" @pointerleave="scheduleTooltipClose">{{ tooltipText }}</div>
   </section>
 </template>
@@ -513,7 +550,7 @@ onBeforeUnmount(() => { isAlive.value = false })
 .mcp-plugin-chevron.is-expanded { transform: rotate(90deg); }
 .mcp-plugin-count { color: var(--dl-text-tertiary); font-family: var(--dl-font-mono); font-variant-numeric: tabular-nums; font-weight: 400; }
 .mcp-plugin-content { min-inline-size: 0; }
-.mcp-add { display: inline-grid; place-items: center; inline-size: var(--workspace-nav-control-size); min-block-size: var(--workspace-nav-control-size); color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
+.mcp-add { display: inline-grid; place-items: center; inline-size: var(--dl-target-size); min-block-size: var(--dl-target-size); color: var(--dl-text-secondary); border-radius: var(--dl-radius-sm); }
 .mcp-hint, .mcp-description { color: var(--dl-text-secondary); line-height: var(--dl-line-body); overflow-wrap: anywhere; }
 .mcp-hint { padding: var(--dl-space-1); color: var(--dl-text-tertiary); }
 .mcp-state { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-2) var(--dl-space-1); color: var(--dl-text-secondary); }
@@ -564,6 +601,11 @@ onBeforeUnmount(() => { isAlive.value = false })
 .mcp-error-detail { padding-inline: 0; border: 0; background: transparent; }
 .mcp-confirm { display: grid; gap: var(--dl-space-2); padding: var(--dl-space-3); border-radius: var(--dl-radius-md); background: var(--dl-bg-sunken); color: var(--dl-text-secondary); }
 .mcp-field { display: grid; gap: var(--dl-space-2); }
+.mcp-danger-zone { display: grid; gap: var(--dl-space-2); padding-block-start: var(--dl-space-4); border-block-start: var(--dl-border-width) solid var(--dl-border-base); }
+.mcp-danger-zone h4 { font-weight: 500; color: var(--dl-text-secondary); }
+.mcp-readonly-badge { color: var(--dl-text-secondary); font-weight: 500; }
+.mcp-copy-runtime { display: block; min-block-size: var(--dl-target-size); padding-inline: var(--dl-space-2); color: var(--dl-accent); border-radius: var(--dl-radius-sm); }
+.mcp-action-error:focus, .mcp-detail-status:focus { outline: none; box-shadow: var(--dl-focus-ring); }
 .mcp-field label { font-weight: 500; }
 .mcp-field :deep(.n-input__input-el) { min-block-size: var(--dl-target-size); font-family: var(--dl-font-mono); font-size: var(--dl-font-size-xs); }
 /* 原生 select 的箭头由浏览器贴在控件右缘,和字段内距脱节;改用自绘 chevron:

@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  authenticateAgentMcpServer, reconnectAgentMcpServer, reconnectAgentPluginMcpServer, removeAgentMcpServer, setAgentMcpServerEnabled,
+  addAgentMcpServer, updateAgentMcpServer, authenticateAgentMcpServer, reconnectAgentMcpServer, reconnectAgentPluginMcpServer, removeAgentMcpServer, setAgentMcpServerEnabled,
 } from '../../src/api/agent-mcp'
 import { mockAgentPluginMcpServers, mockInstalledPlugins, mockResetAgentPluginMcpRuntime, mockSetPluginEnabled } from '../../src/mocks/workspace'
 import { mockListAgentMcpServers } from '../../src/mocks/agent-mcp'
@@ -86,6 +86,7 @@ describe('plugin MCP projection and manual API boundary', () => {
     vi.useFakeTimers()
     const id = 'plugin:anthropic:data-analysis:data-analysis'
     const requests = [
+      updateAgentMcpServer('planning', id, { name: 'plugin', displayName: '', config: { command: 'node' } }),
       removeAgentMcpServer('planning', id),
       setAgentMcpServerEnabled('planning', id, false),
       authenticateAgentMcpServer('planning', id),
@@ -97,5 +98,46 @@ describe('plugin MCP projection and manual API boundary', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error.message).toBe('插件提供的 MCP 为只读，请在插件中管理')
     }
+  })
+})
+
+
+describe('manual MCP configuration writes', () => {
+  it('isolates secrets, preserves enablement, clears old runtime facts and rejects renames', async () => {
+    vi.useFakeTimers()
+    const agentId = 'configuration-test-agent'
+    const added = addAgentMcpServer(agentId, { name: 'remote', displayName: 'Remote', config: { type: 'http', url: 'https://example.com/mcp', oauth: { scopes: 'read write' } }, clientSecret: 'secret-value' })
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await added
+    expect(result.ok).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('secret-value')
+    const server = mockListAgentMcpServers(agentId)[0]
+    expect(server?.clientSecretSet).toBe(true)
+    expect(server?.status).toBe('needsAuth')
+    const id = `agent:${agentId}:remote`
+    const disable = setAgentMcpServerEnabled(agentId, id, false)
+    await vi.advanceTimersByTimeAsync(300)
+    await disable
+    const update = updateAgentMcpServer(agentId, id, { name: 'remote', displayName: 'Updated', config: { type: 'http', url: 'https://new.example.com/mcp', oauth: {} }, clientSecret: '' })
+    await vi.advanceTimersByTimeAsync(300)
+    const updated = await update
+    expect(updated.ok).toBe(true)
+    expect(mockListAgentMcpServers(agentId)[0]).toMatchObject({ enabled: false, status: 'disabled', tools: [], errorMessage: '', clientSecretSet: true, endpoint: 'https://new.example.com/mcp' })
+    const rename = updateAgentMcpServer(agentId, id, { name: 'renamed', displayName: '', config: { command: 'node' } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect((await rename).ok).toBe(false)
+    expect(mockListAgentMcpServers(agentId)[0]?.name).toBe('remote')
+  })
+  it('uses the same validation before mutation and leaves the stored configuration unchanged on failure', async () => {
+    vi.useFakeTimers()
+    const before = mockListAgentMcpServers('planning')
+    const request = updateAgentMcpServer('planning', 'agent:planning:postgres', { name: 'postgres', displayName: 'Invalid', config: { type: 'stdio', command: 'node', timeout: 999 } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect((await request).ok).toBe(false)
+    expect(mockListAgentMcpServers('planning')).toEqual(before)
+    const valid = updateAgentMcpServer('planning', 'agent:planning:postgres', { name: 'postgres', displayName: 'Changed', config: { type: 'http', url: 'https://example.com/mcp', oauth: {} } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect((await valid).ok).toBe(true)
+    expect(mockListAgentMcpServers('planning').find((server) => server.name === 'postgres')).toMatchObject({ status: 'needsAuth', tools: [], errorMessage: '' })
   })
 })

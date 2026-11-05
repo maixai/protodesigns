@@ -10,13 +10,14 @@ import { useI18n } from '../../src/i18n'
 
 vi.mock('../../src/api/agent-mcp', () => ({
   listAgentMcpServers: vi.fn(), listAgentPluginMcpServers: vi.fn(), reconnectAgentPluginMcpServer: vi.fn(),
-  addAgentMcpServer: vi.fn(), removeAgentMcpServer: vi.fn(),
+  addAgentMcpServer: vi.fn(), updateAgentMcpServer: vi.fn(), removeAgentMcpServer: vi.fn(),
   setAgentMcpServerEnabled: vi.fn(), authenticateAgentMcpServer: vi.fn(), reconnectAgentMcpServer: vi.fn(),
 }))
 function server(name: string, status: McpServerStatusId): McpServer {
   return {
     id: `agent:planning:${name}`, name, displayName: name === 'sentry' ? 'Sentry' : name === 'postgres' ? 'PostgreSQL' : name,
     description: `${name} MCP tools`, scope: 'agent', ownerId: 'planning', transport: 'stdio', endpoint: `npx -y ${name}`,
+    config: { type: 'stdio', command: 'npx', args: ['-y', name] }, clientSecretSet: false,
     enabled: status !== 'disabled', status, errorMessage: status === 'failed' ? 'ECONNREFUSED' : '',
     tools: status === 'connected' ? [{ name: 'list_items', description: 'List items.', qualifiedName: `mcp__${name}__list_items` }] : [],
   }
@@ -67,6 +68,7 @@ describe('agent-mcp', () => {
     vi.mocked(api.authenticateAgentMcpServer).mockImplementation(async () => ({ ok: true, value: agentList().map((item) => item.name === 'sentry' ? { ...item, status: 'connected' satisfies McpServerStatusId, tools: [{ name: 'list_items', description: 'List items.', qualifiedName: 'mcp__sentry__list_items' }] } : item) }))
     vi.mocked(api.reconnectAgentMcpServer).mockImplementation(async () => ({ ok: true, value: agentList() }))
     vi.mocked(api.setAgentMcpServerEnabled).mockImplementation(async () => ({ ok: true, value: agentList() }))
+    vi.mocked(api.updateAgentMcpServer).mockImplementation(async (_agentId, id, input) => ({ ok: true, value: agentList().map((item) => item.id === id ? { ...item, displayName: input.displayName, config: input.config, status: 'connected', errorMessage: '', tools: [{ name: 'ping', description: 'New configuration tool', qualifiedName: `mcp__${input.name}__ping` }] } : item) }))
     vi.mocked(api.removeAgentMcpServer).mockImplementation(async () => ({ ok: true, value: agentList().slice(1) }))
     vi.mocked(api.addAgentMcpServer).mockImplementation(async (_agentId, input) => ({ ok: true, value: [...agentList(), server(input.name, 'connected')] }))
   })
@@ -201,14 +203,14 @@ describe('agent-mcp', () => {
     const wrapper = await mountPanel()
     await wrapper.get('.mcp-add').trigger('click')
     await wrapper.get('#agent-mcp-planning-name').setValue('linear')
-    await wrapper.get('#agent-mcp-planning-endpoint').setValue('npx -y linear')
+    await wrapper.get('#agent-mcp-planning-command').setValue('npx')
     await wrapper.get('button[type="submit"]').trigger('click')
     await flushPromises()
     expect(api.addAgentMcpServer).toHaveBeenCalledWith('planning', expect.objectContaining({ name: 'linear' }))
     expect(wrapper.emitted('count')?.at(-1)).toEqual([7])
     expect(wrapper.text()).not.toContain('保存后生效')
     await wrapper.get('[data-server-id="agent:planning:github"]').trigger('click')
-    await wrapper.get('.mcp-detail-actions .mcp-danger').trigger('click')
+    await wrapper.get('.mcp-danger-zone .mcp-danger').trigger('click')
     await wrapper.get('.mcp-confirm .mcp-danger').trigger('click')
     await flushPromises()
     expect(api.removeAgentMcpServer).toHaveBeenCalled()
@@ -252,6 +254,9 @@ describe('agent-mcp', () => {
     const detail = wrapper.get('.mcp-plugin-detail')
     expect(detail.text()).toContain('Navigate pages')
     expect(detail.text()).toContain('Browser Tools')
+    expect(detail.text()).toContain('由插件提供 · 只读')
+    expect(detail.find('input, textarea, select, .cm-editor').exists()).toBe(false)
+    expect(detail.text()).not.toContain('JSON')
     expect(detail.text()).toContain('browser_navigate')
     expect(detail.find('.mcp-detail-identity code').exists()).toBe(false)
     expect(detail.get('.mcp-facts code').text()).toBe('plugin:browser-tools:browser')
@@ -404,4 +409,43 @@ describe('agent-mcp', () => {
     expect(withoutPlugins.find('.mcp-plugin-section').exists()).toBe(false)
     withoutPlugins.unmount()
   })
+  it('edits with an immutable name, confirms discard and refreshes runtime after save', async () => {
+    const wrapper = await mountPanel()
+    await wrapper.get('[data-server-id="agent:planning:postgres"]').trigger('click')
+    expect(wrapper.get('#agent-mcp-planning-name').attributes('readonly')).toBeDefined()
+    expect(wrapper.get('.mcp-submit').attributes('disabled')).toBeDefined()
+    await wrapper.get('#agent-mcp-planning-display-name').setValue('New PostgreSQL')
+    expect(wrapper.get('.mcp-submit').attributes('disabled')).toBeUndefined()
+    await wrapper.get('.mcp-back').trigger('click')
+    expect(wrapper.get('.mcp-discard-confirm').text()).toContain('放弃未保存')
+    await wrapper.get('.mcp-keep-editing').trigger('click')
+    await wrapper.get('.mcp-server-editor').trigger('submit')
+    await flushPromises()
+    expect(api.updateAgentMcpServer).toHaveBeenCalledWith('planning', 'agent:planning:postgres', expect.objectContaining({ name: 'postgres', displayName: 'New PostgreSQL' }))
+    expect(wrapper.get('.mcp-detail-status').text()).toContain('已连接')
+    expect(wrapper.get('.mcp-tools').text()).toContain('ping')
+    expect(wrapper.find('.mcp-error-detail').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('.mcp-detail-status').element)
+    await wrapper.get('#agent-mcp-planning-display-name').setValue('Unsaved')
+    await wrapper.trigger('keydown', { key: 'Escape' })
+    await wrapper.get('.mcp-discard').trigger('click')
+    await wrapper.get('[data-server-id="agent:planning:postgres"]').trigger('click')
+    expect(wrapper.get('#agent-mcp-planning-display-name').element).toHaveProperty('value', 'New PostgreSQL')
+    wrapper.unmount()
+  })
+
+  it('retains input and focuses the error when configuration save fails', async () => {
+    vi.mocked(api.updateAgentMcpServer).mockResolvedValueOnce({ ok: false, error: new Error('Save unavailable') })
+    const wrapper = await mountPanel()
+    await wrapper.get('[data-server-id="agent:planning:github"]').trigger('click')
+    await wrapper.get('#agent-mcp-planning-display-name').setValue('Keep this draft')
+    await wrapper.get('.mcp-server-editor').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('#agent-mcp-planning-display-name').element).toHaveProperty('value', 'Keep this draft')
+    expect(document.activeElement).toBe(wrapper.get('.mcp-action-error').element)
+    expect(wrapper.emitted('announce')?.at(-1)).toEqual(['Save unavailable'])
+    expect(wrapper.get('.mcp-action-error').attributes('role')).toBeUndefined()
+    wrapper.unmount()
+  })
+
 })

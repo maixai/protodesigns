@@ -101,6 +101,9 @@
       "area": "agent-tools",
       "paths": [
         "src/components/agent-mcp.vue",
+        "src/components/mcp-server-editor.vue",
+        "src/components/mcp-server-editor.stories.ts",
+        "src/data/mcp-config.ts",
         "src/components/agent-mcp.stories.ts",
         "src/components/agent-permissions.vue",
         "src/components/agent-permissions.stories.ts",

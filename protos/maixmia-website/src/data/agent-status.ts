@@ -113,12 +113,12 @@ export function useAgentStatusTooltip<T extends { id: string }>(
     bubble.style.setProperty('--agent-status-left', `${left}px`)
     bubble.style.setProperty('--agent-status-top', `${Math.max(gap, Math.min(top, window.innerHeight - bounds.height - gap))}px`)
   }
-  async function showTooltip(event: PointerEvent | FocusEvent, agent: T | undefined): Promise<void> {
+  async function showTooltip(event: PointerEvent | FocusEvent, agent: T | undefined, keyboardInitiated = false): Promise<void> {
     const anchor = event.currentTarget
     if (!(anchor instanceof HTMLElement) || agent === undefined) return
     if (describe(agent).state === 'online') { hideTooltip(); return }
     if (event instanceof PointerEvent && event.pointerType !== 'mouse') return
-    if (event instanceof FocusEvent && !anchor.matches(':focus-visible')) return
+    if (event instanceof FocusEvent && !keyboardInitiated && !anchor.matches(':focus-visible')) return
     clearTooltipTimer()
     clearAnimation()
     tooltipAnchor.value = anchor

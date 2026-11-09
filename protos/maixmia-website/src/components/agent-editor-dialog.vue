@@ -151,6 +151,8 @@ watch([modelSubtabsRef, bodyRef], ([subtabs, body], _previous, onCleanup) => {
   onCleanup(() => observer.disconnect())
 }, { flush: 'post' })
 const basicTabRef = ref<HTMLButtonElement | null>(null)
+const connectionRef = ref<HTMLElement | null>(null)
+const keyboardFocusFallback = ref(false)
 const modelTabRef = ref<HTMLButtonElement | null>(null)
 const permissionsTabRef = ref<HTMLButtonElement | null>(null)
 const pluginsTabRef = ref<HTMLButtonElement | null>(null)
@@ -215,6 +217,13 @@ function onConnectionHintKeydown(event: KeyboardEvent): void {
   event.preventDefault()
   event.stopPropagation()
   hideConnectionTooltip()
+}
+// 键盘回退到指示器时,WebKit 的程序化 focus 可能不匹配 :focus-visible;
+// 只在这条显式路径上放行提示,鼠标 focus 仍按原生 :focus-visible 判定。
+function onConnectionFocus(event: FocusEvent): void {
+  const keyboardInitiated = keyboardFocusFallback.value
+  keyboardFocusFallback.value = false
+  void showConnectionTooltip(event, props.agent, keyboardInitiated)
 }
 const title = computed(() => t.value.workspace.agentAdmin.settingsTitle)
 const hint = computed(() => t.value.workspace.agentAdmin.settingsHint)
@@ -1354,6 +1363,15 @@ async function activateTab(tab: AgentSettingsTab, focus = false): Promise<void> 
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
+  // WebKit 的原生 dialog 焦点陷阱在首个 tab 上 Shift+Tab 不回退到头部连接指示器;
+  // 显式把焦点交给指示器,保证键盘可达性跨引擎一致。
+  if (event.key === 'Tab' && event.shiftKey && activeTab.value === 'basic' && connectionRef.value !== null) {
+    event.preventDefault()
+    keyboardFocusFallback.value = true
+    connectionRef.value.focus()
+    queueMicrotask(() => { keyboardFocusFallback.value = false })
+    return
+  }
   const tabs: readonly AgentSettingsTab[] = props.agent === undefined ? ['basic', 'model'] : ['basic', 'model', 'permissions', 'plugins', 'mcp']
   const current = tabs.indexOf(activeTab.value)
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
@@ -1597,7 +1615,7 @@ onBeforeUnmount(() => {
         <span v-if="agent" class="agent-editor__subject" data-testid="agent-editor-subject" :title="agent.name">
           <span class="agent-editor__avatar-mark" aria-hidden="true"><img v-if="agent.avatarUrl" :src="agent.avatarUrl" alt=""><template v-else>{{ agentInitial(agent.name) }}</template></span>
           <span class="agent-editor__agent-name">{{ agent.name }}</span>
-          <span v-if="connectionStatus" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="showConnectionTooltip($event, agent)" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
+          <span v-if="connectionStatus" ref="connectionRef" class="agent-editor__connection" data-testid="agent-editor-connection" :data-state="connectionStatus.state" role="img" :aria-label="connectionStatus.label" title="" tabindex="0" :aria-describedby="isConnectionTooltipOpen ? connectionTooltipId : undefined" @pointerenter="showConnectionTooltip($event, agent)" @pointerleave="leaveConnectionTooltip" @focus="onConnectionFocus" @blur="leaveConnectionTooltip" @keydown="onConnectionHintKeydown">
             <span class="agent-editor__connection-dot" aria-hidden="true" />
             <span class="agent-editor__connection-label" aria-hidden="true">{{ connectionStatus.label }}</span>
           </span>

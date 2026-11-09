@@ -6,8 +6,11 @@
 // 视觉语言:延续 quickstart 确立的「共享边线格」—— 容器底色即线色,
 // 段间与外围都是共享的 1px 线(容器 padding 露出的一圈底色即外框);
 // 圆角只圆外围一圈,内部一律直角(首末段的靠外两角减去线宽取圆)。
-// 选中态双通道:底抬升(--dl-bg-elevated,深色下比 base 亮)+ 文字提到一级并加字重,
-// 不只靠颜色。不用青瓷 —— 本页青瓷配额已收紧到三处(活动标签短线 / focus ring / 主 CTA)。
+// 选中态三通道:青瓷浅底(--dl-accent-soft)+ 1px 发丝青瓷内边缘 + 字重 600,不只靠颜色。
+// 底色对未选中底色只有 1.03:1(浅)/ 1.34:1(深),不能单独承担状态;真正的
+// 3:1 指示由内边缘给出。内边缘用伪元素内绘,不改变分段几何,也不占用 box-shadow,
+// 全局 :focus-visible 的焦点环仍然完整可见。青瓷在此只承担「选中」语义,
+// 符合 design-language ④「强调色只用于行动点、选中态与活动指示」。
 //
 // 键盘(W3C APG radio group):←/→(↑/↓)移动并选中、循环;Home/End 跳首尾;
 // roving tabindex:仅选中项为 0,其余 -1。
@@ -108,6 +111,7 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 .segmented__option {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -138,10 +142,23 @@ function onKeydown(event: KeyboardEvent): void {
   color: var(--dl-text-primary);
 }
 
-/* 选中态:底抬升 + 文字一级 + 字重 500(双通道,不只靠颜色) */
+/* 选中态:青瓷浅底 + 发丝青瓷内边缘 + 字重提升。
+   内边缘用伪元素内绘而不是 border:border 会改变分段的固有宽度与内容盒,
+   伪元素则完全不参与布局;也不占用 box-shadow,焦点环不会被选中态吃掉。
+   边缘取 1px 发丝线宽,与全局共享网格线同宽 —— 状态辨识由青瓷色、浅底与
+   字重共同承担,不再用加粗描边抢视觉。 */
 .segmented__option[aria-checked='true'] {
-  background-color: var(--dl-bg-elevated);
+  background-color: var(--dl-accent-soft);
   color: var(--dl-text-primary);
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.segmented__option[aria-checked='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: var(--dl-border-width) solid var(--dl-accent);
+  border-radius: inherit;
+  pointer-events: none;
 }
 </style>

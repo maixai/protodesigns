@@ -29,6 +29,18 @@ type Story = StoryObj<typeof meta>
 
 export const 项目与插件: Story = {}
 
+// 项目设置 / 首页安装区的真实二选一:选中项必须一眼可辨。
+export const 跟随与自定义: Story = {
+  args: {
+    label: '配置方式',
+    modelValue: 'custom',
+    options: [
+      { id: 'follow', label: '跟随 Agent' },
+      { id: 'custom', label: '自定义' },
+    ],
+  },
+}
+
 export const 三段: Story = {
   args: {
     options: [

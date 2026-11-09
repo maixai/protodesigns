@@ -662,3 +662,70 @@ test('@area:project-settings 1280×800 默认模型页滚动只发生在正文�
   await expect(dialog).toBeHidden()
   expect(issues).toEqual([])
 })
+
+// 选中态不能只靠 1.06:1 的底色差:内边缘是真正承担状态的通道,
+// 它在两侧相邻色(选中底 / 未选中底)上都必须达到 WCAG 1.4.11 的 3:1;
+// 同时保留底色与字重两个辅助通道,避免只靠颜色。
+test('@area:project-settings 配置方式选中态有 ≥3:1 的发丝内边缘,底色与字重同时变化', async ({ page }) => {
+  const issues = collectRuntimeIssues(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await login(page)
+  await waitForWorkspace(page)
+  const { dialog } = await openSettings(page)
+
+  const metrics = await dialog.locator('.project-model .segmented').evaluate((group) => {
+    type Rgb = [number, number, number]
+
+    function parse(value: string): Rgb {
+      const matched = value.match(/rgba?\(([^)]+)\)/)
+      const parts = (matched?.[1] ?? '0,0,0')
+        .split(/[,/\s]+/)
+        .filter((part) => part.length > 0)
+        .map(Number)
+      return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0]
+    }
+
+    function luminance(color: Rgb): number {
+      const channel = (value: number): number => {
+        const scaled = value / 255
+        return scaled <= 0.03928 ? scaled / 12.92 : Math.pow((scaled + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+    }
+
+    function ratio(a: Rgb, b: Rgb): number {
+      const la = luminance(a)
+      const lb = luminance(b)
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+
+    const options = [...group.querySelectorAll<HTMLElement>('[role="radio"]')]
+    const checked = options.find((option) => option.getAttribute('aria-checked') === 'true')
+    const unchecked = options.find((option) => option.getAttribute('aria-checked') === 'false')
+    if (checked === undefined || unchecked === undefined) return null
+    const checkedStyle = getComputedStyle(checked)
+    const uncheckedStyle = getComputedStyle(unchecked)
+    const ringStyle = getComputedStyle(checked, '::after')
+    const ringColor = parse(ringStyle.borderTopColor)
+    return {
+      ringWidth: Number.parseFloat(ringStyle.borderTopWidth),
+      ringVsChecked: ratio(ringColor, parse(checkedStyle.backgroundColor)),
+      ringVsUnchecked: ratio(ringColor, parse(uncheckedStyle.backgroundColor)),
+      backgroundChanged: checkedStyle.backgroundColor !== uncheckedStyle.backgroundColor,
+      weightChanged: Number(checkedStyle.fontWeight) > Number(uncheckedStyle.fontWeight),
+    }
+  })
+
+  expect(metrics).not.toBeNull()
+  if (metrics === null) return
+  // 发丝边:1px,与共享网格线同宽;不得回退成加粗描边。
+  expect(metrics.ringWidth).toBe(1)
+  expect(metrics.ringVsChecked).toBeGreaterThanOrEqual(3)
+  expect(metrics.ringVsUnchecked).toBeGreaterThanOrEqual(3)
+  expect(metrics.backgroundChanged).toBe(true)
+  expect(metrics.weightChanged).toBe(true)
+
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  expect(issues).toEqual([])
+})

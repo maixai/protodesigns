@@ -1,9 +1,9 @@
-import { definePreview } from '@storybook/vue3-vite'
+import { preview } from '../../.storybook/preview'
 import { mockAgentSummaries } from '../mocks/workspace'
 import AgentEditorDialog from './agent-editor-dialog.vue'
 const agent = mockAgentSummaries()[0]
 if (!agent) throw new Error('Missing Agent settings story fixture')
-const meta = definePreview({ addons: [] }).meta({ title: '组件/AgentEditorDialog', component: AgentEditorDialog,
+const meta = preview.meta({ title: '组件/AgentEditorDialog', component: AgentEditorDialog,
   args: { open: true, agent, focusIdentity: false, canDelete: false, busy: false, error: '', savedToken: 0 },
 })
 export const 默认模型页 = meta.story({})

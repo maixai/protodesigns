@@ -298,14 +298,22 @@ function measureInstallPageSize(): void {
   const list = installListRef.value
   if (list === null) return
   const rowHeight = list.querySelector<HTMLElement>('.install-row')?.getBoundingClientRect().height ?? 0
-  pageSize.value = pageSizeForHeight(list.clientHeight, rowHeight)
+  const next = pageSizeForHeight(list.clientHeight, rowHeight)
+  // 只有真正改变分页数才写回,避免无意义的布局回流。
+  if (next !== pageSize.value) pageSize.value = next
 }
 watch(installListRef, (list, _previous, onCleanup) => {
   if (list === null || props.embedded) return
-  const observer = new ResizeObserver(measureInstallPageSize)
+  let frame = 0
+  // 观察器回调里直接改分页会再次触发布局;延到下一帧并去重,避免 ResizeObserver 循环。
+  const scheduleMeasure = (): void => {
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(measureInstallPageSize)
+  }
+  const observer = new ResizeObserver(scheduleMeasure)
   observer.observe(list)
   measureInstallPageSize()
-  onCleanup(() => observer.disconnect())
+  onCleanup(() => { observer.disconnect(); cancelAnimationFrame(frame) })
 }, { flush: 'post' })
 watch([query, selectedMarketId], () => {
   currentPage.value = 1

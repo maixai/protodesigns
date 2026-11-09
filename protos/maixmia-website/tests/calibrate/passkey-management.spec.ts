@@ -133,9 +133,13 @@ test('Passkeys:三行清单、添加不改变身份与 Agent 信任', async ({ p
   await expect(dialog).toContainText('v1')
   await page.keyboard.press('Escape')
   await page.locator('.agent-context-switcher__trigger').click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
-  await page.getByRole('tab', { name: '安全', exact: true }).click()
-  await expect(page.getByTestId('agent-identity-security').locator('.security-hero')).toHaveAttribute('data-state', 'trusted')
+  await page.locator('.agent-context-switcher__settings').click()
+  const agentDialog = page.getByRole('dialog', { name: 'Agent 设置', exact: true })
+  await agentDialog.getByRole('tab', { name: '基本', exact: true }).click()
+  const trust = agentDialog.getByTestId('agent-identity-toggle')
+  await expect(trust).toBeVisible()
+  await expect(trust).toHaveAttribute('data-state', 'trusted')
+  await expect(trust).toContainText('已信任')
 })
 
 test('Passkey 移除:普通确认与状态提示，身份版本不变', async ({ page }, testInfo) => {

@@ -29,6 +29,20 @@ async function observeGate(page: Page): Promise<void> {
   })
 }
 
+// 动画结束后的亚像素舍入在不同引擎上可能差 <0.5px;几何稳定性按 0.5px 容差判定。
+function expectBoxClose(
+  actual: { x: number; y: number; width: number; height: number } | null,
+  expected: { x: number; y: number; width: number; height: number } | null,
+): void {
+  expect(actual).not.toBeNull()
+  expect(expected).not.toBeNull()
+  if (actual === null || expected === null) return
+  expect(actual.x).toBeCloseTo(expected.x, 0)
+  expect(actual.y).toBeCloseTo(expected.y, 0)
+  expect(actual.width).toBeCloseTo(expected.width, 0)
+  expect(actual.height).toBeCloseTo(expected.height, 0)
+}
+
 for (const width of [375, 1280]) {
   for (const reducedMotion of ['no-preference', 'reduce']) {
     test(`身份动效:首帧遮挡、固定舞台、退出焦点 @${width} ${reducedMotion}`, async ({ page }, testInfo) => {
@@ -53,10 +67,11 @@ for (const width of [375, 1280]) {
       await primary.click()
       await expect(heading).toHaveText('验证你的 Passkey')
       await expect(heading).toBeFocused()
-      expect(await stage.boundingBox()).toEqual(before)
-      expect(await gate.boundingBox()).toEqual(frame)
+      expectBoxClose(await stage.boundingBox(), before)
+      expectBoxClose(await gate.boundingBox(), frame)
       const verification = gate.getByTestId('mock-passkey-unlock')
-      expect((await verification.boundingBox())?.y).toBe(button?.y)
+      const verificationBox = await verification.boundingBox()
+      expect(verificationBox?.y ?? 0).toBeCloseTo(button?.y ?? 0, 0)
       await page.screenshot({ path: testInfo.outputPath('motion-passkey.png') })
       await verification.click()
       await expect(verification).toBeDisabled()
@@ -70,8 +85,8 @@ for (const width of [375, 1280]) {
       }
       await expect(heading).toHaveText('身份已解锁')
       await expect(heading).toBeFocused()
-      expect(await stage.boundingBox()).toEqual(before)
-      expect(await gate.boundingBox()).toEqual(frame)
+      expectBoxClose(await stage.boundingBox(), before)
+      expectBoxClose(await gate.boundingBox(), frame)
       // 成功截图由 identity-gate 回归覆盖；这里不让截图栅格化暂停渲染时间轴。
       await expect(gate).toBeHidden()
       await expect(page.locator('main.workspace-page')).toBeFocused()

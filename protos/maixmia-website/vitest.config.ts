@@ -29,6 +29,15 @@ export default mergeConfig(
         },
         {
           extends: true,
+          // 交互断言与编辑器 stories 会延迟装载这些模块;预先优化避免测试中途整页重载并丢失 runner。
+          optimizeDeps: {
+            include: [
+              'storybook/test',
+              '@codemirror/commands', '@codemirror/state', '@codemirror/language', '@codemirror/view',
+              '@codemirror/lang-css', '@codemirror/lang-html', '@codemirror/lang-javascript', '@codemirror/lang-json',
+              '@codemirror/lang-markdown', '@codemirror/lang-python', '@codemirror/legacy-modes/mode/shell', '@lezer/highlight',
+            ],
+          },
           plugins: [
             storybookTest({
               configDir: path.join(dirname, '.storybook'),

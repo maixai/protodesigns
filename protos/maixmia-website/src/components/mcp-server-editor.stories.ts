@@ -1,4 +1,4 @@
-import { definePreview } from '@storybook/vue3-vite'
+import { preview } from '../../.storybook/preview'
 import type { McpServer } from '../contracts/generated/mcp-server'
 import McpServerEditor from './mcp-server-editor.vue'
 
@@ -7,7 +7,6 @@ const oauthServer: McpServer = {
   transport: 'http', endpoint: 'https://example.com/mcp', config: { type: 'http', url: 'https://example.com/mcp', oauth: { clientId: 'mia', scopes: 'read write', callbackPort: 8765 } },
   clientSecretSet: true, enabled: true, status: 'needsAuth', errorMessage: '', tools: [],
 }
-const preview = definePreview({ addons: [] })
 const meta = preview.meta({
   title: '组件/McpServerEditor',
   component: McpServerEditor,

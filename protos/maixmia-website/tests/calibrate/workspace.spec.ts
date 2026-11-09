@@ -1,5 +1,6 @@
 import { unlockDemoIdentity, pairDemoAgent } from './identity-helpers'
 import { expect, test } from '@playwright/test'
+import { discardAndCloseAgentSettings, expectedDialogRect } from './settings-helpers'
 import type { Locator, Page } from '@playwright/test'
 import { sampleTextContrast } from '../pixel-contrast'
 
@@ -317,13 +318,39 @@ for (const width of WIDTHS) {
     //      **卡片外**的项目挂耳标签属独立控件档(44),不适用本档;本用例的语料(weekly 已有消息 →
     //      标签为只读纯文本 span,不是 button)不渲染那个按钮,故无需排除,它的 44×44 命中区
     //      在「空对话可改归属」用例里核对。
-    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.workspace-dock__notification-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab)').evaluateAll((buttons) => buttons.map((button) => {
+    const dimensions = await page.locator('.workspace-page button:visible:not(.entry-row__button):not(.entry-row__add):not(.conversation-tab):not(.conversation-icon-button):not(.tab-close):not(.tab-pop):not(.file-tab):not(.file-tab-close):not(.file-bar__trigger):not(.file-panel__view):not(.file-panel__toggle):not(.file-panel__placement):not(.file-panel__reset):not(.file-panel__close):not(.workspace-dock__restore):not(.workspace-dock__menu):not(.workspace-dock__settings-trigger):not(.workspace-dock__notification-trigger):not(.agent-context-switcher__trigger):not(.model-menu__trigger):not(.view-tabs__tab):not(.project-menu__trigger):not(.project-row__toggle)').evaluateAll((buttons) => buttons.map((button) => {
       const rect = button.getBoundingClientRect()
       return { width: rect.width, height: rect.height }
     }))
     for (const dimensionsItem of dimensions) {
       expect(dimensionsItem.width).toBeGreaterThanOrEqual(44)
       expect(dimensionsItem.height).toBeGreaterThanOrEqual(44)
+    }
+    // 项目行的两个次要控件属于密集行,按 24px 圆心间距判据单独核对,不放宽独立控件。
+    const projectRows = await page.locator('.project-row:visible').evaluateAll((rows) => rows.map((row) => {
+      const main = row.querySelector('.project-row__button')?.getBoundingClientRect()
+      const menu = row.querySelector('.project-menu__trigger')?.getBoundingClientRect()
+      const toggle = row.querySelector('.project-row__toggle')?.getBoundingClientRect()
+      const rect = row.getBoundingClientRect()
+      const style = getComputedStyle(row)
+      return { left: rect.left + Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.borderLeftWidth),
+        main: main ? { left: main.left, right: main.right, width: main.width, height: main.height } : null,
+        targets: [main, menu, toggle].flatMap((box) => box ? [{ width: box.width, height: box.height, x: box.x + box.width / 2, y: box.y + box.height / 2, left: box.left }] : []) }
+    }))
+    for (const row of projectRows) {
+      expect(row.main, '项目行主命中区存在').not.toBeNull()
+      expect(row.targets).toHaveLength(3)
+      if (!row.main) continue
+      expect(row.main.height, '整行主按钮仍保持 44px').toBeGreaterThanOrEqual(44)
+      expect(row.main.left, '主按钮从整行左缘起覆盖可用区域').toBeCloseTo(row.left, 0)
+      expect(row.main.right, '主按钮铺满行内动作之前的全部宽度').toBeCloseTo(row.targets[1]?.left ?? -1, 0)
+      for (const target of row.targets) {
+        expect(target.width, '密集行控件宽度下限').toBeGreaterThanOrEqual(24)
+        expect(target.height, '密集行控件高度下限').toBeGreaterThanOrEqual(24)
+      }
+      for (const [index, target] of row.targets.entries()) {
+        for (const other of row.targets.slice(index + 1)) expect(Math.hypot(target.x - other.x, target.y - other.y), '相邻 24px 圆不相交').toBeGreaterThanOrEqual(24)
+      }
     }
     // Agent 选择在**常驻的工作区底栏最左端**,所有宽度下都可见;当前项标在规划助手那枚标签上。
     // ≤1023 侧栏收成抽屉,由「打开侧栏」按钮进入;≥1024 是常驻面板,直接可见项目区
@@ -1182,8 +1209,10 @@ test.describe('英文窄屏与无障碍回归', () => {
       if (width === 375) await page.getByRole('button', { name: 'Open sidebar' }).click()
       const sidebar = page.getByRole(width === 375 ? 'dialog' : 'complementary', { name: 'Agent workspace', exact: true })
       await expect(sidebar).toBeVisible()
-      // 侧栏顶部现在是身份区 + 视图 tab(不再有「Projects」区块标题)。
-      await expect(sidebar.getByRole('tablist', { name: 'Sidebar view' })).toBeVisible()
+      // 侧栏视图切换已在插件/MCP 归入设置时移除;侧栏只保留项目导航。
+      await expect(sidebar.getByRole('tablist', { name: 'Sidebar view' })).toHaveCount(0)
+      await expect(sidebar.locator('.workspace-projects')).toHaveAccessibleName('Projects')
+      await expect(sidebar.locator('.project-item')).not.toHaveCount(0)
       await expect(sidebar.getByRole('heading', { name: 'Agent workspace', exact: true })).toHaveCount(0)
       await expect(sidebar.getByRole('navigation', { name: 'Agent workspace', exact: true })).toHaveCount(0)
       await expect(sidebar.getByRole('button')).not.toHaveCount(0)
@@ -1632,7 +1661,7 @@ test('Agent 设置:保存按钮随脏状态启用,保存后留在对话框并提
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置' }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   // 默认落在「模型 → 模型来源」;本用例验证身份表单,先切回基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
@@ -1670,7 +1699,7 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置' }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await expect(dialog).toBeVisible()
   // Header 明确当前编辑对象,避免在多个 Agent 之间切换时失去上下文。
@@ -1703,7 +1732,7 @@ test('Agent 设置:改名同步,删除后回到剩余 Agent', async ({ page }) =
   await expect(dialog).toHaveCount(0)
 
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置' }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('agent-editor-subject')).toContainText('规划官')
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
@@ -1725,7 +1754,7 @@ for (const width of [375, 768, 1280]) {
     await waitForStable(page)
     if (width < 1024) await page.getByRole('button', { name: '打开侧栏', exact: true }).click()
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     const sourceTab = dialog.getByRole('tab', { name: /^模型来源/ })
     const mainTabs = dialog.locator('.agent-editor__tabs')
@@ -1783,12 +1812,14 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
   const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
   const permissionsTab = dialog.getByRole('tab', { name: '权限', exact: true })
-  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveCount(3)
+  const pluginsTab = dialog.getByRole('tab', { name: '插件', exact: true })
+  const mcpTab = dialog.getByRole('tab', { name: 'MCP', exact: true })
+  await expect(dialog.locator('.agent-editor__tabs').getByRole('tab')).toHaveText(['基本', '模型', '权限', '插件', 'MCP'])
   // 默认落在「模型 → 模型来源」;先验证基本页,再回到模型页。
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await basicTab.click()
@@ -1803,14 +1834,19 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(permissionsTab).toBeFocused()
   await expect(permissionsTab).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('ArrowRight')
+  await expect(pluginsTab).toBeFocused()
+  await expect(pluginsTab).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ArrowRight')
+  await expect(mcpTab).toBeFocused()
+  await page.keyboard.press('ArrowRight')
   await expect(basicTab).toBeFocused()
   await expect(basicTab).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('ArrowLeft')
-  await expect(permissionsTab).toBeFocused()
+  await expect(mcpTab).toBeFocused()
   await page.keyboard.press('Home')
   await expect(basicTab).toBeFocused()
   await page.keyboard.press('End')
-  await expect(permissionsTab).toBeFocused()
+  await expect(mcpTab).toBeFocused()
   await modelTab.click()
   // 模型页内再分四区;默认落在第一个分区「模型来源」,再切到默认模型分区。
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
@@ -1894,7 +1930,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(dialog).toHaveCount(0)
 
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   // 重开默认落在模型来源;先确认默认页,再回默认模型分区核对回显。
   await expect(modelTab).toHaveAttribute('aria-selected', 'true')
   await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
@@ -1940,7 +1976,7 @@ test('Agent 设置:默认模型矩阵 + 档位/高级分区，配置保存后回
   await expect(dialog.getByRole('combobox', { name: '对话思考预算', exact: true })).toHaveValue('0')
   await defaultsTab.click()
   await page.screenshot({ path: testInfo.outputPath('agent-settings-model-1280.png') })
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await discardAndCloseAgentSettings(page, dialog)
   await expect(page.locator('.telemetry__model').first()).toHaveText('Claude Opus 5.5')
 })
 
@@ -1950,7 +1986,7 @@ test('Agent 设置:模型来源可切换,未配置时后三个分区禁用', asy
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
@@ -2037,7 +2073,7 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   const sectionTabs = dialog.getByRole('tablist', { name: '模型设置分区' })
@@ -2049,8 +2085,8 @@ test('Agent 设置:订阅支持 Claude 与 ChatGPT,切换后模型目录随之�
   await expect(dialog.locator('.source-row')).toHaveCount(6)
   await expect(claudeRow).toHaveAttribute('data-selected', 'true')
   await expect(dialog.locator('.source-row__status')).toHaveText('已过期')
-  await expect(dialog.getByText('已连接', { exact: true })).toHaveCount(0)
-  await expect(dialog.getByText('已配置', { exact: true })).toHaveCount(0)
+  await expect(dialog.locator('.model-subpanel--source').getByText('已连接', { exact: true })).toHaveCount(0)
+  await expect(dialog.locator('.model-subpanel--source').getByText('已配置', { exact: true })).toHaveCount(0)
 
   await claudeRow.getByRole('button', { name: '「Claude · 工作」的操作' }).click()
   const toolbarBox = await dialog.locator('.source-block__head').boundingBox()
@@ -2097,7 +2133,7 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   // 375 下 Agent 选择器在侧栏抽屉里,先打开抽屉。
   await page.getByRole('button', { name: 'Open sidebar' }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent settings' })
   await dialog.getByRole('tab', { name: 'Model', exact: true }).click()
   const sectionTabs = dialog.getByRole('tablist', { name: 'Model settings sections' })
@@ -2120,7 +2156,9 @@ test('Agent 设置 @375 英文:二级 tab 两行完整可见,body 不横向溢�
   expect(overflow, '对话框内容区不得横向溢出').toBeLessThanOrEqual(1)
 
   // 四个 tab 在窄屏排成两行两列:全部完整可见,不发生裁切或滚动。
-  const track = dialog.locator('.model-subtabs__track')
+  // 同一窗体还挂载了隐藏的权限规则 tablist,模型几何只量语义明确的模型分区。
+  await expect(page.locator('dialog.agent-editor[open]')).toHaveCount(1)
+  const track = sectionTabs
   const trackOverflow = await track.evaluate((element) => element.scrollWidth - element.clientWidth)
   expect(trackOverflow, 'tab 条不得横向溢出').toBeLessThanOrEqual(1)
   const tabOverflows = await track.locator('button').evaluateAll((buttons) => buttons.map((button) => button.scrollWidth - button.clientWidth))
@@ -2171,8 +2209,7 @@ for (const width of [375, 768, 1280, 1600]) {
     const basicTab = dialog.getByRole('tab', { name: '基本', exact: true })
     const modelTab = dialog.getByRole('tab', { name: '模型', exact: true })
     const sourceTab = dialog.getByRole('tab', { name: /^模型来源/ })
-    const viewportGap = await dialog.evaluate((element) => parseFloat(getComputedStyle(element).getPropertyValue('--dl-space-6')))
-    const expectedHeight = Math.min(720, viewportHeight - 2 * viewportGap)
+    const expectedHeight = (await expectedDialogRect(dialog)).h
     // resize 后 dvh 的更新异步进入渲染帧,先等视口约束落定再记录基准。
     await expect.poll(async () => Math.abs(((await dialog.boundingBox())?.height ?? 0) - expectedHeight)).toBeLessThanOrEqual(1)
     const initialBox = await dialog.boundingBox()
@@ -2242,7 +2279,7 @@ for (const width of [375, 768, 1280, 1600]) {
       await expectAtTop()
       await expectPageAnimation(dialog.locator('.source-list'))
       // 模型页的布局外层与吸顶子 Tab 不参与动效,实际内容单独入场。
-      for (const selector of ['.agent-editor__panel--model', '.model-subtabs', '.agent-editor__tabbar']) {
+      for (const selector of ['.agent-editor__panel--model', '.agent-editor__panel--model > .model-subtabs', '.agent-editor__tabbar']) {
         expect(await dialog.locator(selector).evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
         expect(await dialog.locator(selector).evaluate((element) => getComputedStyle(element).transform)).toBe('none')
       }
@@ -2314,7 +2351,7 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
   await waitForStable(page)
   await page.getByRole('button', { name: '打开侧栏' }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   let dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2358,7 +2395,7 @@ test('Agent 设置:来源配置子视图的滚动、反馈与重开重置', asyn
     await page.getByRole('button', { name: '打开侧栏' }).click()
   }
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2373,7 +2410,7 @@ test('Agent 设置 @375:空状态下添加来源菜单完整可见', async ({ pa
   await waitForStable(page)
   await page.getByRole('button', { name: '打开侧栏' }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2451,7 +2488,7 @@ test('Agent 设置:添加网关,刷新模型列表后可设为来源', async ({ 
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2677,7 +2714,7 @@ for (const width of [375, 768, 1280]) {
     await waitForStable(page)
     if (width < 1024) await page.getByRole('button', { name: '打开侧栏' }).click()
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     await dialog.getByRole('tab', { name: '模型', exact: true }).click()
     await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2740,7 +2777,7 @@ test('添加 Agent 后设置 @375:英文探测结果同槽显示且不改变高�
   await page.getByRole('button', { name: 'Add agent', exact: true }).click()
   await pairDemoAgent(page, 'Gateway demo agent', 'Probe feedback demo', true)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent settings' })
   await dialog.getByRole('tab', { name: 'Model', exact: true }).click()
   await dialog.getByRole('tab', { name: /^Model source/ }).click()
@@ -2785,7 +2822,7 @@ for (const language of ['中文', 'English'] satisfies ('中文' | 'English')[])
     if (isEnglish) await switchLanguageViaSettings(page, 'English')
     await page.getByRole('button', { name: isEnglish ? 'Open sidebar' : '打开侧栏', exact: true }).click()
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
     await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
     await dialog.getByRole('tab', { name: isEnglish ? /^Model source/ : /^模型来源/ }).click()
@@ -2943,7 +2980,7 @@ test('Agent 设置:来源配置的改动计入整体保存状态', async ({ page
   await login(page)
   await waitForStable(page)
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -2977,7 +3014,7 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
   await waitForStable(page)
   for (const forbidden of ['规划助手', '研究助手']) {
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: 'Agent 设置' }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
     await expect(dialog).toBeVisible()
     // 默认落在「模型 → 模型来源」;移除入口在基本页底部。
@@ -2991,7 +3028,7 @@ test('Agent 设置:最后一个 Agent 不可删除', async ({ page }) => {
     await expect(page.locator(AGENT_TRIGGER)).not.toContainText(forbidden)
   }
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置' }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: 'Agent 设置' })
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await dialog.getByTestId('agent-danger-toggle').click()
@@ -3787,13 +3824,18 @@ test('遥测条:五项齐备、状态项为唯一 live region、Context 文本�
   await expect(bar).toBeVisible()
 
   // 状态项是 live region;遥测条里**只有它**一个(其余部分不抢 live)。
-  // 整页的 role="status" 现在有**两处**,各管各的事:① 遥测条的状态项(本用例关心的那个);
-  // ② 悬浮 ↔ 停靠的播报(.workspace-live,见「悬浮 ↔ 停靠的键盘通路与播报」用例)。
+  // 可访问树内两处各司其职:遥测状态与工作区播报。关闭的 Agent 设置还保留一个
+  // 权限加载提示节点,但它位于未打开的原生 dialog 内,不属于活动 live region。
   const status = page.locator('.telemetry__status')
   await expect(status).toHaveAttribute('role', 'status')
   await expect(status).toHaveAttribute('aria-live', 'polite')
   await expect(page.locator('.telemetry [role="status"]'), '遥测条里只有一个 live region').toHaveCount(1)
-  await expect(page.locator('.workspace-page [role="status"]'), '整页两处:遥测状态项 + 停靠播报').toHaveCount(2)
+  await expect(page.getByRole('status'), '活动可访问树内只有遥测状态项与停靠播报').toHaveCount(2)
+  await expect(page.locator('.workspace-live[role="status"]')).toHaveCount(1)
+  const dormantStatus = page.locator('dialog.agent-editor:not([open]) .agent-editor__permission-state[role="status"]')
+  await expect(dormantStatus).toHaveCount(1)
+  await expect(dormantStatus).toHaveText('正在加载 Agent 级权限…')
+  await expect(dormantStatus).toBeHidden()
 
   // 四项:状态 · 模型 · Context · 时长。**归属项目**已从底行移出(它挪到卡片外左上角的挂耳
   // 标签),故这里只核对它仍在页面上、且完整路径挂在 title 上(悬停可读)。
@@ -8389,8 +8431,23 @@ test('标题栏在最小窗宽下仍可点:文件窗与对话窗的每一枚控�
 })
 
 // 对比度取实际焦点描边,不拿低透明度 halo 充当焦点指示;背景按祖先透明层合成。
-async function expectInputFocusIndicator(target: Locator, isInset = false): Promise<void> {
-  await expect(target).toHaveCSS('box-shadow', /0px 0px 0px 1px/)
+async function expectInputFocusIndicator(target: Locator, isInset = false, isProfileRing = false): Promise<void> {
+  // 资料名字段按现有组件配方用 3px focus-ring;其它输入用 1px halo,编辑器用内描边。
+  // 比较语义 token 的完整计算值,不接受组件库额外阴影或任意增粗。
+  const expectedShadow = await target.evaluate((element, options) => {
+    const style = getComputedStyle(element)
+    const role = options.inset ? '--dl-focus-inner' : options.profile ? '--dl-focus-ring' : '--dl-focus-halo'
+    const parent = element.parentElement
+    if (!parent) throw new Error('Missing focus indicator parent')
+    const probe = document.createElement('span')
+    probe.style.position = 'absolute'
+    probe.style.boxShadow = `${element.matches('.composer-form') ? `${style.getPropertyValue('--dl-shadow-md')}, ` : ''}${style.getPropertyValue(role)}`
+    parent.append(probe)
+    const value = getComputedStyle(probe).boxShadow
+    probe.remove()
+    return value
+  }, { inset: isInset, profile: isProfileRing })
+  await expect(target).toHaveCSS('box-shadow', expectedShadow)
   const measured = await target.evaluate((element, inset) => {
     const style = getComputedStyle(element)
     const canvas = document.createElement('canvas')
@@ -8436,7 +8493,7 @@ async function expectInputFocusIndicator(target: Locator, isInset = false): Prom
       outerContrast: ratio(background(element.parentElement)),
     }
   }, isInset)
-  expect(measured.ring, '输入控件不叠 3px 粗环').not.toContain('3px')
+  expect(measured.ring, '完整阴影仅来自当前语义 token,不叠组件库默认阴影').toBe(expectedShadow)
   expect(measured.ring.includes('inset'), '只在裁切编辑器使用内描边').toBe(isInset)
   expect(measured.ink, '实际描边等于当前作用域的 accent 解析值').toEqual(measured.accent)
   if (!isInset) expect(measured.borderWidth, '焦点染色落在可见边框上').toBeGreaterThanOrEqual(1)
@@ -8547,7 +8604,7 @@ for (const width of [375, 768, 1280]) {
     const name = dialog.locator('input.field__input').first()
     await name.focus()
     await name.hover()
-    await expectInputFocusIndicator(name)
+    await expectInputFocusIndicator(name, false, true)
     await expect(name).toHaveCSS('border-radius', '8px')
     await page.screenshot({ path: testInfo.outputPath(`input-focus-name-${width}.png`) })
 
@@ -8587,7 +8644,7 @@ for (const width of [375, 768, 1280]) {
     await page.locator('.agent-context-switcher__settings').click()
     await page.getByRole('dialog', { name: 'Agent 设置', exact: true }).getByRole('tab', { name: '插件', exact: true }).click()
     const plugins = page.locator('.agent-plugins')
-    await expect(plugins.locator('.plugin-main')).toHaveCount(2)
+    await expect(plugins.locator('.plugin-main')).toHaveCount(3)
     await plugins.locator('[data-group="markets"] .plugin-group-head').getByRole('button', { name: '添加市场', exact: true }).click()
     const name = plugins.getByLabel('名称', { exact: true })
     await name.focus()
@@ -10433,9 +10490,9 @@ for (const isEnglish of [false, true]) {
     await expect(context.locator('.model-source-context__draft, .model-source-context__switching')).toHaveCount(0)
     await context.getByRole('button').click()
     await personal.click()
-    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await discardAndCloseAgentSettings(page, dialog)
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     await expectSourceSelection(dialog, workId, workId, isEnglish)
     await expect(save).toHaveAttribute('aria-disabled', 'true')
     await defaultsTab.click()
@@ -10456,7 +10513,7 @@ for (const isEnglish of [false, true]) {
     await page.getByRole('button', { name: isEnglish ? 'Add agent' : '添加 Agent', exact: true }).click()
     await pairDemoAgent(page, 'Source demo agent', 'Model source demo', isEnglish)
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
     await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
     await dialog.locator('[data-source-id="subscription:claude-personal"] .source-row__main').click()
@@ -10581,10 +10638,10 @@ for (const isEnglish of [false, true]) {
     await work.locator('.source-row__main').click()
     await tiersTab.click()
     await expect(draft).toBeVisible()
-    // 放弃后重开,基线与来源都恢复到刚刚保存的个人订阅。
-    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    // 放弃后重开,先完成草稿确认,基线与来源都恢复到刚刚保存的个人订阅。
+    await discardAndCloseAgentSettings(page, dialog)
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     await defaultsTab.click()
     await expect(context.locator('.model-source-context__name')).toHaveText(isEnglish ? 'Claude · Personal' : 'Claude · 个人')
     await expect(context.locator('.subscription-usage__text')).toContainText(isEnglish ? '18% used' : '已用 18%')
@@ -10709,7 +10766,7 @@ async function openSubscriptionSettings(page: Page, width = 1280, isEnglish = fa
   if (isEnglish) await switchLanguageViaSettings(page, 'English')
   if (width < 1024) await page.getByRole('button', { name: isEnglish ? 'Open sidebar' : '打开侧栏' }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const dialog = page.getByRole('dialog', { name: isEnglish ? 'Agent settings' : 'Agent 设置' })
   await dialog.getByRole('tab', { name: isEnglish ? 'Model' : '模型', exact: true }).click()
   await expect(dialog.getByRole('tab', { name: isEnglish ? /^Model source/ : /^模型来源/ })).toHaveAttribute('aria-selected', 'true')
@@ -10878,7 +10935,7 @@ test('Agent 设置:默认过期订阅重新授权仅更新原实例,保存后生
   await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'saved')
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   await expect(legacy.locator('.source-row__status')).toHaveCount(0)
   await expect(legacy).toContainText('已用 8%')
   await expect(dialog.locator('.source-row--subscription')).toHaveCount(4)
@@ -10922,7 +10979,7 @@ test('Agent 设置:离开来源或关闭对话框会丢弃授权请求', async (
     await new Promise<void>((resolve) => setTimeout(resolve, 1400))
     if (exit === 'close') {
       await page.locator(AGENT_TRIGGER).click()
-      await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+      await page.locator('.agent-context-switcher__settings').click()
     } else {
       await dialog.getByRole('tab', { name: '模型', exact: true }).click()
       await dialog.getByRole('tab', { name: /^模型来源/ }).click()
@@ -11006,7 +11063,7 @@ test('Agent 设置:多订阅额度用尽时手动切换,保存并重开保留实
   await expect(dialog.locator('[data-pending="true"]')).toHaveCount(0)
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await page.locator(AGENT_TRIGGER).click()
-  await page.getByRole('button', { name: 'Agent 设置', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   await dialog.getByRole('tab', { name: '模型', exact: true }).click()
   await expect(personal).toHaveAttribute('data-selected', 'true')
 })
@@ -11367,9 +11424,9 @@ for (const isEnglish of [false, true]) {
     await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-personal', isEnglish)
     await expect(dialog.locator('.agent-editor__save-state')).toHaveAttribute('data-state', 'dirty')
     await search.fill('Claude')
-    await dialog.getByRole('button', { name: isEnglish ? 'Cancel' : '取消', exact: true }).click()
+    await discardAndCloseAgentSettings(page, dialog)
     await page.locator(AGENT_TRIGGER).click()
-    await page.getByRole('button', { name: isEnglish ? 'Agent settings' : 'Agent 设置', exact: true }).click()
+    await page.locator('.agent-context-switcher__settings').click()
     await expect(search).toHaveValue('')
     await expect(dialog.locator('.source-row')).toHaveCount(6)
     await expectSourceSelection(dialog, 'subscription:claude-work', 'subscription:claude-work', isEnglish)
@@ -11613,7 +11670,7 @@ for (const width of [375, 768, 1280, 1600]) {
       await page.setViewportSize({ width, height: 700 })
       const body = dialog.locator('.agent-editor__body')
       const head = dialog.locator('.source-block__head')
-      const tabs = dialog.locator('.model-subtabs')
+      const tabs = dialog.locator('.agent-editor__panel--model > .model-subtabs')
       const search = dialog.getByRole('searchbox')
       await expectSourceToolbarRow(dialog)
       await expect.poll(() => head.evaluate((element) => getComputedStyle(element).transform)).toBe('none')

@@ -1,4 +1,4 @@
-import { definePreview } from '@storybook/vue3-vite'
+import { preview } from '../../.storybook/preview'
 import type { StoryObj } from '@storybook/vue3-vite'
 import { onMounted } from 'vue'
 import { mockAgentSummaries, mockProjects } from '../mocks/workspace'
@@ -8,7 +8,7 @@ const agent = mockAgentSummaries()[0]
 const project = agent === undefined ? undefined : mockProjects(agent.id)[0]
 if (agent === undefined || project === undefined) throw new Error('Missing project settings story fixture')
 
-const meta = definePreview({ addons: [] }).meta({
+const meta = preview.meta({
   title: '组件/ProjectSettingsDialog', component: ProjectSettingsDialog,
   args: { open: true, agent, project },
 })

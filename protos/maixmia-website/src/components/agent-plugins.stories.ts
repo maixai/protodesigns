@@ -1,8 +1,8 @@
-import { definePreview } from '@storybook/vue3-vite'
+import { preview } from '../../.storybook/preview'
 import { nextTick, onMounted, ref } from 'vue'
 import AgentPlugins from './agent-plugins.vue'
 
-const meta = definePreview({ addons: [] }).meta({
+const meta = preview.meta({
   title: '组件/AgentPlugins',
   component: AgentPlugins,
   args: { agentId: 'planning', agentName: '规划助手' },

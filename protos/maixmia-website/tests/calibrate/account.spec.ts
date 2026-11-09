@@ -1,6 +1,8 @@
 import { unlockDemoIdentity } from './identity-helpers'
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
+import { expectedDialogRect } from './settings-helpers'
+
 
 // 只通过真实 Tab 寻找入口,不调用 focus() 跳过键盘路径。
 async function tabTo(page: Page, target: Locator): Promise<void> {
@@ -163,8 +165,9 @@ for (const width of [375, 768, 1280, 1600]) {
         const dialog = page.locator('#workspace-account-security-dialog')
         await expect(dialog.locator('#workspace-account-security-title')).toBeFocused()
         const bounds = await dialog.boundingBox()
-        const expectedWidth = Math.min(720, width - 48)
-        const expectedHeight = 720
+        const expected = await expectedDialogRect(dialog)
+        const expectedWidth = expected.w
+        const expectedHeight = expected.h
         expect(bounds?.width).toBe(expectedWidth)
         expect(bounds?.height).toBe(expectedHeight)
         expect(bounds?.x).toBeGreaterThanOrEqual(0)
@@ -215,8 +218,13 @@ for (const width of [375, 768, 1280, 1600]) {
         expect(await dialog.locator('#workspace-account-panel-security').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
         expect(await dialog.locator('[data-settings-recovery]').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
         expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
-        const controls = await dialog.locator('button:visible').evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height))
-        expect(controls.every((height) => height >= 36)).toBe(true)
+        // 窗框关闭钮是与悬浮窗体头部同档的 32px chrome 图标钮;缩放手柄是 role=separator
+        // 的指针目标,不属于常规控件,单独排除;其余可见控件仍守 36px 下限。
+        const controls = await dialog.locator('button:visible:not(.dl-dialog__resize)').evaluateAll((elements) => elements.map((element) => ({
+          height: element.getBoundingClientRect().height,
+          chrome: element.matches('[data-account-security-close]'),
+        })))
+        expect(controls.every(({ height, chrome }) => height >= (chrome ? 32 : 36))).toBe(true)
         await page.screenshot({ path: testInfo.outputPath(`settings-${section}-${width}.png`) })
         await dialog.locator('[data-recovery-generate]').scrollIntoViewIfNeeded()
         await expect(dialog.locator('[data-recovery-generate]')).toBeInViewport()
@@ -321,16 +329,18 @@ test('账户与 Agent 窗体:共享几何、下划线一级 tab 与内容左缘'
       selectedBorder: selectedStyle.borderBottomColor,
     }
   })
-  expect(account.width).toBe(720)
-  expect(account.height).toBe(720)
-  expect(account.padding).toBe('24px')
+  const expected = await expectedDialogRect(dialog)
+  expect(account.width).toBe(expected.w)
+  expect(account.height).toBe(expected.h)
+  // 共享外壳根无 padding;内距属于 header / nav / content 各自的槽。
+  expect(account.padding).toBe('0px')
   expect(account.colorScheme).toBe('dark')
   expect(account.firstTabTextLeft).toBeCloseTo(account.contentLeft, 0)
   expect(account.selectedBackground).toBe('rgba(0, 0, 0, 0)')
   expect(account.selectedBorder).not.toBe('rgba(0, 0, 0, 0)')
   await page.keyboard.press('Escape')
   await page.locator('.agent-context-switcher__trigger').click()
-  await page.getByRole('button', { name: 'Agent settings', exact: true }).click()
+  await page.locator('.agent-context-switcher__settings').click()
   const agentDialog = page.locator('.agent-editor')
   await expect(agentDialog).toBeVisible()
   const agent = await agentDialog.evaluate((element) => {

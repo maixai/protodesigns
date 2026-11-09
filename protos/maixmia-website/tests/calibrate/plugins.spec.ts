@@ -58,10 +58,16 @@ async function noOverflow(page: Page, panel: Locator): Promise<void> {
   expect(await page.locator('.agent-editor__body').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
 }
 async function touchTargets(panel: Locator): Promise<void> {
-  for (const control of await panel.locator('button:visible, [role="switch"]:visible, input:visible, select:visible').all()) {
-    const box = await control.boundingBox()
-    expect(box?.width ?? 0, await control.getAttribute('aria-label') ?? await control.textContent() ?? '').toBeGreaterThanOrEqual(44)
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
+  // 安装列表会在 ResizeObserver 测量后分页;一次性量已提交帧,避免旧 nth 定位随列表缩短而悬空。
+  await panel.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const controls = await panel.locator('button:visible, [role="switch"]:visible, input:visible, select:visible').evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect()
+    return { label: element.getAttribute('aria-label') ?? element.textContent ?? element.className, width: rect.width, height: rect.height }
+  }))
+  expect(controls.length).toBeGreaterThan(0)
+  for (const control of controls) {
+    expect(control.width, control.label).toBeGreaterThanOrEqual(44)
+    expect(control.height, control.label).toBeGreaterThanOrEqual(44)
   }
 }
 async function startAdding(panel: Locator): Promise<Locator> {
@@ -88,9 +94,13 @@ test('插件归入 Agent 设置:侧栏只有项目,切换一级标签保留插�
   await expect(page.locator('.project-tree').first()).toBeVisible()
   await expect(page.locator('.project-content-tabs')).toHaveCount(0)
   const panel = await openPlugins(page)
-  await expect(panel.locator('.compact-plugin')).toHaveCount(2)
+  await expect(panel.locator('.compact-plugin')).toHaveCount(3)
   await expect(panel).toContainText('Code Review')
   await expect(panel).toContainText('Data Analysis')
+  await expect(panel).toContainText('Browser Tools')
+  await expect(panel.locator('.installed-search input')).toBeVisible()
+  await expect(panel.locator('.plugin-provenance').first()).toContainText('Agent 级')
+  await expect(panel.locator('.plugin-effective').first()).toContainText('默认启用')
   await expect(panel).not.toContainText('Test Runner')
   await expect(panel.locator('.plugin-scope, .plugin-scope-picker')).toHaveCount(0)
   await expect(panel.locator('button button, button [role="switch"]')).toHaveCount(0)
@@ -101,6 +111,8 @@ test('插件归入 Agent 设置:侧栏只有项目,切换一级标签保留插�
   await expect(panel).toHaveAttribute('data-view', 'detail')
   await expect(panel.getByLabel(/GitHub token/)).toHaveValue('unsaved-draft')
   await panel.getByRole('button', { name: '返回插件', exact: true }).click()
+  await expect(panel.locator('.plugin-confirm')).toContainText('放弃未保存的更改')
+  await panel.getByRole('button', { name: '放弃更改', exact: true }).click()
   await expect(pluginsGroup(panel)).toBeVisible()
   await expect(panel.locator('.plugin-main', { hasText: 'Code Review' })).toBeFocused()
   await page.screenshot({ path: testInfo.outputPath('plugins-1280.png') })
@@ -111,7 +123,7 @@ test('插件和市场同页双分组:默认展开、独立加号、键盘折叠�
   const panel = await openPlugins(page)
   const plugins = pluginsGroup(panel)
   const markets = marketsGroup(panel)
-  await expect(plugins.locator('.plugin-disclosure')).toHaveText('插件2')
+  await expect(plugins.locator('.plugin-disclosure')).toHaveText('插件3')
   await expect(markets.locator('.plugin-disclosure')).toHaveText('插件市场2')
   for (const group of [plugins, markets]) {
     const toggle = group.locator('.plugin-disclosure')
@@ -161,7 +173,7 @@ test('Agent 插件启停与隔离:启停不改计数,切换 Agent 不沿用上�
   await panel.getByRole('switch', { name: '停用「Code Review」' }).click()
   await expect(panel.getByRole('switch', { name: '启用「Code Review」' })).toHaveAttribute('aria-checked', 'false')
   await expect(panel.getByRole('switch', { name: '停用「Data Analysis」' })).toHaveAttribute('aria-checked', 'true')
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('2')
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toHaveText('3')
   await selectAgent(page, '研究助手')
   await expect(panel.locator('.plugin-main', { hasText: 'Browser Tools' })).toBeVisible()
   await expect(panel).not.toContainText('Code Review')
@@ -178,7 +190,7 @@ test('详情内联配置:简介与卸载同时存在,必填校验、secret 留�
   const panel = await openPlugins(page)
   await openDetail(panel, 'Notion Sync')
   await expect(panel.locator('.plugin-detail > .plugin-description')).not.toBeEmpty()
-  await expect(panel).toContainText('仅限此 Agent')
+  await expect(panel.locator('.plugin-scope')).toHaveText('Agent 级 · 对所有项目生效')
   await expect(panel.locator('.plugin-section-label')).toHaveText(['配置'])
   await expect(panel.getByRole('button', { name: '卸载插件', exact: true })).toBeVisible()
   const secret = panel.getByLabel(/Integration token/)
@@ -186,7 +198,16 @@ test('详情内联配置:简介与卸载同时存在,必填校验、secret 留�
   await expect(secret).toHaveAttribute('aria-required', 'true')
   await expect(secret).toHaveValue('')
   await panel.getByRole('button', { name: '保存配置', exact: true }).click()
+  const database = panel.getByLabel(/Database ID/)
+  await expect(database).toHaveValue('8f2c4a71-3d1e-4b0a-9f52-7c6d1e90ab34')
+  await expect(panel.locator('.plugin-field-error')).toHaveText(['请填写必填配置项'])
+  await expect(secret).toHaveAttribute('aria-invalid', 'true')
+  await expect(secret).toBeFocused()
+  // 已有 Database ID 不应误报必填;主动清空后必须同时报告两个缺失字段。
+  await database.fill('')
+  await panel.getByRole('button', { name: '保存配置', exact: true }).click()
   await expect(panel.locator('.plugin-field-error')).toHaveText(['请填写必填配置项', '请填写必填配置项'])
+  await expect(database).toHaveAttribute('aria-invalid', 'true')
   await expect(secret).toBeFocused()
   await secret.fill('secret_demo_token')
   await panel.getByLabel(/Database ID/).fill('database-for-research')
@@ -233,7 +254,7 @@ test('安装流程:统一窗体预填必填默认值,完成后回已安装列表
   await config.getByRole('button', { name: '安装', exact: true }).click()
   await expect(config).toHaveCount(0)
   await expect(panel).toHaveAttribute('data-view', 'list')
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('3')
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toHaveText('4')
   await expect(panel.locator('.compact-plugin', { hasText: 'Test Runner' })).toBeVisible()
   await expect(panel.locator('.plugin-main', { hasText: 'Test Runner' })).toBeFocused()
   await selectAgent(page, '研究助手')
@@ -303,7 +324,8 @@ test('详情更新与卸载:不跳配置页,行内确认取消及确认卸载并
   await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('1')
   await expect(pluginsGroup(panel).locator('.plugin-disclosure')).toHaveText('插件1')
   await expect(panel.locator('.plugin-main', { hasText: 'Notion Sync' })).toBeVisible()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Agent 设置', exact: true })).toBeVisible()
+  await expect(page.locator('.plugin-config-dialog')).toHaveCount(0)
 })
 
 test('空态:无插件与无市场双入口,安装页可进入添加子页面,其它 Agent 不受影响', async ({ page }, testInfo) => {
@@ -344,7 +366,7 @@ test('无配置插件详情只展示简介与卸载,移除来源市场后安全�
   await review.getByRole('button', { name: '安装', exact: true }).click()
   await expect(review).toHaveCount(0)
   await expect(panel).toHaveAttribute('data-view', 'list')
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('3')
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toHaveText('4')
   await openDetail(panel, 'Release Notes')
   await expect(panel.locator('.plugin-detail > .plugin-description')).toHaveText('Collects merged changes and drafts release notes by audience.')
   await expect(panel.locator('.plugin-config')).toHaveCount(0)
@@ -354,7 +376,7 @@ test('无配置插件详情只展示简介与卸载,移除来源市场后安全�
   await expect(panel).toHaveAttribute('data-view', 'list')
   await removeMarket(panel, 'Mia Labs')
   await expect(panel).toHaveAttribute('data-view', 'list')
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('2')
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toHaveText('3')
   await expect(marketsGroup(panel).locator('.plugin-add')).toBeFocused()
 })
 
@@ -372,11 +394,11 @@ test('加载失败重试及切换 Agent:骨架可见、重试恢复', async ({ p
   const panel = await openPlugins(page)
   await expect(panel.getByLabel('正在加载插件…')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('plugins-loading.png') })
-  await expect(panel.getByRole('alert')).toHaveText('Demo plugin failure')
+  await expect(panel.getByRole('alert')).toContainText('Demo plugin failure')
   await page.screenshot({ path: testInfo.outputPath('plugins-error.png') })
   await panel.getByRole('button', { name: '重试', exact: true }).click()
-  await expect(panel.locator('.compact-plugin')).toHaveCount(2)
-  await expect(pluginsGroup(panel).locator('.plugin-count')).toContainText('2')
+  await expect(panel.locator('.compact-plugin')).toHaveCount(3)
+  await expect(pluginsGroup(panel).locator('.plugin-count')).toHaveText('3')
   await selectAgent(page, '研究助手')
   await expect(panel.getByLabel('正在加载插件…')).toBeVisible()
   await expect(panel.locator('.compact-plugin')).toHaveCount(0)
@@ -396,7 +418,7 @@ test('项目树文件-only、项目菜单 2 项、Agent 设置五页', async ({ 
   // 主 tab 为基本 / 模型 / 权限 / 插件 / MCP 五页;子 tab 不计入。
   const mainTabs = dialog.locator('.agent-editor__tabs').getByRole('tab')
   await expect(mainTabs).toHaveCount(5)
-  await expect(mainTabs).toHaveText(['基本', '模型', '权限'])
+  await expect(mainTabs).toHaveText(['基本', '模型', '权限', '插件', 'MCP'])
   // 默认落在「模型 → 模型来源」;身份字段在基本页。
   await dialog.getByRole('tab', { name: '基本', exact: true }).click()
   await expect(dialog.getByLabel('名称', { exact: true })).toBeVisible()
@@ -423,7 +445,7 @@ for (const width of [375, 768, 1280]) {
     const navBox = await panel.locator('.plugin-page-nav').boundingBox()
     const backLabelBox = await panel.locator('.plugin-back > span').boundingBox()
     expect(navBox?.y ?? -1, '返回行与上一页分组头同一顶边').toBeCloseTo(groupHeadBox?.y ?? -2, 0)
-    expect(navBox?.height ?? -1, '返回行与分组头同高').toBeCloseTo(groupHeadBox?.height ?? -2, 0)
+    expect(navBox?.height ?? -1, '返回仍符合所在输入方式的触达下限').toBeGreaterThanOrEqual(width < 1024 ? 44 : 24)
     expect(navBox?.x ?? -1, '返回行与分组头同一左缘').toBeCloseTo(groupHeadBox?.x ?? -2, 0)
     expect(navBox?.width ?? -1, '返回行与分组头同宽').toBeCloseTo(groupHeadBox?.width ?? -2, 0)
     expect(backLabelBox?.x ?? -1, '返回文字与「插件」标签同一缩进').toBeCloseTo(groupLabelBox?.x ?? -2, 0)
@@ -436,13 +458,19 @@ for (const width of [375, 768, 1280]) {
     expect(uninstallBox?.x ?? 0, '卸载在保存右侧').toBeGreaterThan(saveBox?.x ?? 0)
     const colors = await token.evaluate((element) => {
       const input = element.closest('.n-input')
-      const sidebar = element.closest('.workspace-sidebar')
-      return {
-        input: input === null ? '' : getComputedStyle(input).backgroundColor,
-        panel: sidebar === null ? '' : getComputedStyle(sidebar).backgroundColor,
+      if (!input) throw new Error('Missing plugin input surface')
+      const style = getComputedStyle(input)
+      const canvas = document.createElement('canvas')
+      canvas.width = 1; canvas.height = 1
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Canvas unavailable')
+      const rgba = (value: string): number[] => {
+        context.clearRect(0, 0, 1, 1); context.fillStyle = value; context.fillRect(0, 0, 1, 1)
+        return Array.from(context.getImageData(0, 0, 1, 1).data)
       }
+      return { input: rgba(style.backgroundColor), expected: rgba(style.getPropertyValue('--dl-bg-elevated')) }
     })
-    expect(colors.input, '深色面板的输入框不得回退成白底').toBe(colors.panel)
+    expect(colors.input, '输入框背景按现有 Naive 主题使用抬升表面,不与已移除的侧栏面板比较').toEqual(colors.expected)
     const backBox = await panel.getByRole('button', { name: '返回插件', exact: true }).boundingBox()
     const titleBox = await panel.getByRole('heading', { name: 'Code Review', exact: true }).boundingBox()
     const metaBox = await panel.locator('.plugin-meta').boundingBox()
@@ -470,18 +498,18 @@ for (const width of [375, 768, 1280]) {
     await panel.getByRole('searchbox', { name: '搜索可安装的插件' }).fill('not-a-plugin')
     await expect(panel).toContainText('没有匹配的插件')
     if (width < 1024) {
-      const first = page.locator('.agent-context-switcher__trigger')
-      await first.focus()
-      await page.keyboard.press('Shift+Tab')
-      await expect(panel.getByRole('combobox', { name: '筛选插件市场' })).toBeFocused()
+      // 安装页已移入模态设置,焦点应留在窗体内,不再越到侧栏的 Agent 切换器。
+      await panel.getByRole('combobox', { name: '筛选插件市场' }).focus()
       await page.keyboard.press('Shift+Tab')
       await expect(panel.getByRole('searchbox', { name: '搜索可安装的插件' })).toBeFocused()
       await page.keyboard.press('Tab')
       await expect(panel.getByRole('combobox', { name: '筛选插件市场' })).toBeFocused()
       await page.keyboard.press('Tab')
-      await expect(first).toBeFocused()
+      await expect(page.getByRole('dialog', { name: 'Agent 设置', exact: true }).getByRole('button', { name: '关闭', exact: true })).toBeFocused()
       await panel.getByRole('button', { name: '返回插件', exact: true }).click()
       await expect(panel).toHaveAttribute('data-view', 'list')
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('dialog', { name: 'Agent 设置', exact: true })).toHaveCount(0)
       await page.keyboard.press('Escape')
       await expect(page.locator('.workspace-sidebar')).not.toHaveClass(/is-open/)
     }

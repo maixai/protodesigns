@@ -6,7 +6,7 @@
 // 因为 Dart 类型是生成物且被源码直接 import,缺了它 dart2js 编译必失败。
 // 仅使用 node 内建模块(fs / path / child_process),不引入外部依赖。
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,14 +18,34 @@ const REGISTRY_PATH = join(ROOT, 'preview', 'src', 'generated', 'protos-registry
 const BUILD_PLAN_PATH = join(ROOT, 'preview', 'src', 'generated', 'build-plan.json')
 const DIST_ROOT = join(ROOT, 'preview', 'dist')
 
-// spawn 项目自带的 vite CLI(pnpm exec vite build),stdout/stderr 透传终端。
+// 包管理器解析:与 protos/Make.def 的三级回退一致(PATH -> corepack -> npx)。
+// PNPM 可能是 "pnpm" / "corepack pnpm" / "npx --yes pnpm@11";
+// 拆成可执行文件与前置参数,避免把整串当成一个命令名。
+function resolvePnpm() {
+  const probe = (command, args) => spawnSync(command, args, { stdio: 'ignore' }).status === 0
+  if (probe('pnpm', ['--version'])) return 'pnpm'
+  if (probe('corepack', ['pnpm', '--version'])) return 'corepack pnpm'
+  console.warn('[build] 未找到 pnpm,回退到 npx pnpm@11')
+  return 'npx --yes pnpm@11'
+}
+
+const PNPM_PARTS = (process.env.PNPM ?? resolvePnpm()).trim().split(/\s+/).filter(Boolean)
+const [PNPM_COMMAND = 'pnpm', ...PNPM_PREFIX] = PNPM_PARTS
+
+// 统一 spawn pnpm 子命令;调用方只传 pnpm 之后的参数。
+function spawnPnpm(args, options) {
+  return spawn(PNPM_COMMAND, [...PNPM_PREFIX, ...args], options)
+}
+
+// spawn 项目自带的 vite CLI,stdout/stderr 透传终端。
+// 优先直接用本地 node_modules/.bin/vite:没有全局 pnpm 时不必为每个原型启动一次 npx。
 // 退出码非 0 时 reject,由调用方负责打印错误并终止。
 function runViteBuild(cwd, args) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('pnpm', ['exec', 'vite', 'build', ...args], {
-      cwd,
-      stdio: 'inherit',
-    })
+    const localVite = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite')
+    const child = existsSync(localVite)
+      ? spawn(localVite, ['build', ...args], { cwd, stdio: 'inherit' })
+      : spawnPnpm(['exec', 'vite', 'build', ...args], { cwd, stdio: 'inherit' })
     child.on('error', (err) => reject(err))
     child.on('exit', (code) => {
       if (code === 0) resolvePromise()
@@ -69,7 +89,7 @@ function runMakeTarget(cwd, target) {
 // spawn pnpm install,补齐项目依赖。
 function runPnpmInstall(cwd) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('pnpm', ['install'], {
+    const child = spawnPnpm(['install'], {
       cwd,
       stdio: 'inherit',
     })

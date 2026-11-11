@@ -6,7 +6,19 @@
 # 这样原型目录仍然自包含(拿走一个目录即可重建)。
 
 FLUTTER ?= flutter
-PNPM    ?= pnpm
+# pnpm 解析:与 Make.def 同一套回退;Flutter 运行本身不依赖 pnpm,
+# 但契约工具链(TypeSpec / quicktype)需要它。
+PNPM    ?= $(shell \
+  if command -v pnpm >/dev/null 2>&1; then echo pnpm; \
+  elif command -v corepack >/dev/null 2>&1 && corepack pnpm --version >/dev/null 2>&1; then echo "corepack pnpm"; \
+  else echo "npx --yes pnpm@11"; \
+  fi)
+export PNPM
+
+# 契约工具优先走本地 node_modules/.bin:没有全局 pnpm 时,
+# 避免在逐文件循环里反复启动 npx。
+TSP       ?= $(if $(wildcard node_modules/.bin/tsp),node_modules/.bin/tsp,$(PNPM) exec tsp)
+QUICKTYPE ?= $(if $(wildcard node_modules/.bin/quicktype),node_modules/.bin/quicktype,$(PNPM) exec quicktype)
 # 默认跑 Chrome:浏览器里看布局与视觉最快;真机 / 模拟器用 make run DEVICE=<设备 id>
 DEVICE  ?= chrome
 
@@ -53,7 +65,7 @@ contracts: $(CONTRACTS_DEPS)
 # 编译 TypeSpec 契约,产出中间产物(JSON Schema / OpenAPI);
 # 用哪些 emitter、各写到哪个目录,由本原型的 tspconfig.yaml 决定。
 contracts-schema:
-	$(PNPM) exec tsp compile $(CONTRACTS_SRC)
+	$(TSP) compile $(CONTRACTS_SRC)
 
 # 从 JSON Schema 生成 Dart 类型。
 # 说明:TypeSpec 官方没有 Dart emitter(只有 JS / Python / C# / Java),
@@ -67,7 +79,7 @@ contracts-dart: contracts-schema
 	  base=$$(basename "$$schema" .yaml); \
 	  kebab=$$(printf '%s' "$$base" | sed -E 's/([a-z0-9])([A-Z])/\1-\2/g' | tr '[:upper:]' '[:lower:]'); \
 	  echo "  $(CONTRACTS_TMP)/schema/$$base.yaml -> $(CONTRACTS_DART_OUT)/$$kebab.dart"; \
-	  $(PNPM) exec quicktype --src-lang schema "$$schema" --lang dart --out "$(CONTRACTS_DART_OUT)/$$kebab.dart" || exit 1; \
+	  $(QUICKTYPE) --src-lang schema "$$schema" --lang dart --out "$(CONTRACTS_DART_OUT)/$$kebab.dart" || exit 1; \
 	done
 
 # 清理全部生成物。

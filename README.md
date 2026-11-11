@@ -22,7 +22,7 @@
 | 依赖 | 版本要求 | 说明 |
 | --- | --- | --- |
 | Node.js | `^20.19.0 \|\| >=22.12.0` | Vite 与契约工具链(TypeSpec)要求 |
-| pnpm | 最新稳定版 | 包管理;建议 `corepack enable` 启用 |
+| pnpm | 11.x | 包管理;优先使用 PATH 上的 pnpm,缺失时自动回退到 corepack / npx,无需手动安装 |
 | GNU make | 任意较新版本 | 用于 `make run` / `make contracts` |
 | Flutter SDK | 稳定版 | **仅 `targets` 含 `mobile` 的原型需要** |
 

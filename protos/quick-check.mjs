@@ -13,6 +13,13 @@ import { join, relative } from 'node:path'
 
 const cwd = process.cwd()
 const env = process.env
+// PNPM 可能是 "pnpm" / "corepack pnpm" / "npx --yes pnpm@11":
+// 拆成可执行文件与前置参数,避免把整串当成一个命令名。
+const pnpmParts = (env.PNPM ?? 'pnpm').trim().split(/\s+/).filter(Boolean)
+const [pnpmCommand = 'pnpm', ...pnpmPrefix] = pnpmParts
+// 本地已安装 Playwright 时直接用它:不必为每次快检启动一次 npx。
+const localPlaywright = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright')
+const useLocalPlaywright = existsSync(localPlaywright)
 const timeoutMs = Number(env.QUICK_TIMEOUT ?? '90') * 1000
 const quickDir = env.QUICK_DIR ?? 'tests/quick'
 const maxFailures = env.MAX_FAILURES ?? '5'
@@ -105,14 +112,15 @@ function resolveAutoSelection() {
 
 function runPlaywright(label, args, budgetMs = timeoutMs) {
   const started = Date.now()
-  const pnpm = env.PNPM ?? 'pnpm'
-  log(`${label}: ${pnpm} exec playwright test ${args.join(' ')}`)
-  const result = spawnSync(pnpm, ['exec', 'playwright', 'test', ...args], {
+  const command = useLocalPlaywright ? localPlaywright : pnpmCommand
+  const prefix = useLocalPlaywright ? [] : [...pnpmPrefix, 'exec', 'playwright']
+  log(`${label}: ${[command, ...prefix, 'test', ...args].join(' ')}`)
+  const result = spawnSync(command, [...prefix, 'test', ...args], {
     cwd,
     env: {
       ...env,
       SMOKE: '1',
-      DEV_COMMAND: env.DEV_COMMAND ?? `pnpm dev --host 127.0.0.1 --port ${env.PORT ?? '5173'}`,
+      DEV_COMMAND: env.DEV_COMMAND ?? `${pnpmParts.join(' ')} dev --host 127.0.0.1 --port ${env.PORT ?? '5173'}`,
     },
     stdio: 'inherit',
     timeout: budgetMs,

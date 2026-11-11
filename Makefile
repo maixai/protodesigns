@@ -3,7 +3,14 @@
 
 HOST ?= 0.0.0.0
 PORT ?= 5173
-PNPM ?= pnpm
+# pnpm 解析:优先 PATH 上的 pnpm;其次 corepack 管理的 pnpm;最后用 npx 拉取固定大版本。
+# 与 protos/Make.def 保持同一套回退,根目录与各原型都不会因缺少全局 pnpm 而失败。
+PNPM ?= $(shell \
+  if command -v pnpm >/dev/null 2>&1; then echo pnpm; \
+  elif command -v corepack >/dev/null 2>&1 && corepack pnpm --version >/dev/null 2>&1; then echo "corepack pnpm"; \
+  else echo "npx --yes pnpm@11"; \
+  fi)
+export PNPM
 
 .PHONY: deps run build serve list help quick-all verify-all
 
